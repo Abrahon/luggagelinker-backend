@@ -338,6 +338,9 @@ class ForgotPasswordOTPView(APIView):
         return Response({"detail": "OTP sent"})
 
 
+
+
+
 class VerifyForgotOTPView(APIView):
     permission_classes = [AllowAny]
 
