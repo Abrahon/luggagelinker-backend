@@ -4,6 +4,11 @@ from datetime import timedelta
 
 from apps.accounts.models import OTP
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def generate_otp(length=6):
     """
     Generate a numeric OTP code.
@@ -15,51 +20,46 @@ def generate_otp(length=6):
 
 
 
-def create_otp(user, email, purpose="signup", expiry_minutes=5):
+from django.utils import timezone
+from datetime import timedelta
+from apps.accounts.models import OTP
 
-    # invalidate previous OTPs (soft invalidate - SAFE)
-    OTP.objects.filter(
-        user=user,
-        purpose=purpose,
-        is_used=False
-    ).update(is_used=True)
+
+def create_otp(user, email):
+    OTP.objects.filter(user=user).delete()
 
     code = generate_otp()
 
-    otp_obj = OTP.objects.create(
+    return OTP.objects.create(
         user=user,
         email=email,
-        code=code,
-        purpose=purpose,
-        expires_at=timezone.now() + timedelta(minutes=expiry_minutes)
+        code=code
     )
 
-    return otp_obj
 
 
-def verify_otp(user, code, purpose="signup"):
-
+def send_otp_email(to_email, otp_code, name="User"):
     try:
-        otp_obj = OTP.objects.get(
-            user=user,
-            code=code,
-            purpose=purpose,
-            is_used=False
-        )
-    except OTP.DoesNotExist:
+        print(f"Sending OTP {otp_code} to {to_email}")
+        logger.info("OTP sent to %s", to_email)
+        return True
+    except Exception as e:
+        logger.exception("OTP send failed: %s", e)
+        return False
+
+
+from django.utils import timezone
+from datetime import timedelta
+
+def verify_otp(user, code):
+    otp = OTP.objects.filter(user=user, code=code).order_by("-created_at").first()
+
+    if not otp:
         return False, "Invalid OTP"
 
-    # expiry check
-    if otp_obj.is_expired():
+    if otp.is_expired():
         return False, "OTP expired"
 
-    # attempts limit (optional safety if you added attempts field)
-    if hasattr(otp_obj, "attempts"):
-        if otp_obj.attempts >= 5:
-            return False, "Too many attempts"
-
-    # mark as used
-    otp_obj.is_used = True
-    otp_obj.save()
+    otp.delete()  # one-time use
 
     return True, "OTP verified"

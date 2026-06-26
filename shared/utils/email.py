@@ -4,8 +4,17 @@ import random
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, BadHeaderError
 from django.utils.html import strip_tags
+from rest_framework_simplejwt.tokens import RefreshToken
 
 logger = logging.getLogger(__name__)
+
+def get_tokens_for_user(user):
+    refresh = RefreshToken.for_user(user)
+
+    return {
+        "refresh": str(refresh),
+        "access": str(refresh.access_token),
+    }
 
 
 def generate_otp():
@@ -17,63 +26,99 @@ def send_otp_email(to_email, otp_code, name="User", sender_name=None):
     subject = "🔐 Your OTP Code for Verification"
 
     html_content = f"""
-    <div style="font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-                max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #eaeaea;
-                border-radius:12px;overflow:hidden;">
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+    </head>
 
-        <!-- HEADER -->
-        <div style="background:linear-gradient(135deg,#4f46e5,#6366f1);
-                    padding:24px;text-align:center;color:white;">
-            <h1 style="margin:0;font-size:20px;">LuggageLinker Security</h1>
-            <p style="margin:6px 0 0;font-size:13px;opacity:0.9;">Email Verification OTP</p>
+    <body style="margin:0;padding:40px 20px;background:#f4f7fb;font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+
+        <!-- Email Preheader -->
+        <div style="display:none;font-size:1px;color:#fff;max-height:0;max-width:0;opacity:0;overflow:hidden;">
+            Your LuggageLinker verification code is {otp_code}. Valid for 5 minutes.
         </div>
 
-        <!-- BODY -->
-        <div style="padding:32px;text-align:center;">
+        <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.08);">
 
-            <h2 style="color:#111827;margin-bottom:10px;font-size:18px;">
-                Hi {name} 👋
-            </h2>
+            <!-- HEADER -->
+            <div style="background:linear-gradient(135deg,#4f46e5,#6366f1);padding:32px;text-align:center;color:#ffffff;">
 
-            <p style="color:#6b7280;font-size:14px;line-height:1.6;">
-                Use the verification code below to complete your signup.
-                This code is valid for <strong>5 minutes</strong>.
+                <div style="font-size:42px;margin-bottom:10px;">🔐</div>
+
+                <h1 style="margin:0;font-size:24px;font-weight:700;">
+                    LuggageLinker
+                </h1>
+
+            <p style="margin:8px 0 0;font-size:14px;font-weight:500;color:#FDE68A;">
+                Secure Email Verification
             </p>
 
-            <!-- OTP BOX -->
-            <div style="margin:28px 0;">
-                <div style="display:inline-block;
-                            background:#f3f4f6;
-                            border:1px dashed #d1d5db;
-                            padding:16px 28px;
-                            font-size:28px;
-                            letter-spacing:6px;
-                            font-weight:700;
-                            color:#111827;
-                            border-radius:10px;">
-                    {otp_code}
-                </div>
             </div>
 
-            <p style="font-size:12px;color:#9ca3af;">
-                Do not share this code with anyone. LuggageLinker will never ask for it.
-            </p>
+            <!-- BODY -->
+            <div style="padding:40px;text-align:center;">
+
+                <h2 style="margin-top:0;color:#111827;font-size:22px;">
+                    Hello {name} 👋
+                </h2>
+
+                <p style="margin:18px 0;color:#6b7280;font-size:15px;line-height:1.8;">
+                    Welcome to <strong>LuggageLinker</strong>.<br>
+                    Use the verification code below to complete your account registration.
+                </p>
+
+                <!-- OTP BOX -->
+                <div style="margin:35px 0;">
+
+                    <div style="
+                        display:inline-block;
+                        background:#eef2ff;
+                        border:2px dashed #6366f1;
+                        border-radius:14px;
+                        padding:18px 38px;
+                        font-size:34px;
+                        font-weight:700;
+                        letter-spacing:8px;
+                        color:#4338ca;
+                        user-select:all;
+                    ">
+                        {otp_code}
+                    </div>
+
+                </div>
+
+                <p style="font-size:15px;color:#374151;">
+                    ⏳ This verification code expires in
+                    <strong style="color:#dc2626;">5 minutes</strong>.
+                </p>
+
+            <!-- FOOTER -->
+            <div style="background:#f9fafb;padding:24px;text-align:center;border-top:1px solid #e5e7eb;">
+
+                <p style="margin:0;font-size:13px;color:#9ca3af;">
+                    © 2026 LuggageLinker
+                </p>
+
+                <p style="margin:8px 0 0;font-size:12px;color:#9ca3af;">
+                    Secure Travel • Trusted Delivery • Global Community
+                </p>
+
+                <p style="margin:12px 0 0;font-size:11px;color:#c0c4cc;">
+                    This is an automated email. Please do not reply.
+                </p>
+
+            </div>
 
         </div>
 
-        <!-- FOOTER -->
-        <div style="background:#f9fafb;padding:16px;text-align:center;">
-            <p style="font-size:11px;color:#9ca3af;margin:0;">
-                © LuggageLinker Security Team • If you didn’t request this, ignore this email.
-            </p>
-        </div>
-
-    </div>
+    </body>
+    </html>
     """
 
     plain_text = strip_tags(html_content)
 
-    from_email = f"{sender_name or 'System'} <{settings.EMAIL_HOST_USER}>"
+    from_email = f"{sender_name or 'User'} <{settings.EMAIL_HOST_USER}>"
 
     try:
         msg = EmailMultiAlternatives(
