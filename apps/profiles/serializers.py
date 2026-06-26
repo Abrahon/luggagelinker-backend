@@ -2,7 +2,7 @@ import re
 
 from rest_framework import serializers
 
-from apps.accounts.models import Profile
+from apps.profiles.models import Profile
 
 
 class ProfileSerializer(serializers.ModelSerializer):
@@ -30,7 +30,11 @@ class ProfileSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
+        def get_profile_picture(self, obj):
+            if not obj.profile_picture:
+                return None
 
+            return obj.profile_picture.url
         extra_kwargs = {
 
             "first_name": {

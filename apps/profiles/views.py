@@ -4,8 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from apps.accounts.models import Profile
-from apps.accounts.serializers import ProfileSerializer
+from apps.profiles.models import Profile
+from apps.profiles.serializers import ProfileSerializer
 # Create your views here.
 
 class CreateProfileView(generics.CreateAPIView):
