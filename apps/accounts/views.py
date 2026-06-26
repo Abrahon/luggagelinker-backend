@@ -15,6 +15,9 @@ from django.utils import timezone
 from shared.utils.email import generate_otp, send_otp_email,get_tokens_for_user
 import threading
 import logging
+from django.core import signing
+import uuid
+from django.core.signing import BadSignature, SignatureExpired
 from .serializers import LoginSerializer
 
 logger = logging.getLogger(__name__)
@@ -284,3 +287,182 @@ class LoginView(generics.GenericAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+# resend views
+# resend otp
+class ResendOTPView(generics.GenericAPIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = str(request.data.get("email") or "").strip().lower()
+
+        if not email:
+            return Response({"detail": "Email is required."}, status=400)
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            return Response({"detail": "User not found."}, status=404)
+
+        OTP.objects.filter(user=user).delete()
+
+        otp_code = generate_otp()
+        OTP.objects.create(user=user, email=user.email, code=str(otp_code))
+
+        send_otp_email(user.email, str(otp_code))
+
+        return Response({"detail": "OTP resent successfully"}, status=200)
+
+
+
+# forget pass
+# FORGOT PASSWORD - SEND OTP
+class ForgotPasswordOTPView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+
+        user = User.objects.filter(email=email).first()
+
+        if not user:
+            return Response({"detail": "User not found"}, status=404)
+
+        OTP.objects.filter(user=user).delete()
+
+        otp_code = generate_otp()
+        OTP.objects.create(user=user, code=otp_code)
+
+        send_otp_email(email, otp_code)
+
+        return Response({"detail": "OTP sent"})
+
+
+class VerifyForgotOTPView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        otp = request.data.get("otp")
+
+        if not email or not otp:
+            return Response(
+                {"detail": "Email and OTP are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            return Response(
+                {"detail": "User not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        otp_obj = OTP.objects.filter(user=user, code=otp).order_by("-created_at").first()
+
+        if not otp_obj:
+            return Response(
+                {"detail": "Invalid OTP."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if otp_obj.is_expired():
+            otp_obj.delete()
+            return Response(
+                {"detail": "OTP expired."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+        reset_token = signing.dumps(
+            {
+                "user_id": str(user.id),
+                "email": user.email,
+                "purpose": "password_reset",
+            },
+            salt="password-reset",
+        )
+        print("received token:", repr(reset_token))
+        otp_obj.delete()
+
+        return Response(
+            {
+                "detail": "OTP verified successfully.",
+                "reset_token": reset_token,
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+
+
+class ResetPasswordView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get("reset_token")
+        new_password = request.data.get("new_password")
+        confirm_password = request.data.get("confirm_password")
+
+        if not token or not new_password or not confirm_password:
+            return Response(
+                {"detail": "reset_token, new_password and confirm_password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_password != confirm_password:
+            return Response(
+                {"detail": "Passwords do not match."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            payload = signing.loads(token, salt="password-reset", max_age=600)
+        except SignatureExpired:
+            return Response(
+                {"detail": "Reset token expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except BadSignature:
+            return Response(
+                {"detail": "Invalid reset token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_id = uuid.UUID(payload["user_id"])
+            email = payload["email"]
+        except (KeyError, ValueError, TypeError):
+            return Response(
+                {"detail": "Invalid token payload."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.filter(id=user_id, email__iexact=email).first()
+        if not user:
+            return Response(
+                {"detail": "User not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        
+       # New password cannot be the same as the current password
+        if user.check_password(new_password):
+            return Response(
+                {
+                    "detail": "Your new password cannot be the same as your current password."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+
+        user.set_password(new_password)
+        user.save()
+
+        return Response(
+            {"detail": "Password reset successful."},
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
