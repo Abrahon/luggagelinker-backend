@@ -2,10 +2,8 @@ from django.db import models
 
 # Create your models here.
 import uuid
-
 from cloudinary.models import CloudinaryField
 from django.db import models
-
 from apps.accounts.models import User
 
 
@@ -48,7 +46,6 @@ class KYC(models.Model):
         max_length=100,
     )
 
-    date_of_birth = models.DateField()
 
     # -----------------------------
     # Documents
