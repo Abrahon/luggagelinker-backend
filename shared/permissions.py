@@ -1,14 +1,6 @@
-from django.db import models
-
 from rest_framework.permissions import BasePermission
 
-class UserRole(models.TextChoices):
-    ADMIN = "ADMIN", "Admin"
-    SENDER = "SENDER", "Sender"
-    TRAVELER = "TRAVELER", "Traveler"
-
-
-
+from shared.constants.roles import UserRole
 
 
 class IsAdmin(BasePermission):

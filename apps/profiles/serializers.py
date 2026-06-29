@@ -1,8 +1,8 @@
 import re
 
 from rest_framework import serializers
-
 from apps.profiles.models import Profile
+from datetime import date
 
 
 class ProfileSerializer(serializers.ModelSerializer):
@@ -19,6 +19,7 @@ class ProfileSerializer(serializers.ModelSerializer):
             "city",
             "address",
             "postal_code",
+            "date_of_birth",
             "profile_picture",
             "bio",
             "created_at",
@@ -30,11 +31,7 @@ class ProfileSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        def get_profile_picture(self, obj):
-            if not obj.profile_picture:
-                return None
-
-            return obj.profile_picture.url
+        
         extra_kwargs = {
 
             "first_name": {
@@ -88,6 +85,13 @@ class ProfileSerializer(serializers.ModelSerializer):
                 "required": False,
                 "allow_blank": True,
             },
+            "date_of_birth": {
+                "required": True,
+                "error_messages": {
+                    "required": "Date of birth is required.",
+                    "null": "Date of birth is required.",
+                },
+            },
 
             "bio": {
                 "required": False,
@@ -100,6 +104,16 @@ class ProfileSerializer(serializers.ModelSerializer):
             },
         }
 
+    # ✅ OUTSIDE Meta
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        if instance.profile_picture:
+            data["profile_picture"] = instance.profile_picture.url
+        else:
+            data["profile_picture"] = None
+
+        return data
     # -----------------------------------
     # First Name
     # -----------------------------------
@@ -213,6 +227,34 @@ class ProfileSerializer(serializers.ModelSerializer):
         if len(value) > 20:
             raise serializers.ValidationError(
                 "Postal code is too long."
+            )
+
+        return value
+    # # -----------------------------------
+    # date validation
+    # -----------------------------------
+    def validate_date_of_birth(self, value):
+        today = date.today()
+
+        if value > today:
+            raise serializers.ValidationError(
+                "Date of birth cannot be in the future."
+            )
+
+        age = (
+            today.year
+            - value.year
+            - ((today.month, today.day) < (value.month, value.day))
+        )
+
+        if age < 18:
+            raise serializers.ValidationError(
+                "You must be at least 18 years old."
+            )
+
+        if age > 120:
+            raise serializers.ValidationError(
+                "Please enter a valid date of birth."
             )
 
         return value

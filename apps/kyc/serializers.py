@@ -61,7 +61,29 @@ class KYCSerializer(serializers.ModelSerializer):
                 }
             },
         }
+        
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
 
+        data["document_front"] = (
+            instance.document_front.url
+            if instance.document_front
+            else None
+        )
+
+        data["document_back"] = (
+            instance.document_back.url
+            if instance.document_back
+            else None
+        )
+
+        data["selfie"] = (
+            instance.selfie.url
+            if instance.selfie
+            else None
+        )
+
+        return data
     # -----------------------------------
     # ID NUMBER VALIDATION
     # -----------------------------------
