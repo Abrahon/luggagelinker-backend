@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "apps.profiles",
     "apps.kyc",
     "apps.subscriptions",
+    "apps.payment",
 
 ]
 
