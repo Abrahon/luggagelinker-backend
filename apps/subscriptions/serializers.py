@@ -1,7 +1,10 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from django.utils import timezone
+from rest_framework import serializers
 
+from apps.subscriptions.models import Plan, Subscription
 from apps.subscriptions.models import Plan
 
 
@@ -197,3 +200,135 @@ class PlanSerializer(serializers.ModelSerializer):
             })
 
         return attrs
+
+
+
+# subscriptions serializers
+
+
+
+class SubscriptionSerializer(serializers.ModelSerializer):
+
+    plan_name = serializers.CharField(
+        source="plan.name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = Subscription
+
+        fields = (
+            "id",
+            "plan",
+            "plan_name",
+            "status",
+            "started_at",
+            "expires_at",
+            "cancelled_at",
+            "auto_renew",
+            "is_current",
+            "created_at",
+            "updated_at",
+        )
+
+        read_only_fields = (
+            "id",
+            "status",
+            "cancelled_at",
+            "is_current",
+            "created_at",
+            "updated_at",
+        )
+
+        extra_kwargs = {
+
+            "plan": {
+                "error_messages": {
+                    "required": "Plan is required.",
+                    "null": "Please select a plan.",
+                    "does_not_exist": "Selected plan does not exist.",
+                }
+            },
+
+            "started_at": {
+                "error_messages": {
+                    "required": "Subscription start date is required.",
+                    "invalid": "Enter a valid datetime.",
+                }
+            },
+
+            "expires_at": {
+                "error_messages": {
+                    "required": "Subscription expiry date is required.",
+                    "invalid": "Enter a valid datetime.",
+                }
+            },
+        }
+
+    # -----------------------------------
+    # PLAN VALIDATION
+    # -----------------------------------
+
+    def validate_plan(self, plan):
+
+        if not plan.is_active:
+            raise serializers.ValidationError(
+                "This subscription plan is not available."
+            )
+
+        return plan
+
+    # -----------------------------------
+    # OBJECT VALIDATION
+    # -----------------------------------
+
+    def validate(self, attrs):
+
+        request = self.context["request"]
+        user = request.user
+
+        started_at = attrs.get("started_at")
+        expires_at = attrs.get("expires_at")
+
+        if started_at and expires_at:
+            if expires_at <= started_at:
+                raise serializers.ValidationError({
+                    "expires_at": "Expiry date must be after start date."
+                })
+
+        # Only one active/current subscription
+        if not self.instance:
+            active_subscription = Subscription.objects.filter(
+                user=user,
+                is_current=True,
+            ).exists()
+
+            if active_subscription:
+                raise serializers.ValidationError({
+                    "detail": "You already have an active subscription."
+                })
+
+        return attrs
+
+    # -----------------------------------
+    # CREATE
+    # -----------------------------------
+
+    def create(self, validated_data):
+
+        validated_data["user"] = self.context["request"].user
+
+        return Subscription.objects.create(**validated_data)
+
+    # -----------------------------------
+    # UPDATE
+    # -----------------------------------
+
+    def update(self, instance, validated_data):
+
+        if instance.status == "CANCELLED":
+            raise serializers.ValidationError({
+                "detail": "Cancelled subscriptions cannot be updated."
+            })
+
+        return super().update(instance, validated_data)
