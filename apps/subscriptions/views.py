@@ -153,19 +153,16 @@ class PlanDeleteView(generics.DestroyAPIView):
 
         if not plan.is_active:
             return Response(
-                {
-                    "detail": "Plan is already inactive."
-                },
+                {"detail": "Plan is already inactive."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         plan.is_active = False
-        plan.save(update_fields=["is_active"])
+        plan.is_public = False   # 🔥 ADD THIS (important)
+        plan.save(update_fields=["is_active", "is_public"])
 
         return Response(
-            {
-                "detail": "Plan deleted successfully."
-            },
+            {"detail": "Plan deactivated successfully."},
             status=status.HTTP_200_OK,
         )
 
