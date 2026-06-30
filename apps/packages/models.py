@@ -118,7 +118,7 @@ class Package(models.Model):
         choices=PackageStatus.choices,
         default=PackageStatus.DRAFT,
     )
-
+    is_active = models.BooleanField(default=True)
     # matched_trip = models.ForeignKey(
     #     "trips.Trip",
     #     on_delete=models.SET_NULL,

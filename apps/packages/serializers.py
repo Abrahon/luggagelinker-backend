@@ -4,6 +4,10 @@ from rest_framework import serializers
 
 from .models import Package, PackageImage
 
+from rest_framework import serializers
+
+from .models import PackageImage
+
 
 # ===========================================================
 # PACKAGE IMAGE
@@ -69,6 +73,7 @@ class PackageSerializer(serializers.ModelSerializer):
             "is_public",
 
             "status",
+            "is_active",
 
             "images",
 
@@ -80,6 +85,7 @@ class PackageSerializer(serializers.ModelSerializer):
             "id",
             "sender",
             "status",
+            "is_active",
             "created_at",
             "updated_at",
         ]
@@ -258,3 +264,81 @@ class PackageSerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
+
+
+
+
+# ==========================================================
+# Package Image Response Serializer
+# ==========================================================
+
+class PackageImageSerializer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = PackageImage
+
+        fields = (
+            "id",
+            "package",
+            "image",
+            "is_primary",
+            "created_at",
+        )
+
+        read_only_fields = (
+            "id",
+            "package",
+            "image",
+            "created_at",
+        )
+
+
+# ==========================================================
+# Upload Image Serializer
+# ==========================================================
+
+class PackageImageUploadSerializer(serializers.Serializer):
+
+    image = serializers.ImageField(
+        required=True,
+        error_messages={
+            "required": "Image is required.",
+            "invalid": "Please upload a valid image.",
+        },
+    )
+
+    MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
+
+    ALLOWED_EXTENSIONS = (
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
+    )
+
+    def validate_image(self, image):
+
+        # ----------------------------
+        # File Size Validation
+        # ----------------------------
+
+        if image.size > self.MAX_IMAGE_SIZE:
+
+            raise serializers.ValidationError(
+                "Image size cannot exceed 5 MB."
+            )
+
+        # ----------------------------
+        # Extension Validation
+        # ----------------------------
+
+        extension = image.name.rsplit(".", 1)[-1].lower()
+
+        if extension not in self.ALLOWED_EXTENSIONS:
+
+            raise serializers.ValidationError(
+                "Only JPG, JPEG, PNG and WEBP files are allowed."
+            )
+
+        return image
