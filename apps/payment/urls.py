@@ -31,7 +31,7 @@ urlpatterns = [
     # PAYMENT HISTORY
     # =========================================
     path(
-        "history/",
+        "payment/history/",
         PaymentHistoryView.as_view(),
         name="payment-history",
     ),

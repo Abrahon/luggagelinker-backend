@@ -16,11 +16,12 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-
+from datetime import timedelta
 
 from apps.payment.models import Payment, PaymentStatus
 from apps.subscriptions.models import Subscription, SubscriptionStatus, Plan
 from django.contrib.auth import get_user_model
+import traceback
 
 
 User = get_user_model()
@@ -161,117 +162,307 @@ class CreateCheckoutSessionView(APIView):
 
 
 # webhook
-class StripeWebhookView(APIView):
+# class StripeWebhookView(APIView):
 
+#     authentication_classes = []
+#     permission_classes = []
+
+#     def post(self, request):
+
+#         payload = request.body
+#         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
+
+#         if not sig_header:
+#             return Response(
+#                 {"success": False, "message": "Missing Stripe signature."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         try:
+#             event = stripe.Webhook.construct_event(
+#                 payload,
+#                 sig_header,
+#                 settings.STRIPE_WEBHOOK_SECRET
+#             )
+
+#         except ValueError:
+#             return Response(
+#                 {"success": False, "message": "Invalid payload."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         except stripe.error.SignatureVerificationError:
+#             return Response(
+#                 {"success": False, "message": "Invalid signature."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         # ===========================
+#         # HANDLE EVENTS
+#         # ===========================
+
+#         try:
+#             event_type = event["type"]
+#             data = event["data"]["object"].to_dict()
+
+#             # -------------------------------------------------
+#             # 1. CHECKOUT COMPLETED
+#             # -------------------------------------------------
+#             if event_type == "checkout.session.completed":
+
+#                 metadata = data.get("metadata", {})
+#                 payment_id = metadata.get("payment_id")
+#                 plan_id = metadata.get("plan_id")
+#                 user_id = metadata.get("user_id")
+
+#                 with transaction.atomic():
+
+#                     payment = Payment.objects.select_for_update().get(
+#                         id=payment_id
+#                     )
+
+#                     # prevent duplicate processing
+#                     if payment.status == PaymentStatus.SUCCEEDED:
+#                         return Response({"received": True})
+
+#                     user = User.objects.get(id=user_id)
+#                     plan = Plan.objects.get(id=plan_id)
+
+#                     # update payment
+#                     payment.status = PaymentStatus.SUCCEEDED
+#                     payment.stripe_payment_intent_id = data.get("payment_intent")
+#                     payment.stripe_customer_id = data.get("customer")
+#                     payment.paid_at = timezone.now()
+#                     payment.save()
+
+#                     # expire old subscription
+#                     Subscription.objects.filter(
+#                         user=user,
+#                         is_current=True
+#                     ).update(is_current=False)
+
+#                     # create subscription
+#                 from datetime import timedelta
+
+#                 Subscription.objects.create(
+#                     user=user,
+#                     plan=plan,
+#                     status=SubscriptionStatus.ACTIVE,
+#                     started_at=timezone.now(),
+#                     expires_at=timezone.now() + timedelta(
+#                         days=plan.duration_days
+#                     ),
+#                     is_current=True,
+#                 )
+
+
+#             # -------------------------------------------------
+#             # 2. PAYMENT FAILED
+#             # -------------------------------------------------
+#             elif event_type == "invoice.payment_failed":
+
+#                 invoice = data
+
+#                 payment_intent = invoice.get("payment_intent")
+
+#                 Payment.objects.filter(
+#                     stripe_payment_intent_id=payment_intent
+#                 ).update(
+#                     status=PaymentStatus.FAILED,
+#                     failure_reason="Stripe payment failed"
+#                 )
+
+#             # -------------------------------------------------
+#             # 3. PAYMENT SUCCEEDED (backup)
+#             # -------------------------------------------------
+#             elif event_type == "invoice.paid":
+
+#                 payment_intent = data.get("payment_intent")
+
+#                 Payment.objects.filter(
+#                     stripe_payment_intent_id=payment_intent
+#                 ).update(
+#                     status=PaymentStatus.SUCCEEDED,
+#                     paid_at=timezone.now()
+#                 )
+#             from apps.payment.models import Payment
+#             print(Payment.objects.last())
+#             print(Payment.objects.last().status)
+
+#             from apps.subscriptions.models import Subscription
+#             print(Subscription.objects.last())
+#             print(Subscription.objects.last().status)
+
+#             return Response({"success": True, "message": "Webhook handled"})
+
+#         except Exception as e:
+
+#             traceback.print_exc()
+
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Webhook processing error",
+#                     "error": str(e),
+#                 },
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
+
+import traceback
+from datetime import timedelta
+
+import stripe
+from django.conf import settings
+from django.db import transaction
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.accounts.models import User
+from apps.payment.models import Payment
+# from apps.payment import PaymentStatus
+# from apps.subscriptions.models import Subscription, Plan
+# from apps.subscriptions import SubscriptionStatus
+
+
+class StripeWebhookView(APIView):
     authentication_classes = []
-    permission_classes = []
+    permission_classes = [AllowAny]
 
     def post(self, request):
-
         payload = request.body
         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
 
         if not sig_header:
             return Response(
-                {"success": False, "message": "Missing Stripe signature."},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "success": False,
+                    "message": "Missing Stripe signature.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             event = stripe.Webhook.construct_event(
-                payload,
-                sig_header,
-                settings.STRIPE_WEBHOOK_SECRET
+                payload=payload,
+                sig_header=sig_header,
+                secret=settings.STRIPE_WEBHOOK_SECRET,
             )
 
         except ValueError:
             return Response(
-                {"success": False, "message": "Invalid payload."},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "success": False,
+                    "message": "Invalid payload.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         except stripe.error.SignatureVerificationError:
             return Response(
-                {"success": False, "message": "Invalid signature."},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "success": False,
+                    "message": "Invalid Stripe signature.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ===========================
-        # HANDLE EVENTS
-        # ===========================
-
         try:
-
             event_type = event["type"]
-            data = event["data"]["object"]
+            data = event["data"]["object"].to_dict()
 
-            # -------------------------------------------------
-            # 1. CHECKOUT COMPLETED
-            # -------------------------------------------------
+            print(f"Webhook Event: {event_type}")
+
+            # =====================================================
+            # CHECKOUT COMPLETED
+            # =====================================================
             if event_type == "checkout.session.completed":
 
                 metadata = data.get("metadata", {})
+
                 payment_id = metadata.get("payment_id")
                 plan_id = metadata.get("plan_id")
                 user_id = metadata.get("user_id")
 
-                with transaction.atomic():
+                print("Metadata:", metadata)
 
-                    payment = Payment.objects.select_for_update().get(
-                        id=payment_id
+                if not all([payment_id, plan_id, user_id]):
+                    return Response(
+                        {
+                            "success": False,
+                            "message": "Missing metadata.",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                    # prevent duplicate processing
+                with transaction.atomic():
+
+                    payment = (
+                        Payment.objects
+                        .select_for_update()
+                        .get(id=payment_id)
+                    )
+
+                    # Prevent duplicate processing
                     if payment.status == PaymentStatus.SUCCEEDED:
                         return Response({"received": True})
 
                     user = User.objects.get(id=user_id)
                     plan = Plan.objects.get(id=plan_id)
 
-                    # update payment
+                    # Update payment
                     payment.status = PaymentStatus.SUCCEEDED
-                    payment.stripe_payment_intent_id = data.get("payment_intent")
+                    payment.stripe_payment_intent_id = data.get(
+                        "payment_intent"
+                    )
                     payment.stripe_customer_id = data.get("customer")
                     payment.paid_at = timezone.now()
                     payment.save()
 
-                    # expire old subscription
+                    # Expire previous subscriptions
                     Subscription.objects.filter(
                         user=user,
-                        is_current=True
-                    ).update(is_current=False)
+                        is_current=True,
+                    ).update(
+                        is_current=False,
+                        status=SubscriptionStatus.EXPIRED,
+                    )
 
-                    # create subscription
-                    Subscription.objects.create(
+                    # Create new subscription
+                    subscription = Subscription.objects.create(
                         user=user,
                         plan=plan,
                         status=SubscriptionStatus.ACTIVE,
                         started_at=timezone.now(),
-                        expires_at=timezone.now() + timezone.timedelta(
-                            days=plan.duration_days
-                        ),
+                        expires_at=timezone.now()
+                        + timedelta(days=plan.duration_days),
                         is_current=True,
                     )
 
-            # -------------------------------------------------
-            # 2. PAYMENT FAILED
-            # -------------------------------------------------
+                    print("Payment Updated:", payment.id)
+                    print("Subscription Created:", subscription.id)
+
+            # =====================================================
+            # PAYMENT FAILED
+            # =====================================================
             elif event_type == "invoice.payment_failed":
 
-                invoice = data
-
-                payment_intent = invoice.get("payment_intent")
+                payment_intent = data.get("payment_intent")
 
                 Payment.objects.filter(
                     stripe_payment_intent_id=payment_intent
                 ).update(
                     status=PaymentStatus.FAILED,
-                    failure_reason="Stripe payment failed"
+                    failure_reason="Stripe payment failed",
                 )
 
-            # -------------------------------------------------
-            # 3. PAYMENT SUCCEEDED (backup)
-            # -------------------------------------------------
+                print("Payment Failed:", payment_intent)
+
+            # =====================================================
+            # INVOICE PAID (Backup)
+            # =====================================================
             elif event_type == "invoice.paid":
 
                 payment_intent = data.get("payment_intent")
@@ -280,23 +471,57 @@ class StripeWebhookView(APIView):
                     stripe_payment_intent_id=payment_intent
                 ).update(
                     status=PaymentStatus.SUCCEEDED,
-                    paid_at=timezone.now()
+                    paid_at=timezone.now(),
                 )
 
-            return Response({"success": True, "message": "Webhook handled"})
+                print("Invoice Paid:", payment_intent)
+
+            # =====================================================
+            # IGNORE OTHER EVENTS
+            # =====================================================
+            else:
+                print(f"Ignoring event: {event_type}")
+
+            return Response({"received": True}, status=status.HTTP_200_OK)
+
+        except Payment.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Payment not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except User.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "User not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except Plan.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Plan not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         except Exception as e:
+            traceback.print_exc()
 
             return Response(
                 {
                     "success": False,
-                    "message": "Webhook processing error",
-                    "error": str(e)
+                    "message": "Webhook processing failed.",
+                    "error": str(e),
                 },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        
-
 
 class PaymentHistoryView(generics.ListAPIView):
 

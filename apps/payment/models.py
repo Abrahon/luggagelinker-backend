@@ -71,31 +71,37 @@ class Payment(models.Model):
 
     stripe_checkout_session_id = models.CharField(
         max_length=255,
-        blank=True,
         unique=True,
+        null=True,
+        blank=True,
     )
 
     stripe_payment_intent_id = models.CharField(
         max_length=255,
-        blank=True,
         unique=True,
+        null=True,
+        blank=True,
     )
 
     stripe_customer_id = models.CharField(
         max_length=255,
+        null=True,
         blank=True,
     )
 
     stripe_invoice_id = models.CharField(
         max_length=255,
+        unique=True,
+        null=True,
         blank=True,
     )
 
     transaction_id = models.CharField(
         max_length=255,
+        unique=True,
+        null=True,
         blank=True,
     )
-
     paid_at = models.DateTimeField(
         null=True,
         blank=True,
