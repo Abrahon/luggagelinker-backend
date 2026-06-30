@@ -53,6 +53,7 @@ from .serializers import (
 
 
 
+
 class CreatePackageView(generics.CreateAPIView):
 
     serializer_class = PackageSerializer
@@ -67,14 +68,13 @@ class CreatePackageView(generics.CreateAPIView):
         )
 
         try:
-
             serializer.is_valid(raise_exception=True)
 
             package = serializer.save()
 
             logger.info(
-                "Package created successfully. "
-                f"Package={package.id} User={request.user.id}"
+                f"Package created successfully | "
+                f"Package={package.id} | User={request.user.id}"
             )
 
             return Response(
@@ -97,22 +97,20 @@ class CreatePackageView(generics.CreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        except Exception:
+        except Exception as e:
 
             logger.exception(
-                f"Package creation failed. User={request.user.id}"
+                f"Package creation failed | User={request.user.id}"
             )
 
             return Response(
                 {
                     "success": False,
                     "message": "Unable to create package at this time.",
+                    "error": str(e),   # 👈 IMPORTANT for debugging
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-
-
 
 
 
@@ -204,7 +202,7 @@ class PackageDetailView(generics.RetrieveAPIView):
 
 
 
-class PackageManageView(generics.UpdateDestroyAPIView):
+class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
 
     serializer_class = PackageSerializer
     permission_classes = [IsAuthenticated]
@@ -461,45 +459,33 @@ class PackageImageListView(generics.ListAPIView):
 
 
 
-# delete and update packes image
 
-class DeleteUpdatePackageImageView(generics.DestroyAPIView):
+
+class DeleteUpdatePackageImageView(generics.RetrieveUpdateDestroyAPIView):
 
     permission_classes = [IsAuthenticated]
-
-    queryset = PackageImage.objects.select_related(
-        "package"
-    )
+    serializer_class = PackageImageSerializer
 
     lookup_field = "id"
+
+    def get_queryset(self):
+        return PackageImage.objects.select_related("package").filter(
+            package__sender=self.request.user,
+            package__is_active=True
+        )
+
+    # =========================
+    # DELETE
+    # =========================
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
 
-        image = self.get_queryset().filter(
-            id=kwargs["id"],
-            package__sender=request.user,
-            package__is_active=True,
-        ).first()
-
-        if not image:
-
-            return Response(
-                {
-                    "success": False,
-                    "message": "Image not found.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        image = self.get_object()
 
         try:
-
             if getattr(image, "public_id", None):
-
-                cloudinary.uploader.destroy(
-                    image.public_id
-                )
-
+                cloudinary.uploader.destroy(image.public_id)
         except Exception:
             pass
 
@@ -512,38 +498,31 @@ class DeleteUpdatePackageImageView(generics.DestroyAPIView):
             },
             status=status.HTTP_200_OK,
         )
-    
+
+    # =========================
+    # UPDATE (PATCH)
+    # =========================
+
     @transaction.atomic
-    def update(self, request, *args, **kwargs):
+    def partial_update(self, request, *args, **kwargs):
 
         image = self.get_object()
 
-        if image.package.sender != request.user:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Permission denied.",
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         is_primary = request.data.get("is_primary")
 
-        if is_primary:
+        if is_primary is not None:
 
             PackageImage.objects.filter(
                 package=image.package
-            ).update(
-                is_primary=False
-            )
+            ).update(is_primary=False)
 
-            image.is_primary = True
+            image.is_primary = bool(is_primary)
             image.save(update_fields=["is_primary"])
 
         return Response(
             {
                 "success": True,
-                "message": "Primary image updated successfully.",
+                "message": "Image updated successfully.",
                 "data": PackageImageSerializer(image).data,
             },
             status=status.HTTP_200_OK,
