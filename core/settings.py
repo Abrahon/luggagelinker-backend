@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.packages",
     "apps.trips",
     "apps.matching",
+    "apps.notifications",
 
 ]
 
