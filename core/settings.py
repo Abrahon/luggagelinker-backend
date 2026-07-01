@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.payment",
     "apps.packages",
     "apps.trips",
+    "apps.matching",
 
 ]
 
