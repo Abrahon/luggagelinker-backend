@@ -1,9 +1,11 @@
 from django.urls import path
 from .views import (
     BookingCreateView,
+    BookingPickupVerificationView,
     MyBookingListView,
     BookingDetailView,
     BookingRespondView,
+    BookingStartTransitView,
     # PaymentWebhookView,
 )
 
@@ -38,12 +40,7 @@ urlpatterns = [
         name="booking-respond"
     ),
 
-    # -------------------------------------------------------------------------
-    # Asynchronous Payment Gateways Callback Endpoints (Public)
-    # -------------------------------------------------------------------------
-    # path(
-    #     "webhook/payment/", 
-    #     PaymentWebhookView.as_view(), 
-    #     name="payment-webhook"
-    # ),
+    path("booking/verify-pickup/", BookingPickupVerificationView.as_view(), name="verify-pickup"),
+    path("booking/start-transit/", BookingStartTransitView.as_view(), name="start-transit"),
+
 ]

@@ -7,18 +7,16 @@ from django.db.models import Q
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-
 from .models import Booking
 from .serializers import BookingSerializer, VerifyPickupPinSerializer
 from .services import BookingService
 from rest_framework.exceptions import ValidationError
-from rest_framework import generics, status
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
-
+from .serializers import StartTransitSerializer
 from apps.bookings.models import BookingStatus
 from apps.notifications.models import Notification, NotificationType
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +251,49 @@ class BookingPickupVerificationView(generics.GenericAPIView):
                 "success": True,
                 "message": "Physical package handoff successfully authenticated.",
                 "current_status": BookingStatus.PICKED_UP
+            },
+            status=status.HTTP_200_OK
+        )
+    
+
+
+    
+# booking intransit verification view
+
+class BookingStartTransitView(generics.GenericAPIView):
+    """
+    Advances booking state from PICKED_UP -> IN_TRANSIT.
+    Triggered manually by the Traveler when beginning their travel routing journey.
+    """
+    serializer_class = StartTransitSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        booking = serializer.validated_data["booking_instance"]
+
+        with transaction.atomic():
+            # Atomically step state up to transit tracking bounds
+            booking.status = BookingStatus.IN_TRANSIT
+            booking.save(update_fields=["status"])
+
+            # Send automated update to notify the Sender that the item is moving
+            Notification.objects.create(
+                user=booking.sender,
+                title="Package In Transit",
+                message=f"Your traveler has started their journey! Order #{booking.tracking_number} is now IN_TRANSIT.",
+                notification_type=NotificationType.DELIVERY,
+                object_id=booking.id,
+                action_url=f"/bookings/{booking.id}/"
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Booking status successfully updated to IN_TRANSIT.",
+                "current_status": BookingStatus.IN_TRANSIT
             },
             status=status.HTTP_200_OK
         )

@@ -121,11 +121,13 @@ class BookingPaymentService:
             
             # 🟢 UPDATED: Generate a secure, unguessable 6-digit numerical pickup PIN
             pickup_pin = "".join(secrets.choice("0123456789") for _ in range(6))
+            delivery_pin = "".join(secrets.choice("0123456789") for _ in range(6))
 
             # 🟢 UPDATED: Transition status to CONFIRMED and save the pickup verification PIN
             booking.status = BookingStatus.CONFIRMED  
             booking.pickup_verification_pin = pickup_pin  # Ensure this field is added to your Booking model
-            booking.save(update_fields=["status", "pickup_verification_pin"])
+            booking.delivery_verification_pin = delivery_pin  # Ensure this field is added to your Booking model
+            booking.save(update_fields=["status", "pickup_verification_pin", "delivery_verification_pin"])
             
             # Move trip capacity reduction into verify_checkout() after payment succeeds
             booking_weight = getattr(booking, "agreed_weight_kg", decimal.Decimal("0.00"))
@@ -137,6 +139,7 @@ class BookingPaymentService:
                 trip.save(update_fields=["available_weight_kg"])
             
             return payment
+        
 
     @classmethod
     def mark_failed(cls, payment: BookingPayment, reason: str) -> BookingPayment:

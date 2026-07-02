@@ -141,3 +141,42 @@ class VerifyPickupPinSerializer(serializers.Serializer):
 
         attrs["booking"] = booking
         return attrs
+
+
+
+
+# Transit serilizer for booking pickup verification
+from rest_framework import serializers
+from django.utils.translation import gettext_lazy as _
+from apps.bookings.models import Booking, BookingStatus
+
+
+class StartTransitSerializer(serializers.Serializer):
+    """
+    Validates rules required to advance a booking from PICKED_UP to IN_TRANSIT.
+    """
+    booking_id = serializers.UUIDField(required=True)
+
+    def validate(self, attrs):
+        booking_id = attrs.get("booking_id")
+
+        try:
+            booking = Booking.objects.get(id=booking_id)
+        except Booking.DoesNotExist:
+            raise serializers.ValidationError({"booking_id": _("Target booking contract instance not found.")})
+
+        # 1. State Guard: Enforce strict chronological order
+        if booking.status != BookingStatus.PICKED_UP:
+            raise serializers.ValidationError(
+                _("Transit cannot be started. Booking must be in PICKED_UP status.")
+            )
+
+        # 2. Authorization Guard: Only the assigned traveler can start their transit routing
+        request_user = self.context["request"].user
+        if booking.traveler != request_user:
+            raise serializers.ValidationError(
+                _("Access Denied. Only the designated traveler can declare transit updates.")
+            )
+
+        attrs["booking_instance"] = booking
+        return attrs
