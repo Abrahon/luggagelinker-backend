@@ -4,6 +4,7 @@ from django.shortcuts import render
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 
+from apps.bookings.models import Booking, BookingStatus
 from apps.payment.models import Payment
 from apps.payment.serializers import PaymentSerializer
 import stripe
@@ -32,7 +33,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
-
+from rest_framework.permissions import IsAdminUser  
 from .models import BookingPayment, BookingPaymentLog
 from .services import BookingPaymentService
 
@@ -630,3 +631,48 @@ class StripeWebhookView(APIView):
             return HttpResponse(status=500)
 
         return HttpResponse(status=200)
+
+
+
+
+# booking payment relase views
+
+class BookingPaymentReleaseView(APIView):
+    """
+    System/Admin-only route to execute emergency manual escrow release capture overrides.
+    """
+    # 🟢 Change permission classes so ordinary authenticated users are rejected out-of-the-box
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, booking_id, *args, **kwargs):
+        try:
+            with transaction.atomic():
+                booking = Booking.objects.select_for_update().get(id=booking_id)
+                
+                if booking.status != BookingStatus.DELIVERED:
+                    return Response(
+                        {"success": False, "message": "Escrow funds cannot be released unless state is DELIVERED."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                payment = BookingPayment.objects.select_for_update().get(booking=booking)
+
+                # 🟢 Trigger service execution: All updates, statuses, and notifications execute safely here
+                BookingPaymentService.release(payment)
+
+                return Response(
+                    {
+                        "success": True,
+                        "message": "Escrow balance successfully released via administrative override operations.",
+                        "current_status": BookingStatus.COMPLETED
+                    },
+                    status=status.HTTP_200_OK
+                )
+
+        except (Booking.DoesNotExist, BookingPayment.DoesNotExist):
+            return Response({"success": False, "message": "Target database records not found."}, status=status.HTTP_404_NOT_FOUND)
+        except DjangoValidationError as e:
+            return Response({"success": False, "message": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.critical(f"Critical execution error: {str(e)}", exc_info=True)
+            return Response({"success": False, "message": "Internal error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

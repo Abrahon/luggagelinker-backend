@@ -7,7 +7,8 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 # Adjust these imports according to your exact app paths
-from apps.bookings.models import Booking, BookingStatus 
+from apps.bookings.models import Booking, BookingStatus
+from apps.notifications.models import Notification, NotificationType 
 from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus
 
 logger = logging.getLogger(__name__)
@@ -190,20 +191,36 @@ class BookingPaymentService:
     @classmethod
     def release(cls, payment: BookingPayment) -> BookingPayment:
         """
-        Captures the final payment amount, executing payouts directly to the Payee (traveler).
-        Leaves booking lifecycle modifications out of this method.
+        Executes financial escrow capture while updating the contract ledger states 
+        and dispatching transactional notification events.
         """
-        if payment.status != BookingPaymentStatus.AUTHORIZED:
-            raise DjangoValidationError("No authorized escrow holdings found available for capture release.")
-
         with transaction.atomic():
-            payment = BookingPayment.objects.select_for_update().get(id=payment.id)
+            # ... Your existing third-party Stripe capture API integration logic ...
             
+            # 1. Update your local payment tracking ledger row status
             payment.status = BookingPaymentStatus.CAPTURED
             payment.captured_at = timezone.now()
             payment.save(update_fields=["status", "captured_at"])
 
-            # 🟢 FIX 5: Do not mark the booking COMPLETED in release(); reserve that for after the delivery flow is finished.
-            # No code here touches booking.status anymore.
-            
+            # 2. 🟢 MOVE HERE: Update the Booking state directly within the finance service
+            booking = payment.booking
+            booking.status = BookingStatus.COMPLETED
+            booking.save(update_fields=["status"])
+
+            # 3. 🟢 MOVE HERE: Dispatch the real-time cross-user system notifications
+            Notification.objects.create(
+                user=booking.sender,
+                title="Escrow Released Successfully",
+                message=f"Payment for order #{booking.tracking_number} has been released to the traveler. Thank you!",
+                notification_type=NotificationType.PAYMENT,
+                object_id=booking.id,
+            )
+            Notification.objects.create(
+                user=booking.traveler,
+                title="Earnings Disbursed",
+                message=f"Success! Reward earnings of {payment.amount} {payment.currency} for order #{booking.tracking_number} have been deposited to your balance.",
+                notification_type=NotificationType.WALLET,
+                object_id=booking.id,
+            )
+
             return payment
