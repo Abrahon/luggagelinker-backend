@@ -73,7 +73,7 @@ class BookingService:
             trip=trip,
             sender=package.sender,
             traveler=trip.traveler,
-            agreed_reward=package.reward,
+            agreed_reward=package.reward_amount,
             currency=package.currency,
             status=BookingStatus.PENDING,
             payment_status=PaymentStatus.UNPAID,
@@ -88,7 +88,7 @@ class BookingService:
         # TODO: NotificationService.send_booking_request(booking)
         return booking
 
-    # 🟢 FIXED: Adjusted indentation to place method inside the class block
+
     @staticmethod
     @transaction.atomic
     def respond_to_booking_request(booking_id, traveler, action):

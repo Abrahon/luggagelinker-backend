@@ -75,7 +75,7 @@ class BookingSerializer(serializers.ModelSerializer):
 
     #     return value
 
-    
+
     def validate_match_id(self, value):
         if not Match.objects.filter(id=value).exists():
             raise serializers.ValidationError(
@@ -86,18 +86,21 @@ class BookingSerializer(serializers.ModelSerializer):
     
 
     def create(self, validated_data):
-        """
-        Bridges the operation to the service layer, catching only expected clean exceptions.
-        """
-        match_id = validated_data["match_id"]
-        initiated_by = self.context["request"].user
+            """
+            Bridges the operation to the service layer, catching only expected clean exceptions.
+            """
+            match_id = validated_data["match_id"]
+            initiated_by = self.context["request"].user
 
-        try:
-            return BookingService.create_booking_request(
-                match_id=match_id, 
-                initiated_by=initiated_by
-            )
-        # ✅ FIXED ISSUE 4: Caught only expected validation errors.
-        # Broad Exception block removed to allow unexpected system errors to bubble up naturally.
-        except DjangoValidationError as e:
-            raise serializers.ValidationError({"detail": e.message if hasattr(e, "message") else str(e)})
+            try:
+                return BookingService.create_booking_request(
+                    match_id=match_id, 
+                    initiated_by=initiated_by
+                )
+            except DjangoValidationError as e:
+                # 🟢 PRODUCTION FIX: Properly handle both dictionary and list based Django validation errors
+                if hasattr(e, "message_dict"):
+                    raise serializers.ValidationError(e.message_dict)
+                if hasattr(e, "messages"):
+                    raise serializers.ValidationError({"detail": e.messages})
+                raise serializers.ValidationError({"detail": str(e)})
