@@ -9,9 +9,16 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import Booking
-from .serializers import BookingSerializer
+from .serializers import BookingSerializer, VerifyPickupPinSerializer
 from .services import BookingService
 from rest_framework.exceptions import ValidationError
+from rest_framework import generics, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db import transaction
+
+from apps.bookings.models import BookingStatus
+from apps.notifications.models import Notification, NotificationType
 
 logger = logging.getLogger(__name__)
 
@@ -203,3 +210,49 @@ class BookingRespondView(generics.UpdateAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+
+
+# picup verification view
+class BookingPickupVerificationView(generics.GenericAPIView):
+    """
+    Validates the 6-digit physical handoff authorization token provided by the Sender.
+    Transitions Booking State from CONFIRMED -> PICKED_UP while escrow holds firm.
+    """
+    serializer_class = VerifyPickupPinSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        booking = serializer.validated_data["booking"]
+
+        with transaction.atomic():
+            # Advance state safely inside an database transaction container
+            booking.status = BookingStatus.PICKED_UP
+            booking.save(update_fields=["status"])
+
+            # Send automated system notifications confirming the handoff completed successfully
+            Notification.objects.create(
+                user=booking.sender,
+                title="Package Handed Over Successfully",
+                message=f"Traveler verified the pickup token for order #{booking.tracking_number}. Status updated to PICKED_UP.",
+                notification_type=NotificationType.DELIVERY,
+                object_id=booking.id,
+            )
+            Notification.objects.create(
+                user=booking.traveler,
+                title="Handoff Confirmed",
+                message=f"Pickup verified successfully for order #{booking.tracking_number}. You may now begin delivery routing.",
+                notification_type=NotificationType.DELIVERY,
+                object_id=booking.id,
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Physical package handoff successfully authenticated.",
+                "current_status": BookingStatus.PICKED_UP
+            },
+            status=status.HTTP_200_OK
+        )
