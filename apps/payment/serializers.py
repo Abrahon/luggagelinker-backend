@@ -187,6 +187,51 @@ class BookingPaymentSerializer(serializers.ModelSerializer):
         ]
 
 
+# class InitiateBookingPaymentSerializer(serializers.Serializer):
+#     """
+#     Lightweight write-only input serializer designed to capture and strictly validate
+#     inbound payment checkout session initializations.
+#     """
+#     booking_id = serializers.UUIDField(required=True)
+#     gateway = serializers.ChoiceField(choices=BookingPaymentGateway.choices, default=BookingPaymentGateway.STRIPE)
+
+#     def validate_booking_id(self, value):
+#         """
+#         Enforces strict enterprise business logic guards before hitting external payment APIs.
+#         """
+#         try:
+#             # Pull along relations at the SQL layer to prevent N+1 checks down the line
+#             booking = Booking.objects.select_related("package", "trip").get(id=value)
+#         except Booking.DoesNotExist:
+#             raise serializers.ValidationError(_("The requested booking profile instance does not exist."))
+
+#         # 1. Ownership Guard: Only the person who sent the package can pay for it
+#         request_user = self.context["request"].user
+#         if booking.package.sender != request_user:
+#             raise serializers.ValidationError(
+#                 _("Access Denied. Only the designated package sender can initiate payment collections.")
+#             )
+
+#         # 2. State Guard: Prevent processing payments for already settled or inactive bookings
+#         if hasattr(booking, "booking_payment"):
+#             existing_payment = booking.booking_payment
+#             if existing_payment.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
+#                 raise serializers.ValidationError(
+#                     _("A verified successful escrow deposit already securely locks this booking contract.")
+#                 )
+
+#         # 3. Financial Integrity Guard: Ensure the pricing values have been calculated properly
+#         reward_amount = getattr(booking, "agreed_reward", None)
+#         if reward_amount is None or reward_amount <= 0:
+#             raise serializers.ValidationError(
+#                 _("Transaction aborted. Booking contains an invalid or zero-valued financial reward amount structure.")
+#             )
+
+#         # Cache the validated database record in the serializer instance memory context 
+#         # so our future View/Service layers can grab it directly without a second SQL query.
+#         self.context["booking_instance"] = booking
+#         return value
+    
 class InitiateBookingPaymentSerializer(serializers.Serializer):
     """
     Lightweight write-only input serializer designed to capture and strictly validate
@@ -195,15 +240,17 @@ class InitiateBookingPaymentSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)
     gateway = serializers.ChoiceField(choices=BookingPaymentGateway.choices, default=BookingPaymentGateway.STRIPE)
 
-    def validate_booking_id(self, value):
+    def validate(self, attrs):
         """
         Enforces strict enterprise business logic guards before hitting external payment APIs.
         """
+        booking_id_value = attrs.get("booking_id")
+
         try:
             # Pull along relations at the SQL layer to prevent N+1 checks down the line
-            booking = Booking.objects.select_related("package", "trip").get(id=value)
+            booking = Booking.objects.select_related("package", "trip").get(id=booking_id_value)
         except Booking.DoesNotExist:
-            raise serializers.ValidationError(_("The requested booking profile instance does not exist."))
+            raise serializers.ValidationError({"booking_id": _("The requested booking profile instance does not exist.")})
 
         # 1. Ownership Guard: Only the person who sent the package can pay for it
         request_user = self.context["request"].user
@@ -227,7 +274,6 @@ class InitiateBookingPaymentSerializer(serializers.Serializer):
                 _("Transaction aborted. Booking contains an invalid or zero-valued financial reward amount structure.")
             )
 
-        # Cache the validated database record in the serializer instance memory context 
-        # so our future View/Service layers can grab it directly without a second SQL query.
-        self.context["booking_instance"] = booking
-        return value
+        # 🟢 FIX: Return the fully fetched booking object in validated_data for your view layer
+        attrs["booking"] = booking
+        return attrs

@@ -7,21 +7,30 @@ from rest_framework.permissions import IsAuthenticated
 from apps.payment.models import Payment
 from apps.payment.serializers import PaymentSerializer
 import stripe
-
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-
 from rest_framework import status
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from datetime import timedelta
-
 from apps.payment.models import Payment, PaymentStatus
 from apps.subscriptions.models import Subscription, SubscriptionStatus, Plan
 from django.contrib.auth import get_user_model
 import traceback
+from rest_framework.permissions import AllowAny
+from rest_framework.views import APIView
+from apps.accounts.models import User
+import logging
+from rest_framework import generics, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.core.exceptions import ValidationError as DjangoValidationError
+
+from .serializers import InitiateBookingPaymentSerializer
+from .services import BookingPaymentService
+
+logger = logging.getLogger(__name__)
+
 
 
 User = get_user_model()
@@ -161,170 +170,8 @@ class CreateCheckoutSessionView(APIView):
             )
 
 
-# webhook
-# class StripeWebhookView(APIView):
-
-#     authentication_classes = []
-#     permission_classes = []
-
-#     def post(self, request):
-
-#         payload = request.body
-#         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-
-#         if not sig_header:
-#             return Response(
-#                 {"success": False, "message": "Missing Stripe signature."},
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-
-#         try:
-#             event = stripe.Webhook.construct_event(
-#                 payload,
-#                 sig_header,
-#                 settings.STRIPE_WEBHOOK_SECRET
-#             )
-
-#         except ValueError:
-#             return Response(
-#                 {"success": False, "message": "Invalid payload."},
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-
-#         except stripe.error.SignatureVerificationError:
-#             return Response(
-#                 {"success": False, "message": "Invalid signature."},
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-
-#         # ===========================
-#         # HANDLE EVENTS
-#         # ===========================
-
-#         try:
-#             event_type = event["type"]
-#             data = event["data"]["object"].to_dict()
-
-#             # -------------------------------------------------
-#             # 1. CHECKOUT COMPLETED
-#             # -------------------------------------------------
-#             if event_type == "checkout.session.completed":
-
-#                 metadata = data.get("metadata", {})
-#                 payment_id = metadata.get("payment_id")
-#                 plan_id = metadata.get("plan_id")
-#                 user_id = metadata.get("user_id")
-
-#                 with transaction.atomic():
-
-#                     payment = Payment.objects.select_for_update().get(
-#                         id=payment_id
-#                     )
-
-#                     # prevent duplicate processing
-#                     if payment.status == PaymentStatus.SUCCEEDED:
-#                         return Response({"received": True})
-
-#                     user = User.objects.get(id=user_id)
-#                     plan = Plan.objects.get(id=plan_id)
-
-#                     # update payment
-#                     payment.status = PaymentStatus.SUCCEEDED
-#                     payment.stripe_payment_intent_id = data.get("payment_intent")
-#                     payment.stripe_customer_id = data.get("customer")
-#                     payment.paid_at = timezone.now()
-#                     payment.save()
-
-#                     # expire old subscription
-#                     Subscription.objects.filter(
-#                         user=user,
-#                         is_current=True
-#                     ).update(is_current=False)
-
-#                     # create subscription
-#                 from datetime import timedelta
-
-#                 Subscription.objects.create(
-#                     user=user,
-#                     plan=plan,
-#                     status=SubscriptionStatus.ACTIVE,
-#                     started_at=timezone.now(),
-#                     expires_at=timezone.now() + timedelta(
-#                         days=plan.duration_days
-#                     ),
-#                     is_current=True,
-#                 )
 
 
-#             # -------------------------------------------------
-#             # 2. PAYMENT FAILED
-#             # -------------------------------------------------
-#             elif event_type == "invoice.payment_failed":
-
-#                 invoice = data
-
-#                 payment_intent = invoice.get("payment_intent")
-
-#                 Payment.objects.filter(
-#                     stripe_payment_intent_id=payment_intent
-#                 ).update(
-#                     status=PaymentStatus.FAILED,
-#                     failure_reason="Stripe payment failed"
-#                 )
-
-#             # -------------------------------------------------
-#             # 3. PAYMENT SUCCEEDED (backup)
-#             # -------------------------------------------------
-#             elif event_type == "invoice.paid":
-
-#                 payment_intent = data.get("payment_intent")
-
-#                 Payment.objects.filter(
-#                     stripe_payment_intent_id=payment_intent
-#                 ).update(
-#                     status=PaymentStatus.SUCCEEDED,
-#                     paid_at=timezone.now()
-#                 )
-#             from apps.payment.models import Payment
-#             print(Payment.objects.last())
-#             print(Payment.objects.last().status)
-
-#             from apps.subscriptions.models import Subscription
-#             print(Subscription.objects.last())
-#             print(Subscription.objects.last().status)
-
-#             return Response({"success": True, "message": "Webhook handled"})
-
-#         except Exception as e:
-
-#             traceback.print_exc()
-
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Webhook processing error",
-#                     "error": str(e),
-#                 },
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             )
-
-import traceback
-from datetime import timedelta
-
-import stripe
-from django.conf import settings
-from django.db import transaction
-from django.utils import timezone
-from rest_framework import status
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework.views import APIView
-
-from apps.accounts.models import User
-from apps.payment.models import Payment
-# from apps.payment import PaymentStatus
-# from apps.subscriptions.models import Subscription, Plan
-# from apps.subscriptions import SubscriptionStatus
 
 
 class StripeWebhookView(APIView):
@@ -548,3 +395,81 @@ class PaymentDetailView(generics.RetrieveAPIView):
             Payment.objects.filter(user=self.request.user)
             .select_related("plan", "subscription")
         )
+
+
+
+
+# create payment for biooking
+
+class BookingPaymentInitiateView(generics.CreateAPIView):
+    """
+    API Endpoint to initiate a secure escrow checkout session for a specific booking.
+    Returns a third-party checkout redirection link (Stripe/bKash/Nagad).
+    """
+    serializer_class = InitiateBookingPaymentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def _get_client_ip(self, request):
+        """Extracts the true client IP address behind proxies for security logging."""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0].strip()
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        
+        # 🟢 Native framework exception handler execution
+        serializer.is_valid(raise_exception=True)
+
+        # 🟢 Extract cached object instances from validated_data dict context mapping 
+        booking = serializer.validated_data["booking"]
+        gateway = serializer.validated_data["gateway"]
+        client_ip = self._get_client_ip(request)
+
+        try:
+            # Route transaction preparation directly to our secure Service Layer
+            payment_record = BookingPaymentService.create_checkout(
+                booking=booking,
+                gateway=gateway,
+                client_ip=client_ip
+            )
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": "Payment checkout session successfully provisioned.",
+                    "data": {
+                        "payment_id": payment_record.id,
+                        "gateway": payment_record.gateway,
+                        "status": payment_record.status,
+                        "checkout_url": payment_record.checkout_url,
+                        "amount": payment_record.amount,
+                        "currency": payment_record.currency
+                    }
+                },
+                status=status.HTTP_201_CREATED,
+            )
+            
+        except DjangoValidationError as e:
+            # 🟢 Unified project response status fallback error payload mapping
+            return Response(
+                {
+                    "success": False,
+                    "message": "Transaction initialization rejected by core system engine.",
+                    "errors": e.message if hasattr(e, "message") else str(e),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            
+        except Exception as e:
+            logger.critical(f"Critical error on checkout routing execution: {str(e)}", exc_info=True)
+            return Response(
+                {
+                    "success": False,
+                    "message": "An unexpected system fault occurred while generating payment channels.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

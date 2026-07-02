@@ -11,7 +11,7 @@ from apps.bookings.models import Booking, BookingStatus
 from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus
 
 logger = logging.getLogger(__name__)
-stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", "")
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
 class BookingPaymentService:
@@ -22,7 +22,7 @@ class BookingPaymentService:
         Registers a fresh payment contract record and provisions the gateway session.
         Prevents duplicate entries via atomic database isolation locks.
         """
-        # 🟢 FIX 2: Strict prevention of duplicate BookingPayment creation at the thread layer
+        #  FIX 2: Strict prevention of duplicate BookingPayment creation at the thread layer
         with transaction.atomic():
             # Acquire a row-level database lock to eliminate concurrent API spam race conditions
             booking_sealed = Booking.objects.select_for_update().get(id=booking.id)
@@ -33,7 +33,7 @@ class BookingPaymentService:
                 if existing_payment.status != BookingPaymentStatus.FAILED:
                     return existing_payment
 
-            # 🟢 FIX 1: Platform fee calculation correction (/ 100)
+            #  FIX 1: Platform fee calculation correction (/ 100)
             fee_percentage = getattr(settings, "PLATFORM_FEE_PERCENTAGE", decimal.Decimal("0.00"))
             calculated_fee = ((booking_sealed.agreed_reward * fee_percentage) / decimal.Decimal("100.00")).quantize(decimal.Decimal("0.01"))
 
