@@ -8,13 +8,21 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .models import Booking
-from .serializers import BookingSerializer, VerifyPickupPinSerializer
+from .serializers import BookingSerializer, VerifyDeliveryPinSerializer, VerifyPickupPinSerializer
 from .services import BookingService
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
 from .serializers import StartTransitSerializer
 from apps.bookings.models import BookingStatus
 from apps.notifications.models import Notification, NotificationType
+# 🟢 Import the validation serializer
+from .serializers import VerifyDeliveryPinSerializer
+
+# 🟢 Import the status enums 
+from apps.bookings.models import BookingStatus
+
+# 🟢 IMPORT THE LIFECYCLE SERVICE HERE
+from apps.bookings.services import BookingLifecycleService
 
 
 
@@ -211,10 +219,13 @@ class BookingRespondView(generics.UpdateAPIView):
 
 
 # picup verification view
+
+
+
 class BookingPickupVerificationView(generics.GenericAPIView):
     """
     Validates the 6-digit physical handoff authorization token provided by the Sender.
-    Transitions Booking State from CONFIRMED -> PICKED_UP while escrow holds firm.
+    Delegates database updates and tracking mutations completely to the Service Layer.
     """
     serializer_class = VerifyPickupPinSerializer
     permission_classes = [IsAuthenticated]
@@ -223,47 +234,40 @@ class BookingPickupVerificationView(generics.GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
-        booking = serializer.validated_data["booking"]
+        # Retrieve the validated booking instance mapped by the serializer
+        booking = serializer.validated_data["booking_instance"]
 
-        with transaction.atomic():
-            # Advance state safely inside an database transaction container
-            booking.status = BookingStatus.PICKED_UP
-            booking.save(update_fields=["status"])
-
-            # Send automated system notifications confirming the handoff completed successfully
-            Notification.objects.create(
-                user=booking.sender,
-                title="Package Handed Over Successfully",
-                message=f"Traveler verified the pickup token for order #{booking.tracking_number}. Status updated to PICKED_UP.",
-                notification_type=NotificationType.DELIVERY,
-                object_id=booking.id,
+        try:
+            # 🟢 Execute business mutations via service routing
+            updated_booking = BookingLifecycleService.verify_and_execute_pickup(booking)
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": "Physical package handoff successfully authenticated.",
+                    "current_status": updated_booking.status,
+                    "picked_up_at": updated_booking.picked_up_at
+                },
+                status=status.HTTP_200_OK
             )
-            Notification.objects.create(
-                user=booking.traveler,
-                title="Handoff Confirmed",
-                message=f"Pickup verified successfully for order #{booking.tracking_number}. You may now begin delivery routing.",
-                notification_type=NotificationType.DELIVERY,
-                object_id=booking.id,
+            
+        except DjangoValidationError as e:
+            return Response(
+                {"success": False, "message": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )
-
-        return Response(
-            {
-                "success": True,
-                "message": "Physical package handoff successfully authenticated.",
-                "current_status": BookingStatus.PICKED_UP
-            },
-            status=status.HTTP_200_OK
-        )
     
 
 
-    
+
 # booking intransit verification view
+
+
 
 class BookingStartTransitView(generics.GenericAPIView):
     """
     Advances booking state from PICKED_UP -> IN_TRANSIT.
-    Triggered manually by the Traveler when beginning their travel routing journey.
+    Delegates database updates and temporal stamps completely to the Service Layer.
     """
     serializer_class = StartTransitSerializer
     permission_classes = [IsAuthenticated]
@@ -272,28 +276,64 @@ class BookingStartTransitView(generics.GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
+        # Retrieve the validated booking instance mapped by the serializer
         booking = serializer.validated_data["booking_instance"]
 
-        with transaction.atomic():
-            # Atomically step state up to transit tracking bounds
-            booking.status = BookingStatus.IN_TRANSIT
-            booking.save(update_fields=["status"])
-
-            # Send automated update to notify the Sender that the item is moving
-            Notification.objects.create(
-                user=booking.sender,
-                title="Package In Transit",
-                message=f"Your traveler has started their journey! Order #{booking.tracking_number} is now IN_TRANSIT.",
-                notification_type=NotificationType.DELIVERY,
-                object_id=booking.id,
-                action_url=f"/bookings/{booking.id}/"
+        try:
+            # 🟢 Execute business mutations via service routing
+            updated_booking = BookingLifecycleService.execute_start_transit(booking)
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": "Booking status successfully updated to IN_TRANSIT.",
+                    "current_status": updated_booking.status,
+                    "in_transit_at": updated_booking.in_transit_at
+                },
+                status=status.HTTP_200_OK
+            )
+            
+        except DjangoValidationError as e:
+            return Response(
+                {"success": False, "message": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-        return Response(
-            {
-                "success": True,
-                "message": "Booking status successfully updated to IN_TRANSIT.",
-                "current_status": BookingStatus.IN_TRANSIT
-            },
-            status=status.HTTP_200_OK
-        )
+
+# bookimng delivery verification view
+
+
+class BookingDeliveryVerificationView(generics.GenericAPIView):
+    """
+    Validates the 6-digit physical delivery drop-off token provided by the Receiver.
+    Delegates delivery timestamp recording and automated payment release to the Service Layer.
+    """
+    serializer_class = VerifyDeliveryPinSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        booking = serializer.validated_data["booking_instance"]
+
+        try:
+            # 🟢 Route execution to unified delivery + automatic payout handler
+            updated_booking = BookingLifecycleService.verify_and_execute_delivery(booking)
+            
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": "Physical drop-off authenticated. Payment automatically released and order successfully COMPLETED.",
+                    "current_status": updated_booking.status,
+                    "delivered_at": updated_booking.delivered_at
+                },
+                status=status.HTTP_200_OK
+            )
+            
+        except DjangoValidationError as e:
+            return Response(
+                {"success": False, "message": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )

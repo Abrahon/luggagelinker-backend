@@ -3,6 +3,9 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from apps.matching.models import Match
 from .models import Booking
 from .services import BookingService
+from django.utils.translation import gettext_lazy as _
+from apps.bookings.models import Booking, BookingStatus
+
 
 class BookingSerializer(serializers.ModelSerializer):
     tracking_number = serializers.CharField(read_only=True)
@@ -108,9 +111,8 @@ class BookingSerializer(serializers.ModelSerializer):
 
 
 # 
-from rest_framework import serializers
-from django.utils.translation import gettext_lazy as _
-from apps.bookings.models import Booking, BookingStatus
+
+
 
 class VerifyPickupPinSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)
@@ -146,10 +148,6 @@ class VerifyPickupPinSerializer(serializers.Serializer):
 
 
 # Transit serilizer for booking pickup verification
-from rest_framework import serializers
-from django.utils.translation import gettext_lazy as _
-from apps.bookings.models import Booking, BookingStatus
-
 
 class StartTransitSerializer(serializers.Serializer):
     """
@@ -177,6 +175,40 @@ class StartTransitSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 _("Access Denied. Only the designated traveler can declare transit updates.")
             )
+
+        attrs["booking_instance"] = booking
+        return attrs
+
+
+
+
+# delivery serilizer for booking pickup verification
+
+class VerifyDeliveryPinSerializer(serializers.Serializer):
+    booking_id = serializers.UUIDField(required=True)
+    delivery_pin = serializers.CharField(max_length=6, min_length=6, required=True)
+
+    def validate(self, attrs):
+        booking_id = attrs.get("booking_id")
+        input_pin = attrs.get("delivery_pin")
+
+        try:
+            booking = Booking.objects.get(id=booking_id)
+        except Booking.DoesNotExist:
+            raise serializers.ValidationError({"booking_id": _("Target booking contract instance not found.")})
+
+        # 1. State Guard: Hand-off can only occur mid-route
+        if booking.status != BookingStatus.IN_TRANSIT:
+            raise serializers.ValidationError(_("Delivery hand-off cannot be verified unless package is IN_TRANSIT."))
+
+        # 2. Authorization Guard: Only the assigned Traveler can input the passcode drop clearance
+        request_user = self.context["request"].user
+        if booking.traveler != request_user:
+            raise serializers.ValidationError(_("Access Denied. Only the designated traveler can execute delivery clearances."))
+
+        # 3. Code Match Verification
+        if booking.delivery_verification_pin != input_pin:
+            raise serializers.ValidationError({"delivery_pin": _("Invalid delivery security confirmation PIN entry.")})
 
         attrs["booking_instance"] = booking
         return attrs

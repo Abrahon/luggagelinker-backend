@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     BookingCreateView,
+    BookingDeliveryVerificationView,
     BookingPickupVerificationView,
     MyBookingListView,
     BookingDetailView,
@@ -42,5 +43,6 @@ urlpatterns = [
 
     path("booking/verify-pickup/", BookingPickupVerificationView.as_view(), name="verify-pickup"),
     path("booking/start-transit/", BookingStartTransitView.as_view(), name="start-transit"),
+    path("booking/verify-delivery/", BookingDeliveryVerificationView.as_view(), name="verify-delivery"), 
 
 ]
