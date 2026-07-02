@@ -25,12 +25,24 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.core.exceptions import ValidationError as DjangoValidationError
+import json
+from django.conf import settings
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+
+from .models import BookingPayment, BookingPaymentLog
+from .services import BookingPaymentService
+
+# 🟢 Import your notification model structures here
+from apps.notifications.models import Notification, NotificationType 
 
 from .serializers import InitiateBookingPaymentSerializer
 from .services import BookingPaymentService
 
 logger = logging.getLogger(__name__)
-
 
 
 User = get_user_model()
@@ -473,3 +485,148 @@ class BookingPaymentInitiateView(generics.CreateAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+from .models import BookingPayment, BookingPaymentLog, BookingPaymentStatus
+# webhook for payment verification
+@method_decorator(csrf_exempt, name="dispatch")
+class StripeWebhookView(APIView):
+    """
+    Enterprise-grade Webhook Listener enforcing transaction idempotency, multi-event routing,
+    global audit tracking, and cryptographic authenticity verification.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        payload = request.body
+        sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
+        webhook_secret = getattr(settings, "STRIPE_WEBHOOK_SECRET", "")
+
+        event = None
+
+        # 1. Cryptographic Signature Verification (Anti-Spoofing)
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+        except (ValueError, stripe.error.SignatureVerificationError) as e:
+            logger.error(f"Stripe Webhook signature verification rejected: {str(e)}")
+            return HttpResponse(status=400)
+
+        event_type = event["type"]
+        event_data = event["data"]["object"]
+        
+        # Extract metadata identifiers safely across various nested payload shapes
+        metadata = event_data.get("metadata", {}) if isinstance(event_data, dict) else getattr(event_data, "metadata", {})
+        payment_id = metadata.get("booking_payment_id") if metadata else None
+
+        # 4. 🟢 LOG EVERY WEBHOOK: Capture all incoming traffic immutably for debugging
+        payment_instance = None
+        if payment_id:
+            try:
+                payment_instance = BookingPayment.objects.get(id=payment_id)
+            except BookingPayment.DoesNotExist:
+                logger.warning(f"Webhook {event_type} contained an untrackable Payment ID: {payment_id}")
+
+        BookingPaymentLog.objects.create(
+            booking_payment=payment_instance,
+            event_type=event_type,
+            raw_payload=event
+        )
+
+        if not payment_instance:
+            return HttpResponse(status=200)
+
+        # 6. 🟢 WRAP WEBHOOK EXECUTION IN A DATABASE TRANSACTION BLOCK
+        try:
+            with transaction.atomic():
+                # Acquire a row lock to prevent race conditions from concurrent duplicate deliveries
+                payment = BookingPayment.objects.select_for_update().get(id=payment_instance.id)
+
+                # 1. & 3. 🟢 MULTI-EVENT HANDLING & VALIDATION STATUS CHECKING
+                
+                # --- EVENT A: CHECKOUT SESSION COMPLETED ---
+                if event_type == "checkout.session.completed":
+                    # 3. 🟢 Verify payment status: explicitly check that it is actually "paid"
+                    if event_data.get("payment_status") != "paid":
+                        logger.warning(f"Session completed but payment status was unconfirmed: {event_data.get('payment_status')}")
+                        return HttpResponse(status=200)
+
+                    # 2. 🟢 Prevent duplicate webhook processing (Idempotency Guard)
+                    if payment.status == BookingPaymentStatus.AUTHORIZED:
+                        logger.info(f"Idempotency Triggered: Payment {payment.id} already authorized.")
+                        return HttpResponse(status=200)
+
+                    # Execute state progression and trip capacity adjustments
+                    BookingPaymentService.verify_checkout(
+                        payment=payment,
+                        provider_session_id=event_data["id"],
+                        final_transaction_id=event_data.get("payment_intent")
+                    )
+
+                    # Dispatch User Notifications
+                    Notification.objects.create(
+                        user=payment.payer,
+                        title="Payment Secured in Escrow",
+                        message=f"Your payment of {payment.amount} {payment.currency} for order #{payment.booking.tracking_number} is locked in escrow.",
+                        notification_type=NotificationType.PAYMENT,
+                        object_id=payment.booking.id,
+                        action_url=f"/bookings/{payment.booking.id}/"
+                    )
+                    Notification.objects.create(
+                        user=payment.payee,
+                        title="Luggage Space Reserved",
+                        message=f"The sender funded the escrow for order #{payment.booking.tracking_number}. Your reward balance is secured.",
+                        notification_type=NotificationType.PAYMENT,
+                        object_id=payment.booking.id,
+                        action_url=f"/bookings/{payment.booking.id}/"
+                    )
+
+                # --- EVENT B: CHECKOUT SESSION EXPIRED ---
+                elif event_type == "checkout.session.expired":
+                    if payment.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
+                        return HttpResponse(status=200)  # Safeguard active payments
+                        
+                    BookingPaymentService.mark_failed(payment, reason="Stripe checkout redirection window expired.")
+                    
+                    Notification.objects.create(
+                        user=payment.payer,
+                        title="Payment Redirection Expired",
+                        message=f"Checkout session timed out for order #{payment.booking.tracking_number}. Please try initiating payment again.",
+                        notification_type=NotificationType.PAYMENT,
+                        object_id=payment.booking.id,
+                    )
+
+                # --- EVENT C: PAYMENT INTENT FAILED ---
+                elif event_type == "payment_intent.payment_failed":
+                    last_error = event_data.get("last_payment_error", {})
+                    error_msg = last_error.get("message", "Declined by issuing bank.")
+                    
+                    BookingPaymentService.mark_failed(payment, reason=f"Stripe Intent Failed: {error_msg}")
+                    
+                    Notification.objects.create(
+                        user=payment.payer,
+                        title="Escrow Deposit Declined",
+                        message=f"Transaction processing failed for order #{payment.booking.tracking_number}: {error_msg}",
+                        notification_type=NotificationType.PAYMENT,
+                        object_id=payment.booking.id,
+                    )
+
+                # --- EVENT D: CHARGE REFUNDED ---
+                elif event_type == "charge.refunded":
+                    if payment.status == BookingPaymentStatus.REFUNDED:
+                        return HttpResponse(status=200)
+
+                    BookingPaymentService.refund(payment)
+                    
+                    Notification.objects.create(
+                        user=payment.payer,
+                        title="Funds Refunded Successfully",
+                        message=f"Escrow settlement balance of {payment.amount} {payment.currency} has been returned to your original card issuer.",
+                        notification_type=NotificationType.PAYMENT,
+                        object_id=payment.booking.id,
+                    )
+
+        except Exception as e:
+            logger.critical(f"Database error executing webhook updates: {str(e)}", exc_info=True)
+            return HttpResponse(status=500)
+
+        return HttpResponse(status=200)
