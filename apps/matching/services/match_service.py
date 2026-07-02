@@ -19,15 +19,17 @@ logger = logging.getLogger(__name__)
 # CREATE OR UPDATE MATCH
 # ==========================================================
 
+import logging
+from django.db import transaction
+from apps.matching.models import Match, MatchStatus
+
+logger = logging.getLogger(__name__)
+
 @transaction.atomic
 def create_or_update_match(package, trip, score):
     """
-    Create a new Match or update an existing one.
-
-    Returns:
-        Match
+    Create a new Match or update an existing one within a tight atomic scope block.
     """
-
     match, created = Match.objects.get_or_create(
         package=package,
         trip=trip,
@@ -39,37 +41,19 @@ def create_or_update_match(package, trip, score):
     )
 
     if not created:
-
         changed = False
-
         if match.score != score:
             match.score = score
             changed = True
-
         if not match.is_active:
             match.is_active = True
             changed = True
 
         if changed:
-            match.save(
-                update_fields=[
-                    "score",
-                    "is_active",
-                    "updated_at",
-                ]
-            )
-
-            logger.info(
-                f"Match updated | Package={package.id} "
-                f"Trip={trip.id}"
-            )
-
+            match.save(update_fields=["score", "is_active", "updated_at"])
+            logger.info(f"Match updated | Package={package.id} Trip={trip.id}")
     else:
-
-        logger.info(
-            f"Match created | Package={package.id} "
-            f"Trip={trip.id}"
-        )
+        logger.info(f"Match created | Package={package.id} Trip={trip.id}")
 
     return match
 

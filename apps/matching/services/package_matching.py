@@ -22,46 +22,23 @@ logger = logging.getLogger(__name__)
 # PACKAGE MATCHING
 # ==========================================================
 
-@transaction.atomic
 def run_package_matching(package):
     """
-    Match a package against all eligible trips.
-
-    Returns:
-        list[Match]
+    Match a package against all eligible trips safely without long database transaction blocks.
     """
-
     matches = []
-
-    eligible_trips = filter_trips(package)
-
-    logger.info(
-        f"Package={package.id} | "
-        f"Eligible Trips={eligible_trips.count()}"
-    )
+    # Force evaluation cleanly using iterator to save web server memory pools
+    eligible_trips = filter_trips(package).iterator()
 
     for trip in eligible_trips:
+        score = calculate_match_score(package=package, trip=trip)
 
-        score = calculate_match_score(
-            package=package,
-            trip=trip,
-        )
-
-        # Ignore very poor matches
+        # Drop anything below target match standard threshold
         if score < 70:
             continue
 
-        match = create_or_update_match(
-            package=package,
-            trip=trip,
-            score=score,
-        )
-
+        # Single atomic execution transaction encapsulates inside this handler loop 
+        match = create_or_update_match(package=package, trip=trip, score=score)
         matches.append(match)
-
-    logger.info(
-        f"Package={package.id} | "
-        f"Matches Created={len(matches)}"
-    )
 
     return matches

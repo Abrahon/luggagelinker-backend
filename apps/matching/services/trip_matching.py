@@ -22,46 +22,20 @@ logger = logging.getLogger(__name__)
 # TRIP MATCHING
 # ==========================================================
 
-@transaction.atomic
 def run_trip_matching(trip):
     """
-    Match a trip against all eligible packages.
-
-    Returns:
-        list[Match]
+    Match a trip against all eligible packages safely.
     """
-
     matches = []
-
-    eligible_packages = filter_packages(trip)
-
-    logger.info(
-        f"Trip={trip.id} | "
-        f"Eligible Packages={eligible_packages.count()}"
-    )
+    eligible_packages = filter_packages(trip).iterator()
 
     for package in eligible_packages:
+        score = calculate_match_score(package=package, trip=trip)
 
-        score = calculate_match_score(
-            package=package,
-            trip=trip,
-        )
-
-        # Ignore low quality matches
         if score < 70:
             continue
 
-        match = create_or_update_match(
-            package=package,
-            trip=trip,
-            score=score,
-        )
-
+        match = create_or_update_match(package=package, trip=trip, score=score)
         matches.append(match)
-
-    logger.info(
-        f"Trip={trip.id} | "
-        f"Matches Created={len(matches)}"
-    )
 
     return matches

@@ -27,5 +27,8 @@ urlpatterns = [
     path("api/", include("apps.packages.urls")),
     path("api/", include("apps.trips.urls")),
     path("api/", include("apps.notifications.urls")),
+    path("api/", include("apps.matching.urls")),
+    # path("api/", include("apps.bookings.urls")),
+
 
 ]

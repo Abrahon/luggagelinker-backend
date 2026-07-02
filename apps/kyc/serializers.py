@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.kyc.models import KYC, IDType
+from apps.kyc.models import KYC, IDType, KYCStatus
 
 
 class KYCSerializer(serializers.ModelSerializer):
@@ -208,7 +208,7 @@ class KYCSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
 
-        if instance.status == KYC.Status.APPROVED:
+        if instance.status == KYCStatus.APPROVED:
             raise serializers.ValidationError({
                 "detail": "Approved KYC cannot be modified."
             })
