@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    BookingPaymentInitiateView,
     CreateCheckoutSessionView,
     StripeWebhookView,
     PaymentHistoryView,
@@ -44,4 +45,9 @@ urlpatterns = [
         PaymentDetailView.as_view(),
         name="payment-detail",
     ),
+
+    path("booking/initiate/", BookingPaymentInitiateView.as_view(), name="payment-initiate"),
+    path("stripe/webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
+    # path("booking/history/", BookingPaymentHistoryListView.as_view(), name="payment-history"), # 🟢 ADD THIS
+
 ]

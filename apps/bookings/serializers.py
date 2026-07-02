@@ -104,3 +104,40 @@ class BookingSerializer(serializers.ModelSerializer):
                 if hasattr(e, "messages"):
                     raise serializers.ValidationError({"detail": e.messages})
                 raise serializers.ValidationError({"detail": str(e)})
+
+
+
+# 
+from rest_framework import serializers
+from django.utils.translation import gettext_lazy as _
+from apps.bookings.models import Booking, BookingStatus
+
+class VerifyPickupPinSerializer(serializers.Serializer):
+    booking_id = serializers.UUIDField(required=True)
+    pickup_pin = serializers.CharField(max_length=6, min_length=6, required=True)
+
+    def validate(self, attrs):
+        booking_id = attrs.get("booking_id")
+        input_pin = attrs.get("pickup_pin")
+
+        try:
+            # Row lock the booking to handle the state alteration sequence cleanly
+            booking = Booking.objects.get(id=booking_id)
+        except Booking.DoesNotExist:
+            raise serializers.ValidationError({"booking_id": _("Target booking contract instance not found.")})
+
+        # 1. State Guard: Enforce sequence integrity
+        if booking.status != BookingStatus.CONFIRMED:
+            raise serializers.ValidationError(_("Pickup cannot be performed unless transaction is CONFIRMED."))
+
+        # 2. Authentication Check: Only the assigned Traveler can submit the validation PIN
+        request_user = self.context["request"].user
+        if booking.traveler != request_user:
+            raise serializers.ValidationError(_("Access Denied. Only the designated traveler can execute pickup clearances."))
+
+        # 3. Security Check: Validate matching pin entries
+        if booking.pickup_verification_pin != input_pin:
+            raise serializers.ValidationError({"pickup_pin": _("Invalid security verification passcode pin code entry.")})
+
+        attrs["booking"] = booking
+        return attrs

@@ -93,12 +93,16 @@ class BookingPaymentService:
         else:
             raise DjangoValidationError("Selected transaction gateway routing is invalid.")
 
+
+
     @classmethod
     def verify_checkout(cls, payment: BookingPayment, provider_session_id: str, final_transaction_id: str) -> BookingPayment:
         """
         Transition payment ledger into secure Escrow Authorization upon confirmation from webhooks.
-        Deducts trip luggage capacity only after payment success confirmation.
+        Deducts trip luggage capacity and provisions a secure 6-digit pickup verification PIN.
         """
+        import secrets  # Make sure this is imported at the top of your file
+
         with transaction.atomic():
             # Refresh and lock related records across tables to guarantee numerical accuracy
             payment = BookingPayment.objects.select_related("booking__trip").select_for_update().get(id=payment.id)
@@ -115,12 +119,15 @@ class BookingPaymentService:
             payment.authorized_at = timezone.now()
             payment.save(update_fields=["status", "provider_payment_id", "transaction_id", "authorized_at"])
             
-            # 🟢 FIX 3: Replaced hardcoded booking status strings with BookingStatus enum
-            booking.status = BookingStatus.PAID
-            booking.save(update_fields=["status"])
+            # 🟢 UPDATED: Generate a secure, unguessable 6-digit numerical pickup PIN
+            pickup_pin = "".join(secrets.choice("0123456789") for _ in range(6))
+
+            # 🟢 UPDATED: Transition status to CONFIRMED and save the pickup verification PIN
+            booking.status = BookingStatus.CONFIRMED  
+            booking.pickup_verification_pin = pickup_pin  # Ensure this field is added to your Booking model
+            booking.save(update_fields=["status", "pickup_verification_pin"])
             
-            # 🟢 FIX 4: Move trip capacity reduction into verify_checkout() after payment succeeds
-            # Guard against edge-case scenario where trip details are missing or malformed
+            # Move trip capacity reduction into verify_checkout() after payment succeeds
             booking_weight = getattr(booking, "agreed_weight_kg", decimal.Decimal("0.00"))
             if trip and hasattr(trip, "available_weight_kg"):
                 if trip.available_weight_kg < booking_weight:
