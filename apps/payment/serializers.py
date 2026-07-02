@@ -2,6 +2,10 @@ from rest_framework import serializers
 
 from apps.payment.models import Payment
 from apps.subscriptions.models import Plan
+from rest_framework import serializers
+from django.utils.translation import gettext_lazy as _
+from apps.bookings.models import Booking
+from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -119,3 +123,111 @@ class PaymentSerializer(serializers.ModelSerializer):
             })
 
         return attrs
+
+
+
+
+# booking payment serializer
+
+
+class BookingPaymentSerializer(serializers.ModelSerializer):
+    """
+    Production-optimized serializer for tracking escrow transactions.
+    Bypasses SerializerMethodField performance bottlenecks via explicit source mapping.
+    """
+    # Normalized Booking contexts
+    booking_status = serializers.CharField(source="booking.status", read_only=True)
+    package_title = serializers.CharField(source="booking.package.title", read_only=True)
+    
+    # Counter-party informational mapping strings
+    payer_email = serializers.EmailField(source="payer.email", read_only=True)
+    payee_email = serializers.EmailField(source="payee.email", read_only=True)
+
+    class Meta:
+        model = BookingPayment
+        fields = [
+            "id",
+            "booking",
+            "booking_status",
+            "package_title",
+            "payer",
+            "payer_email",
+            "payee",
+            "payee_email",
+            "amount",
+            "platform_fee",
+            "currency",
+            "gateway",
+            "status",
+            "provider_payment_id",
+            "checkout_url",
+            "transaction_id",
+            "failure_reason",
+            "created_at",
+            "updated_at",
+            "authorized_at",
+            "captured_at",
+            "refunded_at",
+        ]
+        read_only_fields = [
+            "id",
+            "payer",
+            "payee",
+            "amount",
+            "platform_fee",
+            "currency",
+            "status",
+            "provider_payment_id",
+            "checkout_url",
+            "transaction_id",
+            "failure_reason",
+            "authorized_at",
+            "captured_at",
+            "refunded_at",
+        ]
+
+
+class InitiateBookingPaymentSerializer(serializers.Serializer):
+    """
+    Lightweight write-only input serializer designed to capture and strictly validate
+    inbound payment checkout session initializations.
+    """
+    booking_id = serializers.UUIDField(required=True)
+    gateway = serializers.ChoiceField(choices=BookingPaymentGateway.choices, default=BookingPaymentGateway.STRIPE)
+
+    def validate_booking_id(self, value):
+        """
+        Enforces strict enterprise business logic guards before hitting external payment APIs.
+        """
+        try:
+            # Pull along relations at the SQL layer to prevent N+1 checks down the line
+            booking = Booking.objects.select_related("package", "trip").get(id=value)
+        except Booking.DoesNotExist:
+            raise serializers.ValidationError(_("The requested booking profile instance does not exist."))
+
+        # 1. Ownership Guard: Only the person who sent the package can pay for it
+        request_user = self.context["request"].user
+        if booking.package.sender != request_user:
+            raise serializers.ValidationError(
+                _("Access Denied. Only the designated package sender can initiate payment collections.")
+            )
+
+        # 2. State Guard: Prevent processing payments for already settled or inactive bookings
+        if hasattr(booking, "booking_payment"):
+            existing_payment = booking.booking_payment
+            if existing_payment.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
+                raise serializers.ValidationError(
+                    _("A verified successful escrow deposit already securely locks this booking contract.")
+                )
+
+        # 3. Financial Integrity Guard: Ensure the pricing values have been calculated properly
+        reward_amount = getattr(booking, "agreed_reward", None)
+        if reward_amount is None or reward_amount <= 0:
+            raise serializers.ValidationError(
+                _("Transaction aborted. Booking contains an invalid or zero-valued financial reward amount structure.")
+            )
+
+        # Cache the validated database record in the serializer instance memory context 
+        # so our future View/Service layers can grab it directly without a second SQL query.
+        self.context["booking_instance"] = booking
+        return value
