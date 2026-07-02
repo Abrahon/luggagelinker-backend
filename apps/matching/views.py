@@ -68,6 +68,12 @@ class MyMatchListView(generics.ListAPIView):
         
 
 
+import uuid
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+from django.db import models
+from .models import Match
+from .serializers import MatchSerializer
 
 class PackageMatchListView(generics.ListAPIView):
 
@@ -75,37 +81,41 @@ class PackageMatchListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # 🟢 CHANGE 1: Defensive Programming Validation
-        # If a client sends an empty/missing 'package_id', filtering down by None 
-        # is slow or can cause unexpected results. We default to a blank string or safely handle it.
-        package_id = self.request.query_params.get("package_id", "")
+        user = self.request.user
+        package_id = self.request.query_params.get("package_id", "").strip()
 
-        # 🟢 CHANGE 2: Added select_related() database optimization
-        # Your serializer relies on reading properties like 'package.title' and 'trip.traveler.email'.
-        # By adding select_related, Django joins these tables on the SQL layer instantly.
-        # This reduces database queries from N+1 down to exactly 1 query.
-        return Match.objects.filter(
-            package_id=package_id,
-            package__sender=self.request.user,
+        # Base filter: Only show active matches belonging to the logged-in sender's packages
+        queryset = Match.objects.filter(
+            package__sender=user,
             is_active=True
-        ).select_related(
+        )
+
+        # OPTIONAL FILTER: If a valid package_id is passed, filter down further.
+        # If an invalid package_id or empty string is passed, we safely ignore it.
+        if package_id:
+            try:
+                uuid.UUID(str(package_id))
+                queryset = queryset.filter(package_id=package_id)
+            except ValueError:
+                # If they passed trash data in the query param, return an empty set 
+                # instead of crashing the database.
+                return Match.objects.none()
+
+        # PRODUCTION OPTIMIZATION: Pull all nested data structures in 1 single join query
+        return queryset.select_related(
+            "package",
             "package__sender", 
+            "trip",
             "trip__traveler"
-        ).order_by("-score") # 🟢 CHANGE 3: Moved order_by directly into the base queryset definition.
+        ).order_by("-score", "-created_at")
 
     def list(self, request, *args, **kwargs):
         try:
-            # 🟢 CHANGE 4: Cleaned up dual query evaluations.
-            # Your old code split the database execution by calling .order_by() inside list() 
-            # after getting the queryset, triggering unnecessary compilation steps.
             queryset = self.get_queryset()
 
-            # Note: .exists() is fast, but if the records are present, it still costs 
-            # an evaluation call. For small to mid-sized result sets, streaming directly 
-            # into the serializer is efficient.
             if not queryset.exists():
                 return success_response(
-                    message="No matches found for this package.",
+                    message="No matches found for your packages.",
                     data=[],
                 )
 
@@ -121,8 +131,7 @@ class PackageMatchListView(generics.ListAPIView):
                 message="Unable to fetch package matches.",
                 status_code=500,
                 errors=str(e)
-            )
-        
+            )   
 
 
 class TripMatchListView(generics.ListAPIView):

@@ -25,6 +25,8 @@ from apps.matching.models import Match, MatchStatus
 
 logger = logging.getLogger(__name__)
 
+from django.utils import timezone  # Add this import at the top
+
 @transaction.atomic
 def create_or_update_match(package, trip, score):
     """
@@ -50,6 +52,8 @@ def create_or_update_match(package, trip, score):
             changed = True
 
         if changed:
+            # FIX: Explicitly update the timestamp when restricting save fields
+            match.updated_at = timezone.now()
             match.save(update_fields=["score", "is_active", "updated_at"])
             logger.info(f"Match updated | Package={package.id} Trip={trip.id}")
     else:

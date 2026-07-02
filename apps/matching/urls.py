@@ -13,7 +13,7 @@ urlpatterns = [
     # MY MATCHES (sender + traveler)
     # ==========================================================
     path(
-        "matches/my/",
+        "my-matches/",
         MyMatchListView.as_view(),
         name="my-matches",
     ),

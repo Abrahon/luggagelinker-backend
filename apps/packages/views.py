@@ -42,7 +42,7 @@ from rest_framework.response import Response
 
 from .models import Package, PackageImage
 from .serializers import PackageImageSerializer
-
+from apps.matching.services.package_matching import run_package_matching
 
 from .models import Package, PackageImage
 from .serializers import (
@@ -71,6 +71,9 @@ class CreatePackageView(generics.CreateAPIView):
             serializer.is_valid(raise_exception=True)
 
             package = serializer.save()
+
+            run_package_matching(package)
+            
 
             logger.info(
                 f"Package created successfully | "

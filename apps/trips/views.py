@@ -9,6 +9,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.matching.services.trip_matching import run_trip_matching
+from apps.matching.services.trip_matching import run_trip_matching
 from .models import Trip
 from .serializers import TripSerializer
 
@@ -52,7 +54,11 @@ class CreateTripListView(generics.ListCreateAPIView):
 
             serializer.is_valid(raise_exception=True)
 
+        
             trip = serializer.save()
+
+            run_trip_matching(trip)
+            
 
             logger.info(
                 f"Trip created successfully. "
