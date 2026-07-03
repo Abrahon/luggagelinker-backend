@@ -7,6 +7,7 @@ from .views import (
     StripeWebhookView,
     PaymentHistoryView,
     PaymentDetailView,
+    stripe_webhook,
 )
 
 urlpatterns = [
@@ -28,9 +29,14 @@ urlpatterns = [
         StripeWebhookView.as_view(),
         name="stripe-webhook",
     ),
+    path(
+        "payments/stripe/webhook/",
+        stripe_webhook,
+        name="stripe-webhook",
+    ),
 
     # =========================================
-    # PAYMENT HISTORY
+    # PAYMENT HISTORY subscription
     # =========================================
     path(
         "payment/history/",
@@ -50,6 +56,6 @@ urlpatterns = [
     path("booking/initiate/", BookingPaymentInitiateView.as_view(), name="payment-initiate"),
     path("stripe/webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
     path("admin/booking/<uuid:booking_id>/release/", BookingPaymentReleaseView.as_view(), name="admin-payment-release"),
-    # path("booking/history/", BookingPaymentHistoryListView.as_view(), name="payment-history"), # 🟢 ADD THIS
+    # path("booking/history/", BookingPaymentHistoryListView.as_view(), name="payment-history"), 
 
 ]

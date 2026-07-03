@@ -36,6 +36,14 @@ from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAdminUser  
 from .models import BookingPayment, BookingPaymentLog
 from .services import BookingPaymentService
+import stripe
+from django.conf import settings
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
 
 # 🟢 Import your notification model structures here
 from apps.notifications.models import Notification, NotificationType 
@@ -138,6 +146,7 @@ class CreateCheckoutSessionView(APIView):
                         }
                     ],
                     metadata={
+                        "payment_type": "subscription",
                         "payment_id": str(payment.id),
                         "user_id": str(request.user.id),
                         "plan_id": str(plan.id),
@@ -181,6 +190,129 @@ class CreateCheckoutSessionView(APIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+
+# new webhook view for booking payments
+
+import stripe
+import logging
+
+from django.conf import settings
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
+from .services import BookingPaymentService,SubscriptionWebhookService
+
+
+logger = logging.getLogger(__name__)
+
+
+
+
+@csrf_exempt
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def stripe_webhook(request):
+
+    payload = request.body
+    sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
+    endpoint_secret = settings.STRIPE_WEBHOOK_SECRET
+
+    # -----------------------------------------------------
+    # Verify Stripe Signature
+    # -----------------------------------------------------
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=endpoint_secret,
+        )
+
+    except ValueError:
+        logger.exception("Invalid Stripe webhook payload.")
+        return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
+
+    except stripe.error.SignatureVerificationError:
+        logger.exception("Invalid Stripe webhook signature.")
+        return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
+
+    event_type = event["type"]
+    event_data = event["data"]["object"]
+
+    try:
+
+        # =====================================================
+        # CHECKOUT SESSION COMPLETED
+        # =====================================================
+
+        if event_type == "checkout.session.completed":
+
+            metadata = event_data.get("metadata", {}) or {}
+            payment_type = metadata.get("payment_type")
+
+            if payment_type == "booking":
+
+                BookingPaymentService.process_webhook(event)
+
+            elif payment_type == "subscription":
+
+                SubscriptionWebhookService.process(event)
+
+            else:
+
+                logger.warning(
+                    "Unknown payment_type received: %s",
+                    payment_type,
+                )
+
+        # =====================================================
+        # SUBSCRIPTION EVENTS
+        # =====================================================
+
+        elif event_type in [
+            "invoice.paid",
+            "invoice.payment_failed",
+        ]:
+
+            SubscriptionWebhookService.process(event)
+
+        # =====================================================
+        # BOOKING PAYMENT EVENTS
+        # =====================================================
+
+        elif event_type in [
+            "payment_intent.payment_failed",
+            "charge.refunded",
+            "checkout.session.expired",
+        ]:
+
+            BookingPaymentService.process_webhook(event)
+
+        else:
+
+            logger.info(
+                "Ignoring unsupported Stripe event: %s",
+                event_type,
+            )
+
+    except Exception:
+
+        logger.exception(
+            "Stripe webhook processing failed for event: %s",
+            event_type,
+        )
+
+        return HttpResponse(
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+    return HttpResponse(status=status.HTTP_200_OK)
 
 
 
@@ -383,6 +515,8 @@ class StripeWebhookView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+
+
 class PaymentHistoryView(generics.ListAPIView):
 
     serializer_class = PaymentSerializer
@@ -441,12 +575,14 @@ class BookingPaymentInitiateView(generics.CreateAPIView):
         booking = serializer.validated_data["booking"]
         gateway = serializer.validated_data["gateway"]
         client_ip = self._get_client_ip(request)
+        user_email = request.user.email  
 
         try:
             # Route transaction preparation directly to our secure Service Layer
             payment_record = BookingPaymentService.create_checkout(
                 booking=booking,
                 gateway=gateway,
+                user_email=user_email,
                 client_ip=client_ip
             )
             
@@ -513,13 +649,15 @@ class StripeWebhookView(APIView):
             return HttpResponse(status=400)
 
         event_type = event["type"]
-        event_data = event["data"]["object"]
-        
-        # Extract metadata identifiers safely across various nested payload shapes
-        metadata = event_data.get("metadata", {}) if isinstance(event_data, dict) else getattr(event_data, "metadata", {})
-        payment_id = metadata.get("booking_payment_id") if metadata else None
 
-        # 4. 🟢 LOG EVERY WEBHOOK: Capture all incoming traffic immutably for debugging
+        # Convert StripeObject to a normal Python dict
+        event_data = event["data"]["object"].to_dict()
+
+        metadata = event_data.get("metadata", {})
+        payment_id = metadata.get("booking_payment_id")
+
+
+        # 4.  LOG EVERY WEBHOOK: Capture all incoming traffic immutably for debugging
         payment_instance = None
         if payment_id:
             try:

@@ -9,7 +9,14 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 # Adjust these imports according to your exact app paths
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType 
-from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus
+from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus,Payment,PaymentStatus
+from datetime import timedelta
+# Replace these import paths with your actual project structure
+from apps.subscriptions.models import (
+    Subscription, 
+    SubscriptionStatus, 
+    Plan, 
+)
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -18,7 +25,7 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 class BookingPaymentService:
 
     @classmethod
-    def create_checkout(cls, booking: Booking, gateway: str, client_ip=None) -> BookingPayment:
+    def create_checkout(cls, booking: Booking, gateway: str, user_email: str, client_ip=None) -> BookingPayment:
         """
         Registers a fresh payment contract record and provisions the gateway session.
         Prevents duplicate entries via atomic database isolation locks.
@@ -58,6 +65,7 @@ class BookingPaymentService:
 
                 session = stripe.checkout.Session.create(
                     payment_method_types=["card"],
+                    customer_email=user_email,
                     line_items=[{
                         "price_data": {
                             "currency": currency_lower,
@@ -71,6 +79,7 @@ class BookingPaymentService:
                     }],
                     mode="payment",
                     metadata={
+                        "payment_type": "booking",
                         "booking_payment_id": str(payment.id),
                         "booking_id": str(booking_sealed.id)
                     },
@@ -224,3 +233,163 @@ class BookingPaymentService:
             )
 
             return payment
+
+
+
+
+
+from decimal import Decimal
+
+
+class SubscriptionWebhookService:
+
+    @staticmethod
+    def process(event):
+        event_type = event["type"]
+        data = event["data"]["object"]
+
+        logger.info("Subscription webhook received: %s", event_type)
+
+        # ============================================
+        # CHECKOUT SESSION COMPLETED (Initial Purchase)
+        # ============================================
+        if event_type == "checkout.session.completed":
+            metadata = data.get("metadata", {}) or {}
+
+            payment_id = metadata.get("payment_id")
+            user_id = metadata.get("user_id")
+            plan_id = metadata.get("plan_id")
+
+            if not all([payment_id, user_id, plan_id]):
+                logger.warning("Missing subscription session metadata.")
+                return
+
+            with transaction.atomic():
+                try:
+                    payment = Payment.objects.select_for_update().get(id=payment_id)
+                except Payment.DoesNotExist:
+                    logger.error("Payment ID %s not found for checkout session.", payment_id)
+                    return
+
+                if payment.status == PaymentStatus.SUCCEEDED:
+                    return
+
+                try:
+                    plan = Plan.objects.get(id=plan_id)
+                except Plan.DoesNotExist:
+                    logger.error("Plan ID %s not found.", plan_id)
+                    return
+
+                # 1. Update initial payment ledger
+                payment.status = PaymentStatus.SUCCEEDED
+                payment.stripe_payment_intent_id = data.get("payment_intent")
+                payment.stripe_customer_id = data.get("customer")
+                payment.stripe_subscription_id = data.get("subscription")
+                payment.stripe_invoice_id = data.get("invoice")  # Captured invoice ID
+                payment.paid_at = timezone.now()
+                payment.save()
+
+                # 2. Deactivate any existing active subscriptions
+                Subscription.objects.filter(
+                    user_id=user_id,
+                    is_current=True,
+                ).update(
+                    is_current=False,
+                    status=SubscriptionStatus.EXPIRED,
+                )
+
+                # 3. Provision new active subscription
+                Subscription.objects.create(
+                    user_id=user_id,
+                    plan=plan,
+                    status=SubscriptionStatus.ACTIVE,
+                    started_at=timezone.now(),
+                    expires_at=timezone.now() + timedelta(days=plan.duration_days),
+                    is_current=True,
+                    stripe_subscription_id=data.get("subscription")
+                )
+                logger.info("Successfully provisioned initial subscription for User %s", user_id)
+
+        # ============================================
+        # INVOICE PAID (Automated Recurring Renewals)
+        # ============================================
+        elif event_type == "invoice.paid":
+            subscription_id = data.get("subscription")
+            stripe_customer_id = data.get("customer")
+            
+            # Skip checkout invoices since 'checkout.session.completed' handles them
+            if data.get("billing_reason") == "subscription_create":
+                logger.info("Skipping invoice.paid for initial creation step.")
+                return
+
+            with transaction.atomic():
+                try:
+                    subscription = Subscription.objects.select_for_update().get(
+                        stripe_subscription_id=subscription_id,
+                        is_current=True
+                    )
+                except Subscription.DoesNotExist:
+                    logger.error("Subscription %s not found for renewal invoice.", subscription_id)
+                    return
+
+                # 1. Safe monetary value tracking using Decimal
+                amount_paid = Decimal(data.get("amount_paid", 0)) / Decimal("100")
+
+                # 2. Log a completely new ledger item tracking renewal history
+                Payment.objects.create(
+                    user_id=subscription.user_id,
+                    plan=subscription.plan,
+                    amount=amount_paid,
+                    status=PaymentStatus.SUCCEEDED,
+                    stripe_customer_id=stripe_customer_id,
+                    stripe_subscription_id=subscription_id,
+                    stripe_payment_intent_id=data.get("payment_intent"),  # Captured payment intent
+                    stripe_invoice_id=data.get("id"),                     # Captured invoice ID
+                    paid_at=timezone.now()
+                )
+
+                # 3. Extend expiration cleanly from their current end date—not from now
+                subscription.status = SubscriptionStatus.ACTIVE
+                subscription.expires_at = subscription.expires_at + timedelta(days=subscription.plan.duration_days)
+                subscription.save()
+                
+                logger.info("Successfully processed recurring invoice renewal for sub: %s", subscription_id)
+
+        # ============================================
+        # INVOICE PAYMENT FAILED (Card Declined / Lapsed)
+        # ============================================
+        elif event_type == "invoice.payment_failed":
+            subscription_id = data.get("subscription")
+
+            with transaction.atomic():
+                try:
+                    subscription = Subscription.objects.select_for_update().get(
+                        stripe_subscription_id=subscription_id,
+                        is_current=True
+                    )
+                except Subscription.DoesNotExist:
+                    logger.warning("No active subscription found for broken invoice hook: %s", subscription_id)
+                    return
+
+                # 1. Gracefully transition subscription state
+                subscription.status = SubscriptionStatus.PAST_DUE
+                subscription.save()
+
+                # 2. Format failed amount cleanly using Decimal
+                amount_due = Decimal(data.get("amount_due", 0)) / Decimal("100")
+
+                # 3. Create a failed payment ledger item to retain historical paper trail
+                Payment.objects.create(
+                    user_id=subscription.user_id,
+                    plan=subscription.plan,
+                    amount=amount_due,
+                    status=PaymentStatus.FAILED,
+                    stripe_subscription_id=subscription_id,
+                    stripe_customer_id=data.get("customer"),
+                    stripe_invoice_id=data.get("id"),
+                    failure_reason="Stripe recurring payment failed."
+                )
+                logger.warning("Subscription invoice collection failed logged in ledger for ID: %s", subscription_id)
+
+        else:
+            logger.info("Ignoring subscription event: %s", event_type)
