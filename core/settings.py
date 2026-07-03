@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "apps.matching",
     "apps.notifications",
     "apps.bookings",
+    "apps.wallets",
 
 ]
 
