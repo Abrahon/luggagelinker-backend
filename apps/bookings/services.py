@@ -12,7 +12,7 @@ from apps.matching.models import Match
 import logging
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType
-
+from apps.notifications.utils.email import send_delivery_pin_email
 import logging
 from django.db import transaction
 from django.utils import timezone
@@ -156,6 +156,7 @@ class BookingService:
 
 
 class BookingLifecycleService:
+
     @classmethod
     def verify_and_execute_pickup(cls, booking: Booking) -> Booking:
         """
@@ -185,6 +186,11 @@ class BookingLifecycleService:
                 message=f"Pickup verified successfully for order #{booking.tracking_number}. You may now begin delivery routing.",
                 notification_type=NotificationType.DELIVERY,
                 object_id=booking.id,
+            )
+            send_delivery_pin_email(
+                user_email=booking.sender.email, 
+                booking=booking,
+                delivery_pin=booking.delivery_verification_pin
             )
 
             logger.info(f"Booking {booking.id} successfully transitioned to PICKED_UP by service orchestration.")
@@ -221,11 +227,6 @@ class BookingLifecycleService:
 
 
 
-
-
-
-    # ... previous methods (verify_and_execute_pickup, execute_start_transit) ...
-
     @classmethod
     def verify_and_execute_delivery(cls, booking: Booking) -> Booking:
         """
@@ -247,7 +248,7 @@ class BookingLifecycleService:
             booking.delivered_at = timezone.now()
             booking.save(update_fields=["status", "delivered_at"])
 
-            # 3. 🟢 AUTOMATICALLY RELEASE PAYMENT & DISBURSE EARNINGS
+            # 3.  AUTOMATICALLY RELEASE PAYMENT & DISBURSE EARNINGS
             # This handles third-party API integration and changes payment status to CAPTURED
             BookingPaymentService.release(payment)
 

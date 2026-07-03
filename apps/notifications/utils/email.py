@@ -124,3 +124,95 @@ def send_pickup_pin_email(user_email, booking, pickup_pin):
     except Exception as e:
         # Capture integration faults silently in logs so crashing mail servers do not disrupt payment processing states
         logger.error(f"Failed to transmit Pickup PIN mail to user {user_email}: {str(e)}", exc_info=True)
+
+
+# send delivery pin email to receiver
+def send_delivery_pin_email(user_email, booking, delivery_pin):
+    """
+    Sends a high-converting, professional transactional HTML email containing 
+    the security verification PIN to the booking receiver or sender for delivery confirmation.
+    """
+    subject = f"🔒 Package Arriving - Delivery PIN for #{booking.tracking_number}"
+    from_email = settings.DEFAULT_FROM_EMAIL
+    to_emails = [user_email]
+
+    # --- HTML Visual Component Template Layout ---
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Package In Transit</title>
+    </head>
+    <body style="margin: 0; padding: 0; background-color: #f4f6f8; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout: fixed;">
+            <tr>
+                <td align="center" style="padding: 40px 0 20px 0; background-color: #f4f6f8;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="500" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+                        <tr>
+                            <td align="center" style="background-color: #28a745; padding: 30px 20px;">
+                                <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">LuggageLinker</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 30px 40px;">
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
+                                    Hello,
+                                </p>
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
+                                    Your package is officially on its way! The traveler has confirmed pickup and started transit. Here is your secure delivery pin required to claim your luggage.
+                                </p>
+                                
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; margin-bottom: 24px;">
+                                    <tr>
+                                        <td style="padding: 16px;">
+                                            <div style="font-size: 12px; text-transform: uppercase; color: #70757a; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 4px;">Tracking Reference</div>
+                                            <div style="font-size: 16px; color: #202124; font-weight: 600;">#{booking.tracking_number}</div>
+                                        </td>
+                                    </tr>
+                                </table>
+
+                                <div style="border: 2px dashed #28a745; background-color: #f4faf6; border-radius: 8px; padding: 24px; text-align: center; margin-bottom: 24px;">
+                                    <div style="font-size: 13px; font-weight: 700; color: #28a745; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Delivery Verification PIN</div>
+                                    <div style="font-size: 36px; font-weight: 800; color: #202124; letter-spacing: 6px; font-family: monospace; line-height: 1;">{delivery_pin}</div>
+                                </div>
+
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #e8eaed; padding-top: 20px;">
+                                    <tr>
+                                        <td style="font-size: 13px; line-height: 20px; color: #70757a;">
+                                            <strong style="color: #d93025;">⚠️ Secure Collection Rule:</strong> Provide this PIN to your traveler **only** when they are handovers the physical luggage to you at the destination.
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td align="center" style="background-color: #f8f9fa; padding: 20px; font-size: 12px; color: #70757a; border-top: 1px solid #e8eaed;">
+                                This is an automated secure operational notification. Please do not reply directly to this mail.<br>
+                                © 2026 LuggageLinker Logistics Framework.
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    text_content = strip_tags(html_content)
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_content,
+            from_email=from_email,
+            to=to_emails
+        )
+        email.attach_alternative(html_content, "text/html")
+        email.send(fail_silently=False)
+        
+        logger.info(f"Successfully sent delivery pin notification to {user_email} for booking {booking.id}")
+    except Exception as e:
+        logger.error(f"Failed to transmit Delivery PIN mail to user {user_email}: {str(e)}", exc_info=True)
