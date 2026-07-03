@@ -43,6 +43,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
+from .serializers import BookingPaymentHistorySerializer
 
 
 # 🟢 Import your notification model structures here
@@ -668,7 +669,7 @@ class StripeWebhookView(APIView):
         BookingPaymentLog.objects.create(
             booking_payment=payment_instance,
             event_type=event_type,
-            raw_payload=event
+            raw_payload=json.loads(payload.decode("utf-8")),
         )
 
         if not payment_instance:
@@ -814,3 +815,32 @@ class BookingPaymentReleaseView(APIView):
         except Exception as e:
             logger.critical(f"Critical execution error: {str(e)}", exc_info=True)
             return Response({"success": False, "message": "Internal error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+logger = logging.getLogger(__name__)
+
+class BookingPaymentHistoryListView(generics.ListAPIView):
+    """
+    Production API Endpoint to retrieve paginated, historical escrow booking payments 
+    initiated by the authenticated user (sender).
+    """
+    serializer_class = BookingPaymentHistorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        logger.info("User %s requested their escrow booking payment history.", user.id)
+
+        # Optimization: Fetch booking and nested package records in a single JOIN query
+        return (
+            BookingPayment.objects
+            .filter(booking__sender=user)
+            .select_related(
+                "booking", 
+                "booking__package"
+            )
+            .order_by("-created_at")
+        )

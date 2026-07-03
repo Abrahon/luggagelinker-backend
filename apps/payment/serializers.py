@@ -277,3 +277,31 @@ class InitiateBookingPaymentSerializer(serializers.Serializer):
         # 🟢 FIX: Return the fully fetched booking object in validated_data for your view layer
         attrs["booking"] = booking
         return attrs
+
+
+# payment history serializersfrom rest_framework import serializers
+class BookingPaymentHistorySerializer(serializers.ModelSerializer):
+    booking_tracking_number = serializers.CharField(source="booking.tracking_number", read_only=True)
+    package_title = serializers.CharField(source="booking.package.title", read_only=True)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, coerce_to_string=True)
+    currency = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BookingPayment
+        fields = [
+            "id",
+            "booking_tracking_number",
+            "package_title",
+            "amount",
+            "currency",
+            "gateway",
+            "status",
+            "checkout_url",
+            "failure_reason",
+            "authorized_at",
+            "created_at",
+        ]
+
+    def get_currency(self, obj):
+        """Ensures consistent upper-casing for ISO currency symbols."""
+        return obj.currency.upper() if obj.currency else "USD"

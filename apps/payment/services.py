@@ -24,53 +24,102 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 
 class BookingPaymentService:
 
+
     @classmethod
     def create_checkout(cls, booking: Booking, gateway: str, user_email: str, client_ip=None) -> BookingPayment:
         """
-        Registers a fresh payment contract record and provisions the gateway session.
-        Prevents duplicate entries via atomic database isolation locks.
+        Initializes or retries an escrow payment ledger entry for a cargo booking, 
+        generating secure remote checkouts safely outside of open database row locks.
         """
-        #  FIX 2: Strict prevention of duplicate BookingPayment creation at the thread layer
+        
+        # =====================================================================
+        # 1. ATOMIC TRANSACTION & ROW LOCKING
+        # =====================================================================
         with transaction.atomic():
-            # Acquire a row-level database lock to eliminate concurrent API spam race conditions
+            # Acquire exclusive write-locks on the core booking record
             booking_sealed = Booking.objects.select_for_update().get(id=booking.id)
-            
-            if hasattr(booking_sealed, "booking_payment"):
-                existing_payment = booking_sealed.booking_payment
-                # If a session already exists and hasn't explicitly failed, reuse it rather than duplicating rows
-                if existing_payment.status != BookingPaymentStatus.FAILED:
-                    return existing_payment
 
-            #  FIX 1: Platform fee calculation correction (/ 100)
-            fee_percentage = getattr(settings, "PLATFORM_FEE_PERCENTAGE", decimal.Decimal("0.00"))
-            calculated_fee = ((booking_sealed.agreed_reward * fee_percentage) / decimal.Decimal("100.00")).quantize(decimal.Decimal("0.01"))
-
-            payment = BookingPayment.objects.create(
-                booking=booking_sealed,
-                payer=booking_sealed.sender,
-                payee=booking_sealed.traveler,
-                amount=booking_sealed.agreed_reward,
-                platform_fee=calculated_fee,
-                currency=booking_sealed.currency or "USD",
-                gateway=gateway,
-                status=BookingPaymentStatus.PENDING,
-                ip_address=client_ip,
+            # Look up any existing payment lifecycle traces for this specific booking
+            existing_payment = (
+                BookingPayment.objects.select_for_update()
+                .filter(booking=booking_sealed)
+                .first()
             )
 
-        # 3Third-Party API calls execute safely outside row locks to avoid connection pool starvation
+            if existing_payment:
+                # Critical guard block: Abort execution if a payment cycle has already concluded successfully
+                if existing_payment.status in [
+                    BookingPaymentStatus.AUTHORIZED,
+                    BookingPaymentStatus.CAPTURED,
+                ]:
+                    raise DjangoValidationError("This booking has already been paid.")
+
+                # Recycle the existing record to maintain database ledger integrity
+                payment = existing_payment
+                payment.gateway = gateway
+                payment.status = BookingPaymentStatus.PENDING
+                payment.failure_reason = None
+                payment.provider_payment_id = None
+                payment.checkout_url = None
+                payment.ip_address = client_ip
+
+                payment.save(
+                    update_fields=[
+                        "gateway",
+                        "status",
+                        "failure_reason",
+                        "provider_payment_id",
+                        "checkout_url",
+                        "ip_address"
+                    ]
+                )
+                logger.info("Recycled payment tracking ledger entry %s for dynamic retry.", payment.id)
+
+            else:
+                # Dynamic Platform Escrow Fee calculation utilizing safe structural decimals
+                fee_percentage = getattr(
+                    settings,
+                    "PLATFORM_FEE_PERCENTAGE",
+                    decimal.Decimal("0.00"),
+                )
+
+                calculated_fee = (
+                    (booking_sealed.agreed_reward * fee_percentage)
+                    / decimal.Decimal("100")
+                ).quantize(decimal.Decimal("0.01"))
+
+                # Create a fresh historical tracker for our financial books
+                payment = BookingPayment.objects.create(
+                    booking=booking_sealed,
+                    payer=booking_sealed.sender,
+                    payee=booking_sealed.traveler,
+                    amount=booking_sealed.agreed_reward,
+                    platform_fee=calculated_fee,
+                    currency=booking_sealed.currency or "USD",
+                    gateway=gateway,
+                    status=BookingPaymentStatus.PENDING,
+                    ip_address=client_ip,
+                )
+                logger.info("Generated a new escrow transaction container reference: %s", payment.id)
+
+        # =====================================================================
+        # 2. THIRD-PARTY API HANDOFF (Executed safely outside active row-locks)
+        # =====================================================================
         if gateway == BookingPaymentGateway.STRIPE:
             try:
-                total_amount_cents = int(booking_sealed.agreed_reward * 100)
-                currency_lower = booking_sealed.currency.lower() if booking_sealed.currency else "usd"
+                # Aggregate base contract amount and the platform service fees together
+                total_escrow_amount = payment.amount + payment.platform_fee
+                total_amount_cents = int(total_escrow_amount * decimal.Decimal("100"))
+                currency_lower = payment.currency.lower()
 
                 session = stripe.checkout.Session.create(
                     payment_method_types=["card"],
-                    customer_email=user_email,
+                    customer_email=user_email,  # Pre-populates the email payload block natively on Stripe
                     line_items=[{
                         "price_data": {
                             "currency": currency_lower,
                             "product_data": {
-                                "name": f"Escrow Payment for Order #{booking_sealed.tracking_number}",
+                                "name": f"Escrow Security Deposit #{booking_sealed.tracking_number}",
                                 "description": f"Securing escrow collateral for delivery routing.",
                             },
                             "unit_amount": total_amount_cents,
@@ -87,22 +136,29 @@ class BookingPaymentService:
                     cancel_url=f"{settings.FRONTEND_URL}/payments/cancel",
                 )
 
+                # Mutate structural references with response context keys
                 payment.provider_payment_id = session.id
                 payment.checkout_url = session.url
                 payment.status = BookingPaymentStatus.INITIALIZED
                 payment.save(update_fields=["provider_payment_id", "checkout_url", "status"])
+                
+                logger.info("Stripe gateway session initialized successfully for tracking identity: %s", payment.id)
                 return payment
 
             except stripe.error.StripeError as e:
-                logger.error(f"Stripe setup checkout anomaly: {str(e)}", exc_info=True)
-                cls.mark_failed(payment, reason=f"Stripe API Error: {str(e)}")
+                logger.error(f"Stripe setup checkout anomaly on payment {payment.id}: {str(e)}", exc_info=True)
+                
+                # Permanently write structural collection crash states straight into the database history
+                payment.status = BookingPaymentStatus.FAILED
+                payment.failure_reason = f"Stripe API Error: {str(e)}"
+                payment.save(update_fields=["status", "failure_reason"])
+                
                 raise DjangoValidationError("External credit processing provider failed to initialize session.")
         
         elif gateway in [BookingPaymentGateway.BKASH, BookingPaymentGateway.NAGAD]:
             raise DjangoValidationError(f"{gateway} gateway infrastructure integration is pending.")
         else:
             raise DjangoValidationError("Selected transaction gateway routing is invalid.")
-
 
 
     @classmethod
@@ -127,7 +183,8 @@ class BookingPaymentService:
             payment.provider_payment_id = provider_session_id
             payment.transaction_id = final_transaction_id
             payment.authorized_at = timezone.now()
-            payment.save(update_fields=["status", "provider_payment_id", "transaction_id", "authorized_at"])
+            payment.checkout_url = None
+            payment.save(update_fields=["status", "provider_payment_id", "transaction_id", "authorized_at", "checkout_url"])
             
             # 🟢 UPDATED: Generate a secure, unguessable 6-digit numerical pickup PIN
             pickup_pin = "".join(secrets.choice("0123456789") for _ in range(6))

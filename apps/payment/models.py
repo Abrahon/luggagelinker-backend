@@ -320,3 +320,19 @@ class BookingPaymentLog(models.Model):
 
     def __str__(self):
         return f"BookingLog {self.id} - Event: {self.event_type}"
+
+
+
+
+
+
+
+class StripeEventLog(models.Model):
+    event_id = models.CharField(max_length=255, unique=True, db_index=True)
+    event_type = models.CharField(max_length=255)
+    raw_payload = models.JSONField(help_text="Full incoming payload string context for historical audit rails.")
+    processed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Stripe Event Log"
+        verbose_name_plural = "Stripe Event Logs"
