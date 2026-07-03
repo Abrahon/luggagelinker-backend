@@ -1,6 +1,3 @@
-from django.db import models
-
-# Create your models here.
 import uuid
 from django.db import models
 from django.conf import settings
@@ -60,7 +57,6 @@ class WalletTransaction(models.Model):
         on_delete=models.CASCADE, 
         related_name="transactions"
     )
-    # Linking directly to your Booking model
     booking = models.ForeignKey(
         "bookings.Booking", 
         on_delete=models.SET_NULL, 
@@ -75,9 +71,59 @@ class WalletTransaction(models.Model):
         choices=TransactionStatus.choices, 
         default=TransactionStatus.PENDING
     )
+    
+    # --- 10/10 IMMUTABLE AUDIT TRAIL SENSORS ---
+    balance_before = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    
     description = models.TextField(blank=True)
-    reference = models.CharField(max_length=100, blank=True) 
+    
+    # Idempotency Key / Reference Tracking to completely block dual-processing
+    reference = models.CharField(max_length=100, unique=True, null=True, blank=True) 
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        # High performance composite reads and audit speed optimization
+        indexes = [
+            models.Index(fields=["wallet", "-created_at"]),
+            models.Index(fields=["booking"]),
+            models.Index(fields=["reference"]),
+        ]
+
     def __str__(self):
-        return f"{self.type} ({self.status}) - ${self.amount} for {self.wallet.user.username}"
+        return f"{self.type} ({self.status}) - ${self.amount}"
+
+
+class WithdrawalRequest(models.Model):
+    class WithdrawalStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending Approval"
+        APPROVED = "APPROVED", "Approved & Processing"
+        COMPLETED = "COMPLETED", "Completed"
+        REJECTED = "REJECTED", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    wallet = models.ForeignKey(
+        Wallet, 
+        on_delete=models.CASCADE, 
+        related_name="withdrawals"
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(
+        max_length=15, 
+        choices=WithdrawalStatus.choices, 
+        default=WithdrawalStatus.PENDING
+    )
+    
+    # Target payout architecture configuration
+    bank_account_info = models.JSONField(help_text="Stores encrypted routing/account or Stripe recipient reference")
+    rejection_reason = models.TextField(blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["wallet", "-created_at"]),
+            models.Index(fields=["status"]),
+        ]
