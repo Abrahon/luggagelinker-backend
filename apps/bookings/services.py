@@ -12,6 +12,18 @@ from apps.matching.models import Match
 import logging
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType
+
+import logging
+from django.db import transaction
+from django.utils import timezone
+from django.core.exceptions import ValidationError as DjangoValidationError
+
+from apps.bookings.models import Booking, BookingStatus
+from apps.payment.models import BookingPayment, BookingPaymentStatus
+from apps.payment.services import BookingPaymentService
+from apps.notifications.models import Notification, NotificationType
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -143,13 +155,7 @@ class BookingService:
         return booking
 
 
-
-
 class BookingLifecycleService:
-    """
-    Handles core business logic transitions for the Booking state machine.
-    """
-
     @classmethod
     def verify_and_execute_pickup(cls, booking: Booking) -> Booking:
         """
@@ -215,20 +221,9 @@ class BookingLifecycleService:
 
 
 
-import logging
-from django.db import transaction
-from django.utils import timezone
-from django.core.exceptions import ValidationError as DjangoValidationError
-
-from apps.bookings.models import Booking, BookingStatus
-from apps.payment.models import BookingPayment, BookingPaymentStatus
-from apps.payment.services import BookingPaymentService
-from apps.notifications.models import Notification, NotificationType
-
-logger = logging.getLogger(__name__)
 
 
-class BookingLifecycleService:
+
     # ... previous methods (verify_and_execute_pickup, execute_start_transit) ...
 
     @classmethod

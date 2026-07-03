@@ -17,10 +17,9 @@ from apps.bookings.models import BookingStatus
 from apps.notifications.models import Notification, NotificationType
 # 🟢 Import the validation serializer
 from .serializers import VerifyDeliveryPinSerializer
-
+from django.core.exceptions import ValidationError as DjangoValidationError
 # 🟢 Import the status enums 
 from apps.bookings.models import BookingStatus
-
 # 🟢 IMPORT THE LIFECYCLE SERVICE HERE
 from apps.bookings.services import BookingLifecycleService
 
@@ -235,11 +234,13 @@ class BookingPickupVerificationView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         # Retrieve the validated booking instance mapped by the serializer
-        booking = serializer.validated_data["booking_instance"]
+        booking = serializer.validated_data["booking"]
+        
 
         try:
             # 🟢 Execute business mutations via service routing
             updated_booking = BookingLifecycleService.verify_and_execute_pickup(booking)
+            
             
             return Response(
                 {

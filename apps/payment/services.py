@@ -6,10 +6,12 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
 
+import secrets
+from apps.notifications.utils.email import send_pickup_pin_email  
 # Adjust these imports according to your exact app paths
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType 
-from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus,Payment,PaymentStatus
+from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus,Payment,PaymentStatus,StripeEventLog
 from datetime import timedelta
 # Replace these import paths with your actual project structure
 from apps.subscriptions.models import (
@@ -160,6 +162,123 @@ class BookingPaymentService:
         else:
             raise DjangoValidationError("Selected transaction gateway routing is invalid.")
 
+
+
+
+
+    @classmethod
+    def process_webhook(cls, event, raw_json=None):
+        """
+        Processes verified Stripe checkout webhook parameters to safely lock down 
+        escrow balances, generate secure verification codes, and trigger customer alerts.
+        """
+        event_id = event["id"]
+        event_type = event["type"]
+        event_data = event["data"]["object"].to_dict()
+
+        metadata = event_data.get("metadata", {})
+        booking_payment_id = metadata.get("booking_payment_id")
+        booking_id = metadata.get("booking_id")
+
+        if not booking_payment_id or not booking_id:
+            logger.warning("Stripe payload skipped: Missing transaction identifier signatures.")
+            return
+
+        # =====================================================================
+        # 🟢 CHECKOUT SUCCESS (Escrow Funds Locked Natively)
+        # =====================================================================
+        if event_type == "checkout.session.completed":
+            booking = None
+            secure_pin = None
+
+            with transaction.atomic():
+                if StripeEventLog.objects.select_for_update().filter(event_id=event_id).exists():
+                    logger.info("Stripe event %s already processed. Bypassing execution.", event_id)
+                    return
+                
+                try:
+                    payment_record = BookingPayment.objects.select_for_update().get(id=booking_payment_id)
+                    booking = Booking.objects.select_for_update().get(id=booking_id)
+
+                    if payment_record.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
+                        return
+
+                    # ✅ FIX: Convert the Stripe Event instance to a clean Python dict
+                    StripeEventLog.objects.create(
+                        event_id=event_id,
+                        event_type=event_type,
+                        raw_payload=raw_json if raw_json else {}
+                    )
+
+                    # ---------------------------------------------------------
+                    # 3. UPDATE BOOKING & PAYMENT STATES
+                    # ---------------------------------------------------------
+                    payment_record.status = BookingPaymentStatus.AUTHORIZED  # payment = AUTHORIZED
+                    payment_record.save(update_fields=["status"])
+
+                    booking.status = BookingStatus.CONFIRMED  # status = CONFIRMED
+
+                    # ---------------------------------------------------------
+                    # 4. GENERATE PIN HERE (Only if it doesn't already exist)
+                    # ---------------------------------------------------------
+                    if not getattr(booking, "pickup_verification_pin", None):
+                        secure_pin = str(secrets.randbelow(900000) + 100000)
+                        booking.pickup_verification_pin = secure_pin
+                    else:
+                        secure_pin = booking.pickup_verification_pin
+
+                    # ---------------------------------------------------------
+                    # 5. SAVE PIN IN BOOKING MODEL
+                    # ---------------------------------------------------------
+                    booking.save(update_fields=["status", "pickup_verification_pin"])
+                    logger.info("Escrow secured and PIN assigned for booking #%s", booking.tracking_number)
+
+                except BookingPayment.DoesNotExist:
+                    logger.error("BookingPayment ledger row ID %s was not found.", booking_payment_id)
+                    return
+                except Booking.DoesNotExist:
+                    logger.error("Base Booking entity match ID %s went missing.", booking_id)
+                    return
+
+            # ---------------------------------------------------------
+            # 6. SEND EMAIL TO SENDER (Outside open row transaction locks)
+            # ---------------------------------------------------------
+            if booking and secure_pin:
+                try:
+                    send_pickup_pin_email(
+                        user_email=booking.sender.email,
+                        booking=booking,
+                        pickup_pin=secure_pin
+                    )
+                except Exception:
+                    logger.error("Database updates saved successfully, but notification dispatch failed.", exc_info=True)
+
+        # =====================================================================
+        # HANDLING CARD FALLBACK / EXPIRED CHEKOUTS
+        # =====================================================================
+        elif event_type in ["payment_intent.payment_failed", "checkout.session.expired"]:
+            with transaction.atomic():
+                try:
+                    payment_record = BookingPayment.objects.select_for_update().get(id=booking_payment_id)
+                    booking = Booking.objects.select_for_update().get(id=booking_id)
+                    
+                    if payment_record.status == BookingPaymentStatus.FAILED:
+                        return
+                    
+                    payment_record.status = BookingPaymentStatus.FAILED
+                    payment_record.failure_reason = event_data.get("last_payment_error", {}).get("message", "Session checkout expired.")
+                    payment_record.provider_payment_id = None
+                    payment_record.checkout_url = None
+                    payment_record.save(update_fields=["status", "failure_reason", "provider_payment_id", "checkout_url"])
+                    
+                    booking.status = BookingStatus.FAILED
+                    booking.save(update_fields=["status"])
+                    logger.warning("Payment cleared as FAILED for tracker reference %s. Form state reset.", payment_record.id)
+
+                except BookingPayment.DoesNotExist:
+                    pass
+                except Booking.DoesNotExist:
+                    pass
 
     @classmethod
     def verify_checkout(cls, payment: BookingPayment, provider_session_id: str, final_transaction_id: str) -> BookingPayment:

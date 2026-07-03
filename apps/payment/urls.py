@@ -5,7 +5,7 @@ from .views import (
     BookingPaymentInitiateView,
     BookingPaymentReleaseView,
     CreateCheckoutSessionView,
-    StripeWebhookView,
+    # StripeWebhookView,
     PaymentHistoryView,
     PaymentDetailView,
     stripe_webhook,
@@ -25,11 +25,11 @@ urlpatterns = [
     # =========================================
     # STRIPE WEBHOOK
     # =========================================
-    path(
-        "payments/stripe/webhook/",
-        StripeWebhookView.as_view(),
-        name="stripe-webhook",
-    ),
+    # path(
+    #     "payments/stripe/webhook/",
+    #     StripeWebhookView.as_view(),
+    #     name="stripe-webhook",
+    # ),
     path(
         "payments/stripe/webhook/",
         stripe_webhook,
@@ -55,7 +55,7 @@ urlpatterns = [
     ),
 
     path("booking/initiate/", BookingPaymentInitiateView.as_view(), name="payment-initiate"),
-    path("stripe/webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
+    # path("stripe/webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
     path("admin/booking/<uuid:booking_id>/release/", BookingPaymentReleaseView.as_view(), name="admin-payment-release"),
     path("payments/bookings/history/", BookingPaymentHistoryListView.as_view(), name="booking-payment-history"),
   
