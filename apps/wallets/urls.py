@@ -37,9 +37,9 @@ urlpatterns = [
     # ... your existing routes ...
 
     # User cancel entrypoint
-    path("api/wallets/withdrawals/<uuid:pk>/cancel/", UserCancelWithdrawalView.as_view(), name="user-withdrawal-cancel"),
+    path("wallets/withdrawals/<uuid:pk>/cancel/", UserCancelWithdrawalView.as_view(), name="user-withdrawal-cancel"),
     
     # Admin adjustment entrypoint
-    path("api/admin/wallets/<uuid:wallet_id>/adjust/", AdminAdjustBalanceView.as_view(), name="admin-wallet-adjust"),
+    path("admin/wallets/<uuid:wallet_id>/adjust/", AdminAdjustBalanceView.as_view(), name="admin-wallet-adjust"),
 
 ]

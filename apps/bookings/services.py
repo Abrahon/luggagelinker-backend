@@ -271,15 +271,69 @@ class BookingLifecycleService:
 
 
 
+    # @classmethod
+    # def verify_and_execute_delivery(cls, booking_or_id) -> Booking:
+
+    #     from django.db import transaction
+    #     from django.utils import timezone
+    #     from rest_framework.exceptions import ValidationError
+    #     from apps.wallets.models import WalletTransaction
+    #     from apps.wallets.services import WalletService
+    #     from apps.bookings.models import BookingStatus # Ensure this is imported
+
+    #     with transaction.atomic():
+            
+    #         # 🟢 FIXED: Extract UUID cleanly if instance object is passed
+    #         if isinstance(booking_or_id, Booking):
+    #             booking_id = booking_or_id.id
+    #         else:
+    #             booking_id = booking_or_id
+
+    #         booking = Booking.objects.select_for_update().get(id=booking_id)
+
+    #         # 1. Prevent double execution
+    #         if booking.status == BookingStatus.COMPLETED:
+    #             raise ValidationError("This delivery is already completed.")
+
+    #         # 2. 🟢 MODIFIED: Accept validation directly from the IN_TRANSIT workflow status state
+    #         if booking.status != BookingStatus.IN_TRANSIT:
+    #             raise ValidationError(
+    #                 f"Booking is not in a valid state for delivery confirmation. "
+    #                 f"Current status is: {booking.status}"
+    #             )
+
+    #         # 3. Ensure escrow exists
+    #         # 3. Ensure escrow exists
+    #         escrow_exists = WalletTransaction.objects.filter(
+    #             booking=booking,
+    #             type="ESCROW_HOLD",
+    #             status="PENDING"
+    #         ).exists()
+
+    #         if not escrow_exists:
+    #             raise ValidationError("No escrow found for this booking.")
+
+    #         # 4. Release escrow to traveler
+    #         WalletService.release_escrow_to_traveler(booking)
+
+    #         # 5. 🟢 MODIFIED: Update both delivery and completion timestamps at the same time
+    #         booking.status = BookingStatus.COMPLETED
+    #         booking.delivered_at = timezone.now()  # Marks physical drop-off time
+    #         booking.completed_at = timezone.now()  # Marks wallet settlement time
+            
+    #         booking.save(update_fields=["status", "delivered_at", "completed_at"])
+
+    #         return booking
+
+
     @classmethod
     def verify_and_execute_delivery(cls, booking_or_id) -> Booking:
 
         from django.db import transaction
         from django.utils import timezone
         from rest_framework.exceptions import ValidationError
-        from apps.wallets.models import WalletTransaction
         from apps.wallets.services import WalletService
-        from apps.bookings.models import BookingStatus # Ensure this is imported
+        from apps.bookings.models import BookingStatus
 
         with transaction.atomic():
             
@@ -295,32 +349,63 @@ class BookingLifecycleService:
             if booking.status == BookingStatus.COMPLETED:
                 raise ValidationError("This delivery is already completed.")
 
-            # 2. 🟢 MODIFIED: Accept validation directly from the IN_TRANSIT workflow status state
+            # 2. Accept validation directly from the IN_TRANSIT workflow status state
             if booking.status != BookingStatus.IN_TRANSIT:
                 raise ValidationError(
                     f"Booking is not in a valid state for delivery confirmation. "
                     f"Current status is: {booking.status}"
                 )
 
-            # 3. Ensure escrow exists
-            # 3. Ensure escrow exists
-            escrow_exists = WalletTransaction.objects.filter(
-                booking=booking,
-                type="ESCROW_HOLD",
-                status="PENDING"
-            ).exists()
+            # 3 & 4. 🟢 UPDATED: Let your clean central service layer handle escrow validation and payout logic safely
+            WalletService.release_escrow(booking)
 
-            if not escrow_exists:
-                raise ValidationError("No escrow found for this booking.")
-
-            # 4. Release escrow to traveler
-            WalletService.release_escrow_to_traveler(booking)
-
-            # 5. 🟢 MODIFIED: Update both delivery and completion timestamps at the same time
+            # 5. Update both delivery and completion timestamps at the same time
             booking.status = BookingStatus.COMPLETED
             booking.delivered_at = timezone.now()  # Marks physical drop-off time
             booking.completed_at = timezone.now()  # Marks wallet settlement time
             
             booking.save(update_fields=["status", "delivered_at", "completed_at"])
+
+            return booking
+
+
+    @classmethod
+    def cancel_booking(cls, booking_or_id) -> Booking:
+        from django.db import transaction
+        from django.utils import timezone
+        from rest_framework.exceptions import ValidationError
+        from apps.wallets.services import WalletService
+        from apps.bookings.models import Booking, BookingStatus
+
+        with transaction.atomic():
+            # 1. Extract UUID cleanly if instance object or string ID is passed
+            if isinstance(booking_or_id, Booking):
+                booking_id = booking_or_id.id
+            else:
+                booking_id = booking_or_id
+
+            # Lock the booking row for modifications
+            booking = Booking.objects.select_for_update().get(id=booking_id)
+
+            # 2. State Guards: Prevent canceling already finished workflows
+            if booking.status == BookingStatus.COMPLETED:
+                raise ValidationError("Cannot cancel a booking that has already been successfully completed.")
+            
+            if booking.status == BookingStatus.CANCELLED:
+                raise ValidationError("This booking has already been cancelled.")
+
+            # 3. 🟢 Execute automated financial escrow reversal
+            # This automatically validates the hold, releases the pending block, 
+            # and returns the liquidity back to the sender's available balance.
+            WalletService.refund(booking)
+
+            # 4. Advance milestone fields
+            booking.status = BookingStatus.CANCELLED
+            # Assuming your model has an optional 'cancelled_at' timestamp field:
+            if hasattr(booking, 'cancelled_at'):
+                booking.cancelled_at = timezone.now()
+                booking.save(update_fields=["status", "cancelled_at"])
+            else:
+                booking.save(update_fields=["status"])
 
             return booking
