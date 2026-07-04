@@ -112,6 +112,8 @@ def create_bulk_notifications(
     return notifications
 
 
+
+
 # ==========================================================
 # MARK AS READ
 # ==========================================================
@@ -174,3 +176,116 @@ def mark_all_notifications_as_read(user):
     )
 
     return updated
+
+
+
+# ==========================================================
+# WALLET CREDITED
+# ==========================================================
+
+def notify_wallet_credited(
+    *,
+    user,
+    booking,
+    amount,
+):
+    return create_notification(
+        user=user,
+        title="Wallet Credited",
+        message=(
+            f"${amount} has been credited to your wallet "
+            f"for booking #{booking.tracking_number}."
+        ),
+        notification_type="WALLET",
+        object_id=booking.id,
+        action_url="/wallet/",
+    )
+
+
+# ==========================================================
+# WITHDRAWAL REQUESTED
+# ==========================================================
+
+def notify_withdrawal_requested(
+    *,
+    user,
+    withdrawal,
+):
+    return create_notification(
+        user=user,
+        title="Withdrawal Requested",
+        message=(
+            f"Your withdrawal request of "
+            f"${withdrawal.amount} has been submitted."
+        ),
+        notification_type="WALLET",
+        object_id=withdrawal.id,
+        action_url="/wallet/withdrawals/",
+    )
+
+
+# ==========================================================
+# WITHDRAWAL APPROVED
+# ==========================================================
+
+def notify_withdrawal_approved(
+    *,
+    user,
+    withdrawal,
+):
+    return create_notification(
+        user=user,
+        title="Withdrawal Approved",
+        message=(
+            f"Your withdrawal request of "
+            f"${withdrawal.amount} has been approved."
+        ),
+        notification_type="WALLET",
+        object_id=withdrawal.id,
+        action_url="/wallet/withdrawals/",
+    )
+
+
+# ==========================================================
+# WITHDRAWAL REJECTED
+# ==========================================================
+
+def notify_withdrawal_rejected(
+    *,
+    user,
+    withdrawal,
+):
+    return create_notification(
+        user=user,
+        title="Withdrawal Rejected",
+        message=(
+            f"Your withdrawal request of "
+            f"${withdrawal.amount} has been rejected."
+        ),
+        notification_type="WALLET",
+        object_id=withdrawal.id,
+        action_url="/wallet/withdrawals/",
+    )
+
+
+# ==========================================================
+# REFUND COMPLETED
+# ==========================================================
+
+def notify_refund_completed(
+    *,
+    user,
+    booking,
+    amount,
+):
+    return create_notification(
+        user=user,
+        title="Refund Completed",
+        message=(
+            f"${amount} has been refunded "
+            f"for booking #{booking.tracking_number}."
+        ),
+        notification_type="PAYMENT",
+        object_id=booking.id,
+        action_url=f"/bookings/{booking.id}/",
+    )
