@@ -101,12 +101,13 @@ class BookingSerializer(serializers.ModelSerializer):
                     initiated_by=initiated_by
                 )
             except DjangoValidationError as e:
-                # 🟢 PRODUCTION FIX: Properly handle both dictionary and list based Django validation errors
+                # 🟢 PRODUCTION FIX: Pass messages directly without manual dict nesting to prevent 500 crashes
                 if hasattr(e, "message_dict"):
                     raise serializers.ValidationError(e.message_dict)
                 if hasattr(e, "messages"):
-                    raise serializers.ValidationError({"detail": e.messages})
-                raise serializers.ValidationError({"detail": str(e)})
+                    # If there's only one message, extract it as a clean string error message
+                    raise serializers.ValidationError(e.messages[0] if len(e.messages) == 1 else e.messages)
+                raise serializers.ValidationError(str(e))
 
 
 

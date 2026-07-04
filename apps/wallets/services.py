@@ -110,6 +110,7 @@ class WalletService:
 
             logger.info(f"Escrow payout of ${amount} securely settled to traveler {traveler.id}")
             return tx
+        
 
     @classmethod
     def request_withdrawal(cls, user, amount: Decimal, bank_account_info: dict) -> WithdrawalRequest:

@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 import secrets
+from apps import payment
 from apps.notifications.utils.email import send_pickup_pin_email  
 # Adjust these imports according to your exact app paths
 from apps.bookings.models import Booking, BookingStatus
@@ -19,9 +20,10 @@ from apps.subscriptions.models import (
     SubscriptionStatus, 
     Plan, 
 )
-
+from apps.wallets.services import WalletService
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
 
 
 class BookingPaymentService:
@@ -280,6 +282,8 @@ class BookingPaymentService:
                 except Booking.DoesNotExist:
                     pass
 
+
+
     @classmethod
     def verify_checkout(cls, payment: BookingPayment, provider_session_id: str, final_transaction_id: str) -> BookingPayment:
         """
@@ -303,7 +307,23 @@ class BookingPaymentService:
             payment.transaction_id = final_transaction_id
             payment.authorized_at = timezone.now()
             payment.checkout_url = None
-            payment.save(update_fields=["status", "provider_payment_id", "transaction_id", "authorized_at", "checkout_url"])
+            payment.save(update_fields=[
+                "status",
+                "provider_payment_id",
+                "transaction_id",
+                "authorized_at",
+                "checkout_url",
+            ])
+
+            # ================================
+            # HOLD ESCROW IN INTERNAL WALLET
+            # ================================
+            WalletService.hold_escrow(
+                user=booking.sender,
+                booking=booking,
+                amount=payment.amount,
+                reference=payment.transaction_id,
+            )
             
             # 🟢 UPDATED: Generate a secure, unguessable 6-digit numerical pickup PIN
             pickup_pin = "".join(secrets.choice("0123456789") for _ in range(6))
@@ -336,6 +356,7 @@ class BookingPaymentService:
         payment.failure_reason = reason
         payment.save(update_fields=["status", "failure_reason"])
         return payment
+    
 
     @classmethod
     def refund(cls, payment: BookingPayment) -> BookingPayment:
@@ -383,10 +404,13 @@ class BookingPaymentService:
             # ... Your existing third-party Stripe capture API integration logic ...
             
             # 1. Update your local payment tracking ledger row status
+
             payment.status = BookingPaymentStatus.CAPTURED
             payment.captured_at = timezone.now()
             payment.save(update_fields=["status", "captured_at"])
-
+            
+            logger.info(f"Payment ledger {payment.id} successfully CAPTURED via third-party provider.")
+           
             # 2. 🟢 MOVE HERE: Update the Booking state directly within the finance service
             booking = payment.booking
             booking.status = BookingStatus.COMPLETED

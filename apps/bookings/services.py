@@ -12,7 +12,7 @@ from apps.matching.models import Match
 import logging
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType
-from apps.notifications.utils.email import send_delivery_pin_email
+from apps.notifications.utils.email import send_delivery_pin_email,send_pickup_pin_email
 import logging
 from django.db import transaction
 from django.utils import timezone
@@ -103,56 +103,98 @@ class BookingService:
         return booking
 
 
+
+
+
+
+
+
+
     @staticmethod
     @transaction.atomic
     def respond_to_booking_request(booking_id, traveler, action):
         """
-        Processes a traveler's response to an initialized pending booking request.
+        Traveler accepts or rejects a booking request safely (race-condition proof + idempotent).
+        Reverts database changes entirely if email system crashes during validation.
         """
-        # Lock the row using select_for_update to prevent race conditions during weight manipulation
+        action = action.upper()
+
+        if action not in ["ACCEPT", "REJECT"]:
+            raise ValidationError("Invalid action. Must be ACCEPT or REJECT.")
+
+        # Lock booking row safely
         try:
-            booking = Booking.objects.select_for_update().select_related("trip", "package").get(
-                id=booking_id, 
-                traveler=traveler, 
-                status=BookingStatus.PENDING
+            booking = Booking.objects.select_for_update().select_related(
+                "trip", "package", "sender"
+            ).get(
+                id=booking_id,
+                traveler=traveler
             )
         except Booking.DoesNotExist:
-            # 🟢 FIXED: Removed invalid 'booking.status' modification which triggered a NameError
-            raise ValidationError("Booking request not found, already processed, or expired.")
+            raise ValidationError("Booking not found or you are not authorized.")
 
-        # Check if the 20-minute window has closed
+        # =========================
+        # IDENTITY / STATE GUARD
+        # =========================
+        if booking.status != BookingStatus.PENDING:
+            raise ValidationError(
+                f"This booking cannot be modified. It has already been processed and its status is: {booking.status}"
+            )
+
+        # =========================
+        # EXPIRY CHECK
+        # =========================
         if timezone.now() > booking.expires_at:
             booking.status = BookingStatus.EXPIRED
-            booking.save()
+            booking.save(update_fields=["status"])
             raise ValidationError("This booking request has expired.")
 
         trip = booking.trip
 
+        # =========================
+        # ACCEPT FLOW
+        # =========================
         if action == "ACCEPT":
-            # Re-verify weight inventory capacity under transaction lock
+            # capacity check
             if trip.available_weight_kg < booking.agreed_weight_kg:
-                raise ValidationError("You no longer have enough available weight capacity on your trip to accept this package.")
+                raise ValidationError(
+                    "Not enough available weight capacity on your trip."
+                )
 
-            # Deduct capacity from the traveler's trip allocation ledger
+            # ⚓ PRE-VALIDATE EMAIL DISPATCH BEFORE COMMIT
+            # If the email code or configuration has an issue, it catches it here,
+            # throws a clean error, and rolls back the database state entirely!
+            try:
+                send_pickup_pin_email(
+                    user_email=booking.sender.email,
+                    booking=booking,
+                    pickup_pin=getattr(booking, "pickup_verification_pin", "0000")
+                )
+            except Exception as email_err:
+                logger.error(f"Critical email system failure. Aborting booking accept sequence: {str(email_err)}")
+                raise ValidationError(f"Booking could not be accepted because the notification system failed: {str(email_err)}")
+
+            # Deduct capacity safely since email passed
             trip.available_weight_kg -= booking.agreed_weight_kg
-            trip.save()
+            trip.save(update_fields=["available_weight_kg"])
 
-            # Advance state variables
+            # Commit booking state variables change
             booking.status = BookingStatus.PAYMENT_PENDING
             booking.traveler_accepted_at = timezone.now()
-            booking.save()
-            
-            logger.info(f"Booking {booking.tracking_number} accepted by traveler. Awaiting sender payment.")
-            # TODO: NotificationService.send_payment_required_notification(booking)
+            booking.save(update_fields=["status", "traveler_accepted_at"])
 
+            logger.info(f"Booking {booking.tracking_number} safely accepted and processed.")
+
+        # =========================
+        # REJECT FLOW
+        # =========================
         elif action == "REJECT":
             booking.status = BookingStatus.REJECTED
-            booking.save()
-            
-            logger.info(f"Booking {booking.tracking_number} rejected by traveler.")
-            # TODO: NotificationService.send_booking_rejected_notification(booking)
+            booking.save(update_fields=["status"])
+            logger.info(f"Booking {booking.tracking_number} rejected.")
 
         return booking
+
 
 
 class BookingLifecycleService:
@@ -230,12 +272,14 @@ class BookingLifecycleService:
     @classmethod
     def verify_and_execute_delivery(cls, booking: Booking) -> Booking:
         """
-        Executes atomic business transitions for final destination drop-offs.
-        Updates state, stamps delivery timing, automatically captures and releases 
-        escrow funds via Stripe, and completes the entire booking contract.
+        Orchestrates the entire atomic business transition for final destination drop-offs.
+        Controls the sequential lifecycle flow: DELIVERED -> Stripe Capture -> Wallet Release -> COMPLETED.
         """
+        # Dynamic import to break circular reference chains cleanly
+        from apps.wallets.services import WalletService
+
         with transaction.atomic():
-            # 1. Acquire exclusive row locks across the booking and its related payment ledger
+            # 1. Acquire exclusive database row locks across both primary tables
             booking = Booking.objects.select_for_update().get(id=booking.id)
             
             try:
@@ -243,20 +287,23 @@ class BookingLifecycleService:
             except BookingPayment.DoesNotExist:
                 raise DjangoValidationError("No active escrow payment ledger found for this booking context.")
 
-            # 2. Update Delivery Verification Parameters
+            # 2. Stage 1: Transition booking state to DELIVERED
             booking.status = BookingStatus.DELIVERED
             booking.delivered_at = timezone.now()
             booking.save(update_fields=["status", "delivered_at"])
 
-            # 3.  AUTOMATICALLY RELEASE PAYMENT & DISBURSE EARNINGS
-            # This handles third-party API integration and changes payment status to CAPTURED
+            # 3. Stage 2: Capture Stripe funds safely
             BookingPaymentService.release(payment)
 
-            # 4. Finalize state machine directly to COMPLETED since finances are settled
+            # 4. Stage 3: Internal ledger settlement hook
+            # Safely shifts funds from sender's pending vault to traveler's liquid wallet balance
+            WalletService.release_escrow_to_traveler(booking)
+
+            # 5. Stage 4: Finalize the booking contract state machine to COMPLETED
             booking.status = BookingStatus.COMPLETED
             booking.save(update_fields=["status"])
 
-            # 5. Dispatch Simultaneous Notifications
+            # 6. Stage 5: Dispatch real-time cross-user unified notification events
             Notification.objects.create(
                 user=booking.sender,
                 title="Delivery Confirmed & Funds Released",
@@ -272,5 +319,5 @@ class BookingLifecycleService:
                 object_id=booking.id,
             )
 
-            logger.info(f"Booking {booking.id} and Payment {payment.id} successfully auto-finalized and COMPLETED.")
+            logger.info(f"Booking {booking.id} has successfully processed all transactional stages to COMPLETED.")
             return booking

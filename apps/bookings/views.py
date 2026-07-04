@@ -25,9 +25,16 @@ from apps.bookings.services import BookingLifecycleService
 
 
 
+
+
+
+from rest_framework import generics, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError as DRFValidationError
+import logging
+
 logger = logging.getLogger(__name__)
-
-
 
 
 class BookingCreateView(generics.CreateAPIView):
@@ -64,6 +71,17 @@ class BookingCreateView(generics.CreateAPIView):
                 status=status.HTTP_201_CREATED,
             )
             
+        except DRFValidationError as e:
+            # 🟢 FIXED: Intercept validation errors and return a clean 400 with the exact message
+            return Response(
+                {
+                    "success": False,
+                    "message": "Booking validation failed.",
+                    "errors": e.detail,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            
         except Exception as e:
             # Fallback capture if anything drops at low-level runtime execution bounds
             logger.error(f"Critical execution crash inside BookingCreateView: {str(e)}", exc_info=True)
@@ -71,6 +89,7 @@ class BookingCreateView(generics.CreateAPIView):
                 {
                     "success": False,
                     "message": "An internal system error occurred while setting up the transaction.",
+                    "error_details": str(e) # Show the underlying systemic exception details
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -180,6 +199,8 @@ class BookingDetailView(generics.RetrieveAPIView):
             )
 
 
+
+
 class BookingRespondView(generics.UpdateAPIView):
     """
     Endpoint for travelers to ACCEPT or REJECT an incoming pending booking request.
@@ -209,18 +230,41 @@ class BookingRespondView(generics.UpdateAPIView):
                 }
             }, status=status.HTTP_200_OK)
 
-        except ValidationError as e:
+        except (DRFValidationError, DjangoValidationError) as e:
+            # 🟢 FIXED: Safely unpack clean, descriptive error details regardless of exception source
+            error_message = "Validation failed handling booking response request."
+            
+            if hasattr(e, 'detail'): # Handles DRF ValidationErrors
+                error_message = e.detail if not isinstance(e.detail, dict) else e.detail.get('detail', e.detail)
+            elif hasattr(e, 'messages'): # Handles native Django ValidationErrors lists
+                error_message = e.messages[0] if len(e.messages) == 1 else e.messages
+            elif hasattr(e, 'message'): # Fallback single message string attribute
+                error_message = e.message
+
             return Response(
-                {"success": False, "message": e.message if hasattr(e, 'message') else str(e)},
+                {
+                    "success": False, 
+                    "message": "Action validation failed.",
+                    "errors": error_message
+                },
                 status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        except Exception as e:
+            # Fallback for hidden database connection leaks or core crashes
+            logger.error(f"System crash processing action response on booking {id}: {str(e)}", exc_info=True)
+            return Response(
+                {
+                    "success": False, 
+                    "message": "An internal system error occurred.",
+                    "error_details": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
 
 # picup verification view
-
-
-
 class BookingPickupVerificationView(generics.GenericAPIView):
     """
     Validates the 6-digit physical handoff authorization token provided by the Sender.
@@ -303,6 +347,14 @@ class BookingStartTransitView(generics.GenericAPIView):
 
 # bookimng delivery verification view
 
+from rest_framework import generics, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError as DRFValidationError
+from django.core.exceptions import ValidationError as DjangoValidationError
+import logging
+
+logger = logging.getLogger(__name__)
 
 class BookingDeliveryVerificationView(generics.GenericAPIView):
     """
@@ -322,7 +374,6 @@ class BookingDeliveryVerificationView(generics.GenericAPIView):
             # 🟢 Route execution to unified delivery + automatic payout handler
             updated_booking = BookingLifecycleService.verify_and_execute_delivery(booking)
             
-            
             return Response(
                 {
                     "success": True,
@@ -333,8 +384,44 @@ class BookingDeliveryVerificationView(generics.GenericAPIView):
                 status=status.HTTP_200_OK
             )
             
-        except DjangoValidationError as e:
+        except (DRFValidationError, DjangoValidationError) as e:
+            # Handle state or logic rules validation errors gracefully
+            error_message = "Validation failed during delivery execution."
+            if hasattr(e, 'detail'):
+                error_message = e.detail if not isinstance(e.detail, dict) else e.detail.get('detail', e.detail)
+            elif hasattr(e, 'messages'):
+                error_message = e.messages[0] if len(e.messages) == 1 else e.messages
+
             return Response(
-                {"success": False, "message": str(e)},
+                {
+                    "success": False, 
+                    "message": "Action validation failed.",
+                    "errors": error_message
+                },
                 status=status.HTTP_400_BAD_REQUEST
+            )
+
+        except ValueError as val_err:
+            # 🟢 FIXED: Catches your custom ledger exceptions (like empty pending balance) 
+            # and returns a clean 400 Bad Request instead of a 500 crash.
+            logger.warning(f"Financial safety check blocked delivery verification: {str(val_err)}")
+            return Response(
+                {
+                    "success": False,
+                    "message": "Financial ledger synchronization check failed.",
+                    "errors": str(val_err)
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        except Exception as e:
+            # Fallback capture if anything drops at low-level runtime execution bounds
+            logger.error(f"Critical execution crash inside BookingDeliveryVerificationView: {str(e)}", exc_info=True)
+            return Response(
+                {
+                    "success": False,
+                    "message": "An internal system error occurred while finalizing delivery.",
+                    "error_details": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
