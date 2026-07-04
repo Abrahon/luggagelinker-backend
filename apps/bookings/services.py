@@ -22,6 +22,7 @@ from apps.bookings.models import Booking, BookingStatus
 from apps.payment.models import BookingPayment, BookingPaymentStatus
 from apps.payment.services import BookingPaymentService
 from apps.notifications.models import Notification, NotificationType
+from apps.wallets.models import WalletTransaction
 
 
 logger = logging.getLogger(__name__)
@@ -269,55 +270,57 @@ class BookingLifecycleService:
 
 
 
+
     @classmethod
-    def verify_and_execute_delivery(cls, booking: Booking) -> Booking:
-        """
-        Orchestrates the entire atomic business transition for final destination drop-offs.
-        Controls the sequential lifecycle flow: DELIVERED -> Stripe Capture -> Wallet Release -> COMPLETED.
-        """
-        # Dynamic import to break circular reference chains cleanly
+    def verify_and_execute_delivery(cls, booking_or_id) -> Booking:
+
+        from django.db import transaction
+        from django.utils import timezone
+        from rest_framework.exceptions import ValidationError
+        from apps.wallets.models import WalletTransaction
         from apps.wallets.services import WalletService
+        from apps.bookings.models import BookingStatus # Ensure this is imported
 
         with transaction.atomic():
-            # 1. Acquire exclusive database row locks across both primary tables
-            booking = Booking.objects.select_for_update().get(id=booking.id)
             
-            try:
-                payment = BookingPayment.objects.select_for_update().get(booking=booking)
-            except BookingPayment.DoesNotExist:
-                raise DjangoValidationError("No active escrow payment ledger found for this booking context.")
+            # 🟢 FIXED: Extract UUID cleanly if instance object is passed
+            if isinstance(booking_or_id, Booking):
+                booking_id = booking_or_id.id
+            else:
+                booking_id = booking_or_id
 
-            # 2. Stage 1: Transition booking state to DELIVERED
-            booking.status = BookingStatus.DELIVERED
-            booking.delivered_at = timezone.now()
-            booking.save(update_fields=["status", "delivered_at"])
+            booking = Booking.objects.select_for_update().get(id=booking_id)
 
-            # 3. Stage 2: Capture Stripe funds safely
-            BookingPaymentService.release(payment)
+            # 1. Prevent double execution
+            if booking.status == BookingStatus.COMPLETED:
+                raise ValidationError("This delivery is already completed.")
 
-            # 4. Stage 3: Internal ledger settlement hook
-            # Safely shifts funds from sender's pending vault to traveler's liquid wallet balance
+            # 2. 🟢 MODIFIED: Accept validation directly from the IN_TRANSIT workflow status state
+            if booking.status != BookingStatus.IN_TRANSIT:
+                raise ValidationError(
+                    f"Booking is not in a valid state for delivery confirmation. "
+                    f"Current status is: {booking.status}"
+                )
+
+            # 3. Ensure escrow exists
+            # 3. Ensure escrow exists
+            escrow_exists = WalletTransaction.objects.filter(
+                booking=booking,
+                type="ESCROW_HOLD",
+                status="PENDING"
+            ).exists()
+
+            if not escrow_exists:
+                raise ValidationError("No escrow found for this booking.")
+
+            # 4. Release escrow to traveler
             WalletService.release_escrow_to_traveler(booking)
 
-            # 5. Stage 4: Finalize the booking contract state machine to COMPLETED
+            # 5. 🟢 MODIFIED: Update both delivery and completion timestamps at the same time
             booking.status = BookingStatus.COMPLETED
-            booking.save(update_fields=["status"])
+            booking.delivered_at = timezone.now()  # Marks physical drop-off time
+            booking.completed_at = timezone.now()  # Marks wallet settlement time
+            
+            booking.save(update_fields=["status", "delivered_at", "completed_at"])
 
-            # 6. Stage 5: Dispatch real-time cross-user unified notification events
-            Notification.objects.create(
-                user=booking.sender,
-                title="Delivery Confirmed & Funds Released",
-                message=f"Success! Order #{booking.tracking_number} has been delivered and your escrowed reward payment has been securely transferred to the traveler.",
-                notification_type=NotificationType.PAYMENT,
-                object_id=booking.id,
-            )
-            Notification.objects.create(
-                user=booking.traveler,
-                title="Earnings Captured & Disbursed",
-                message=f"Drop-off verified! Your reward earnings for order #{booking.tracking_number} have been deposited directly into your wallet balance.",
-                notification_type=NotificationType.WALLET,
-                object_id=booking.id,
-            )
-
-            logger.info(f"Booking {booking.id} has successfully processed all transactional stages to COMPLETED.")
             return booking

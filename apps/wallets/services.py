@@ -51,64 +51,77 @@ class WalletService:
 
     @classmethod
     def release_escrow_to_traveler(cls, booking) -> WalletTransaction:
-        """
-        Releases locked escrow funds directly to the traveler upon successful delivery verification.
-        Moves funds: Sender's pending_balance -> Traveler's available_balance & total_earned
-        """
+
         sender = booking.sender
         traveler = booking.traveler
-        amount = Decimal(str(booking.agreed_reward))  # Cast safely to clean Decimal
+        amount = Decimal(str(booking.agreed_reward))
 
         if not traveler:
-            raise ValueError("Cannot release escrow. No traveler assigned to this booking.")
-            
+            raise ValueError("No traveler assigned.")
+
         if amount <= Decimal("0.00"):
-            raise ValueError("Release amount must be positive.")
+            raise ValueError("Invalid amount.")
 
         with transaction.atomic():
-            # Extract IDs to determine safe lock sequencing order
-            sender_wallet_id = Wallet.objects.filter(user=sender).values_list('id', flat=True).first()
-            traveler_wallet_id = Wallet.objects.filter(user=traveler).values_list('id', flat=True).first()
-            
-            # ✅ Guard against unprovisioned profiles to block TypeErrors
-            if sender_wallet_id is None or traveler_wallet_id is None:
-                raise ValueError("Sender or traveler wallet profile not found.")
 
-            # Row-lock BOTH wallets in a deterministic sequence to avoid database deadlocks
-            if sender_wallet_id < traveler_wallet_id:
-                sender_wallet = Wallet.objects.select_for_update().get(user=sender)
-                traveler_wallet = Wallet.objects.select_for_update().get(user=traveler)
-            else:
-                traveler_wallet = Wallet.objects.select_for_update().get(user=traveler)
-                sender_wallet = Wallet.objects.select_for_update().get(user=sender)
+            sender_wallet = Wallet.objects.select_for_update().get(user=sender)
+            traveler_wallet = Wallet.objects.select_for_update().get(user=traveler)
+
+            # 🔒 Prevent double release
+            if WalletTransaction.objects.filter(
+                booking=booking,
+                type=WalletTransaction.TransactionType.ESCROW_RELEASE,
+                status=WalletTransaction.TransactionStatus.COMPLETED
+            ).exists():
+                raise ValueError("Escrow already released.")
+
+            # 🔍 Validate escrow exists
+            escrow = WalletTransaction.objects.filter(
+                wallet=sender_wallet,
+                booking=booking,
+                type=WalletTransaction.TransactionType.ESCROW_HOLD,
+                status=WalletTransaction.TransactionStatus.PENDING
+            ).first()
+
+            if not escrow:
+                raise ValueError("No active escrow found.")
 
             if sender_wallet.pending_balance < amount:
-                raise ValueError(f"Sender wallet lacks corresponding pending escrow balance. Pending: ${sender_wallet.pending_balance}")
+                raise ValueError("Insufficient escrow balance.")
 
-            # 1. Deduct from sender's pending vault
+            # 💰 Sender deduction
+            sender_before = sender_wallet.pending_balance
             sender_wallet.pending_balance -= amount
-            sender_wallet.save(update_fields=["pending_balance", "updated_at"])
+            sender_wallet.save(update_fields=["pending_balance"])
 
-            # 2. Credit the traveler's liquid vault
-            traveler_balance_before = traveler_wallet.available_balance
+            # 💰 Traveler credit
+            traveler_before = traveler_wallet.available_balance
             traveler_wallet.available_balance += amount
             traveler_wallet.total_earned += amount
-            traveler_wallet.save(update_fields=["available_balance", "total_earned", "updated_at"])
+            traveler_wallet.save(update_fields=["available_balance", "total_earned"])
 
-            # 3. Write immutable audit ledger record for the traveler
+            # 📊 Ledger sender
+            WalletTransaction.objects.create(
+                wallet=sender_wallet,
+                booking=booking,
+                type=WalletTransaction.TransactionType.ESCROW_RELEASE,
+                amount=-amount,
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+                balance_before=sender_before,
+                balance_after=sender_wallet.pending_balance,
+            )
+
+            # 📊 Ledger traveler
             tx = WalletTransaction.objects.create(
                 wallet=traveler_wallet,
                 booking=booking,
                 type=WalletTransaction.TransactionType.ESCROW_RELEASE,
                 amount=amount,
                 status=WalletTransaction.TransactionStatus.COMPLETED,
-                balance_before=traveler_balance_before,
+                balance_before=traveler_before,
                 balance_after=traveler_wallet.available_balance,
-                description=f"Escrow payout received for completing Delivery #{booking.tracking_number}",
-                reference=f"REL-{booking.id}"
             )
 
-            logger.info(f"Escrow payout of ${amount} securely settled to traveler {traveler.id}")
             return tx
         
 
