@@ -1,6 +1,9 @@
 from django.urls import path
+from rest_framework import views
 from .views import (
+    AdminAdjustBalanceView,
     AdminWithdrawalListView,
+    UserCancelWithdrawalView,
     WalletViewSet, 
     WalletTransactionListView, 
     WithdrawalRequestView,
@@ -30,5 +33,13 @@ urlpatterns = [
     path("admin/withdrawals/<uuid:pk>/approve/",AdminWithdrawalApproveView.as_view(), name="admin-withdrawal-approve"),
     path("admin/withdrawals/<uuid:pk>/reject/",AdminWithdrawalRejectView.as_view(), name="admin-withdrawal-reject"),
     path("admin/withdrawals/<uuid:pk>/mark-paid/",AdminWithdrawalMarkPaidView.as_view(), name="admin-withdrawal-mark-paid"),
+
+    # ... your existing routes ...
+
+    # User cancel entrypoint
+    path("api/wallets/withdrawals/<uuid:pk>/cancel/", UserCancelWithdrawalView.as_view(), name="user-withdrawal-cancel"),
+    
+    # Admin adjustment entrypoint
+    path("api/admin/wallets/<uuid:wallet_id>/adjust/", AdminAdjustBalanceView.as_view(), name="admin-wallet-adjust"),
 
 ]

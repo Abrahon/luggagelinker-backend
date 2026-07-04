@@ -274,3 +274,74 @@ class AdminWithdrawalMarkPaidView(AdminWithdrawalActionBaseView):
             withdrawal_id=pk,
             admin_user=request.user
         )
+
+
+
+
+
+class UserCancelWithdrawalView(generics.GenericAPIView):
+    """
+    POST /api/wallets/withdrawals/{id}/cancel/
+    Allows a traveler to cancel their own PENDING withdrawal request before an admin approves it.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = WithdrawalRequestSerializer
+
+    def post(self, request, pk, *args, **kwargs):
+        try:
+            # Execute safe user cancellation and auto-refund via unified service layer
+            withdrawal = WalletService.cancel_withdrawal(withdrawal_id=pk, user=request.user)
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": "Withdrawal request cancelled successfully. Funds have been restored to your available balance.",
+                    "data": self.get_serializer(withdrawal).data
+                },
+                status=status.HTTP_200_OK
+            )
+        except (DjangoValidationError, DRFValidationError) as exc:
+            msg = exc.messages if hasattr(exc, 'messages') else str(exc)
+            return Response({"success": False, "errors": msg}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminAdjustBalanceView(generics.GenericAPIView):
+    """
+    POST /api/admin/wallets/{wallet_id}/adjust/
+    Administrative correction ledger tool. Allows support admins to correct balances manual way.
+    """
+    permission_classes = [IsPlatformAdmin]
+
+    def post(self, request, wallet_id, *args, **kwargs):
+        delta_amount = request.data.get("delta_amount")
+        reason = request.data.get("reason", "").strip()
+
+        # Input Payload Validations
+        if not delta_amount:
+            return Response({"success": False, "errors": ["'delta_amount' is a required decimal value."]}, status=status.HTTP_400_BAD_REQUEST)
+        if not reason:
+            return Response({"success": False, "errors": ["A written explanation 'reason' is required for admin auditing."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            delta_decimal = Decimal(str(delta_amount))
+            
+            # Execute adjustment and cut ledger row record
+            WalletService.adjust_balance(
+                wallet_id=wallet_id,
+                delta_amount=delta_decimal,
+                admin_user=request.user,
+                reason=reason
+            )
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": f"Wallet balance successfully adjusted by ${delta_decimal}."
+                },
+                status=status.HTTP_200_OK
+            )
+        except (DjangoValidationError, DRFValidationError) as exc:
+            msg = exc.messages if hasattr(exc, 'messages') else str(exc)
+            return Response({"success": False, "errors": msg}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"success": False, "errors": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
