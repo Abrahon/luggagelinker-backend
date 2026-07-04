@@ -370,7 +370,7 @@ class BookingLifecycleService:
 
 
     @classmethod
-    def cancel_booking(cls, booking_or_id) -> Booking:
+    def cancel_booking(cls, booking_or_id, initiating_user) -> Booking:
         from django.db import transaction
         from django.utils import timezone
         from rest_framework.exceptions import ValidationError
@@ -378,34 +378,28 @@ class BookingLifecycleService:
         from apps.bookings.models import Booking, BookingStatus
 
         with transaction.atomic():
-            # 1. Extract UUID cleanly if instance object or string ID is passed
             if isinstance(booking_or_id, Booking):
                 booking_id = booking_or_id.id
             else:
                 booking_id = booking_or_id
 
-            # Lock the booking row for modifications
             booking = Booking.objects.select_for_update().get(id=booking_id)
 
-            # 2. State Guards: Prevent canceling already finished workflows
+            # 🟢 IDENTITY PROTECTION GUARD: Only the original sender can cancel
+            if booking.sender != initiating_user:
+                raise ValidationError("Unauthorized. Only the sender who funded this escrow can cancel this booking.")
+
+            # Prevent canceling finished workflows
             if booking.status == BookingStatus.COMPLETED:
                 raise ValidationError("Cannot cancel a booking that has already been successfully completed.")
             
             if booking.status == BookingStatus.CANCELLED:
                 raise ValidationError("This booking has already been cancelled.")
 
-            # 3. 🟢 Execute automated financial escrow reversal
-            # This automatically validates the hold, releases the pending block, 
-            # and returns the liquidity back to the sender's available balance.
+            # Execute automated financial escrow reversal back to the sender
             WalletService.refund(booking)
 
-            # 4. Advance milestone fields
             booking.status = BookingStatus.CANCELLED
-            # Assuming your model has an optional 'cancelled_at' timestamp field:
-            if hasattr(booking, 'cancelled_at'):
-                booking.cancelled_at = timezone.now()
-                booking.save(update_fields=["status", "cancelled_at"])
-            else:
-                booking.save(update_fields=["status"])
+            booking.save(update_fields=["status"])
 
             return booking

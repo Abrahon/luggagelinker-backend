@@ -425,3 +425,39 @@ class BookingDeliveryVerificationView(generics.GenericAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+
+class BookingCancellationView(generics.GenericAPIView):
+    """
+    POST /api/bookings/{id}/cancel/
+    Enforces atomic state transitions to CANCELLED and triggers the wallet refund engine.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = BookingSerializer
+    queryset = Booking.objects.all()
+
+    def post(self, request, pk, *args, **kwargs):
+        try:
+            # Route execution down to the unified cancellation service handler
+            updated_booking = BookingLifecycleService.cancel_booking(booking_or_id=pk)
+            
+            return Response(
+                {
+                    "success": True,
+                    "message": "Booking cancelled successfully. Escrow hold reversed and fully refunded to sender.",
+                    "current_status": updated_booking.status
+                },
+                status=status.HTTP_200_OK
+            )
+            
+        except (DjangoValidationError, DRFValidationError) as exc:
+            error_messages = exc.messages if hasattr(exc, 'messages') else [str(exc)]
+            return Response(
+                {
+                    "success": False,
+                    "message": "Cancellation validation failed.",
+                    "errors": error_messages
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )

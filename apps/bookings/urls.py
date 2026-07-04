@@ -1,5 +1,8 @@
 from django.urls import path
+
+from apps.adminpanel import views
 from .views import (
+    BookingCancellationView,
     BookingCreateView,
     BookingDeliveryVerificationView,
     BookingPickupVerificationView,
@@ -44,5 +47,6 @@ urlpatterns = [
     path("booking/verify-pickup/", BookingPickupVerificationView.as_view(), name="verify-pickup"),
     path("booking/start-transit/", BookingStartTransitView.as_view(), name="start-transit"),
     path("booking/verify-delivery/", BookingDeliveryVerificationView.as_view(), name="verify-delivery"), 
+    path("bookings/<uuid:pk>/cancel/",BookingCancellationView.as_view(), name="booking-cancel"),
 
 ]
