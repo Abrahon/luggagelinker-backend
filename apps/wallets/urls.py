@@ -4,6 +4,7 @@ from .views import (
     AdminAdjustBalanceView,
     AdminWithdrawalListView,
     CreateStripeConnectAccount,
+    StripeConnectStatusView,
     UserCancelWithdrawalView,
     WalletViewSet, 
     WalletTransactionListView, 
@@ -43,5 +44,10 @@ urlpatterns = [
     
     # Admin adjustment entrypoint
     path("admin/wallets/<uuid:wallet_id>/adjust/", AdminAdjustBalanceView.as_view(), name="admin-wallet-adjust"),
+    path(
+        "wallets/connect/status/", 
+        StripeConnectStatusView.as_view(), 
+        name="stripe-connect-status"
+    ),
 
 ]

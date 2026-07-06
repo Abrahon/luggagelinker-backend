@@ -186,6 +186,24 @@ class WithdrawalRequest(models.Model):
         blank=True,
         null=True
     )
+    
+    stripe_transfer_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Stripe platform transfer tracking reference (tr_...)"
+    )
+    stripe_payout_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Stripe express destination payout tracking reference (po_...)"
+    )
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp confirming absolute banking clearance settlement."
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -196,6 +214,8 @@ class WithdrawalRequest(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["method"]),
         ]
+
+
 
 
 

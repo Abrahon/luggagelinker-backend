@@ -43,3 +43,15 @@ class StripeConnectProvider:
         except stripe.error.StripeError as e:
             logger.error(f"Failed to create Stripe Account Link for {account_id}: {str(e)}")
             raise e
+        
+        
+    @staticmethod
+    def retrieve_account_status(account_id: str) -> stripe.Account:
+        """
+        Fetches live capability flags directly from the Stripe Connect API engine.
+        """
+        try:
+            return stripe.Account.retrieve(account_id)
+        except stripe.error.StripeError as e:
+            logger.error(f"Failed to sync status for Stripe account {account_id}: {str(e)}")
+            raise e

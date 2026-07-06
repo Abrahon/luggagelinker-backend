@@ -41,6 +41,7 @@ class WalletTransactionSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = WithdrawalRequest
@@ -54,16 +55,22 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             "bank_name",
             "branch_name",
             "routing_number",
+            "stripe_transfer_id",    # 🔗 Added
+            "stripe_payout_id",      # 🔗 Added
             "rejection_reason",
             "created_at",
             "updated_at",
+            "completed_at",          # 🔗 Added
         ]
         read_only_fields = [
             "id", 
             "status", 
+            "stripe_transfer_id",    # 🔒 Ensure safe from client tampering
+            "stripe_payout_id",      # 🔒 Ensure safe from client tampering
             "rejection_reason", 
             "created_at", 
-            "updated_at"
+            "updated_at",
+            "completed_at",          # 🔒 Ensure safe from client tampering
         ]
 
     def validate_amount(self, value):
@@ -93,13 +100,26 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
                 "amount": f"Insufficient available funds. Liquid balance: ${wallet.available_balance}."
             })
 
-        # 2. Conditional Payout Information Validation
-        if method == WithdrawalRequest.WithdrawalMethod.BANK:
+        # 2. Conditional Method Routing Validations
+        if method == WithdrawalRequest.WithdrawalMethod.STRIPE:
+            # Check if user has an active onboarding account profile and payouts are enabled
+            try:
+                stripe_account = user.stripe_account
+                if not stripe_account.payouts_enabled:
+                    raise serializers.ValidationError(
+                        "Complete your Stripe onboarding setup before making a withdrawal."
+                    )
+            except Exception:
+                raise serializers.ValidationError(
+                    "No Stripe Connected Account linked. Please complete setup integration first."
+                )
+
+        elif method == WithdrawalRequest.WithdrawalMethod.BANK:
             # Bank accounts require all routing and structural details
             missing_fields = {}
             for field in ["account_name", "account_number", "bank_name", "branch_name", "routing_number"]:
                 if not attrs.get(field):
-                    missing_fields[field] = "This field is required for Bank withdrawals."
+                    missing_fields[field] = f"This field is required for {method} withdrawals."
             if missing_fields:
                 raise serializers.ValidationError(missing_fields)
                 
@@ -115,7 +135,6 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
                 })
 
         return attrs
-
 
 class EscrowHoldSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)

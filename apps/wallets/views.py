@@ -358,7 +358,7 @@ from rest_framework.permissions import IsAuthenticated
 from apps.wallets.models import StripeConnectedAccount
 from apps.wallets.serializers import StripeConnectSerializer
 from apps.payment.providers.stripe_connect import StripeConnectProvider
-
+import stripe  
 logger = logging.getLogger(__name__)
 
 
@@ -425,3 +425,51 @@ class CreateStripeConnectAccount(APIView):
             }, 
             status=status.HTTP_201_CREATED if not existing_account else status.HTTP_200_OK
         )
+
+
+# apps/wallets/views.py
+
+
+class StripeConnectStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        try:
+            # 1. Fetch local database record
+            stripe_account = StripeConnectedAccount.objects.get(user=user)
+        except StripeConnectedAccount.DoesNotExist:
+            return Response({
+                "connected": False,
+                "charges_enabled": False,
+                "payouts_enabled": False,
+                "details_submitted": False
+            }, status=status.HTTP_200_OK)
+
+        try:
+            # 2. Query real-time status from Stripe Network API (outside db lock)
+            live_account_data = StripeConnectProvider.retrieve_account_status(
+                stripe_account.stripe_account_id
+            )
+
+            # 3. Synchronize state inside a protected transaction block
+            with transaction.atomic():
+                stripe_account = StripeConnectedAccount.objects.select_for_update().get(id=stripe_account.id)
+                stripe_account.payouts_enabled = live_account_data.payouts_enabled
+                stripe_account.charges_enabled = live_account_data.charges_enabled
+                stripe_account.details_submitted = live_account_data.details_submitted
+                stripe_account.save()
+
+        except stripe.error.StripeError as e:
+            logger.error(f"Stripe sync breakdown for User {user.id}: {str(e)}")
+            # Fall back safely to last saved database values if network fails
+            pass
+
+        # 4. Return clean production payload structure
+        return Response({
+            "connected": True,
+            "charges_enabled": stripe_account.charges_enabled,
+            "payouts_enabled": stripe_account.payouts_enabled,
+            "details_submitted": stripe_account.details_submitted
+        }, status=status.HTTP_200_OK)
