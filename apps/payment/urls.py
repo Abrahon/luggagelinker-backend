@@ -60,7 +60,7 @@ urlpatterns = [
     # path("stripe/webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
     path("admin/booking/<uuid:booking_id>/release/", BookingPaymentReleaseView.as_view(), name="admin-payment-release"),
     path("payments/bookings/history/", BookingPaymentHistoryListView.as_view(), name="booking-payment-history"),
-    path("connect/success/", stripe_connect_success_view, name="stripe-connect-success"),
-    path("connect/refresh/", stripe_connect_refresh_view, name="stripe-connect-refresh"),
+    path("wallet/connect/success/", stripe_connect_success_view, name="stripe-connect-success"),
+    path("wallet/connect/refresh/", stripe_connect_refresh_view, name="stripe-connect-refresh"),
   
 ]

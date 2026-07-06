@@ -1001,10 +1001,10 @@ from django.http import HttpResponse
 from django.contrib.auth import get_user_model
 from django.db import transaction
 
-# Ensure this matches the actual import path for your custom Stripe Account model
-# e.g., from apps.profiles.models import StripeAccount 
-# adjusting below based on your architecture:
 
+# adjusting below based on your architecture:
+@api_view(['GET'])                  # 👈 Tells Django this is a DRF-managed GET view
+@permission_classes([AllowAny])    # 👈 Bypasses global authentication requirements
 def stripe_connect_success_view(request):
     """
     Callback endpoint triggered when a user returns from Stripe onboarding.
@@ -1013,9 +1013,7 @@ def stripe_connect_success_view(request):
     user = request.user
     
     # Fallback if testing directly in browser session context without API token auth header
-    if not user.is_authenticated:
-        # For development testing, pick the user who initiated it or prompt login
-        # Here we attempt to fetch a fallback user or query string parameter if needed
+    if not user or not user.is_authenticated:
         user_id = request.GET.get("user_id")
         User = get_user_model()
         user = User.objects.filter(id=user_id).first() if user_id else None
@@ -1027,11 +1025,12 @@ def stripe_connect_success_view(request):
         )
 
     try:
-        # Fetch the user's linked Stripe profile record
-        # Adjust the related_name here if it's user.stripeaccount or user.stripe_profile
+        # Explicit lookup to safely verify if user has an associated stripe account profile
         stripe_account_profile = user.stripe_account 
-    except Exception:
+    except getattr(user.__class__, 'stripe_account').RelatedObjectDoesNotExist:
         return HttpResponse("<h3>Error</h3><p>No Stripe Account profile linked to this user.</p>", status=400)
+    except Exception as e:
+        return HttpResponse(f"<h3>Profile Error</h3><p>{str(e)}</p>", status=400)
 
     stripe_account_id = stripe_account_profile.stripe_account_id
 
@@ -1042,7 +1041,6 @@ def stripe_connect_success_view(request):
 
         # 2. Update database flags in an atomic transaction blocks
         with transaction.atomic():
-            # Refreshing the profile lock to avoid race conditions
             profile = type(stripe_account_profile).objects.select_for_update().get(id=stripe_account_profile.id)
             profile.payouts_enabled = account.payouts_enabled
             profile.charges_enabled = account.charges_enabled
@@ -1093,7 +1091,7 @@ def stripe_connect_success_view(request):
     except Exception as e:
         logger.exception("Failed to verify return state with Stripe Connect.")
         return HttpResponse(f"<h3>Verification Error</h3><p>{str(e)}</p>", status=500)
-
+    
 
 def stripe_connect_refresh_view(request):
     """Fallback expired onboarding renewal page."""
