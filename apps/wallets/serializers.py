@@ -145,3 +145,17 @@ class EscrowHoldSerializer(serializers.Serializer):
         return attrs
 
 
+
+from rest_framework import serializers
+
+class StripeConnectSerializer(serializers.Serializer):
+    """
+    Handles authentication verification context for setting up Stripe onboarding links.
+    """
+    def validate(self, attrs):
+        request = self.context.get("request")
+        if not request or not request.user:
+            raise serializers.ValidationError("Authentication context missing.")
+        return attrs
+
+

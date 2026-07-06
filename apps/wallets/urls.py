@@ -3,6 +3,7 @@ from rest_framework import views
 from .views import (
     AdminAdjustBalanceView,
     AdminWithdrawalListView,
+    CreateStripeConnectAccount,
     UserCancelWithdrawalView,
     WalletViewSet, 
     WalletTransactionListView, 
@@ -16,6 +17,7 @@ from .views import (
 urlpatterns = [
     # GET /wallet/ — Get wallet balance directly (using the list action mapping)
     path("wallets/", WalletViewSet.as_view({"get": "list"}), name="wallet-detail"),
+    path("wallet/connect/",CreateStripeConnectAccount.as_view(), name="wallet-connect"),
     
     # GET /wallet/transactions/ — Transaction history feed
     path("wallets/transactions/", WalletTransactionListView.as_view(), name="wallet-transactions"),

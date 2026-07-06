@@ -345,3 +345,83 @@ class AdminAdjustBalanceView(generics.GenericAPIView):
             return Response({"success": False, "errors": msg}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"success": False, "errors": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
+    
+
+
+
+from django.db import transaction
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+
+from apps.wallets.models import StripeConnectedAccount
+from apps.wallets.serializers import StripeConnectSerializer
+from apps.payment.providers.stripe_connect import StripeConnectProvider
+
+logger = logging.getLogger(__name__)
+
+
+class CreateStripeConnectAccount(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+
+        # 1. Validate request context execution
+        serializer = StripeConnectSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        # 2. Safely read ledger state to check for existing connection maps
+        stripe_account_id = None
+        try:
+            existing_account = StripeConnectedAccount.objects.get(user=user)
+            stripe_account_id = existing_account.stripe_account_id
+        except StripeConnectedAccount.DoesNotExist:
+            existing_account = None
+
+        # 3. Handle external API creation outside of any transaction block locks
+        if not stripe_account_id:
+            try:
+                stripe_account = StripeConnectProvider.create_connected_account(user.email)
+                stripe_account_id = stripe_account.id
+                
+                # Double-check safety right before writing record block
+                with transaction.atomic():
+                    existing_account, created = StripeConnectedAccount.objects.get_or_create(
+                        user=user,
+                        defaults={"stripe_account_id": stripe_account_id}
+                    )
+                    # If someone squeezed in an account concurrently, prioritize it
+                    if not created:
+                        stripe_account_id = existing_account.stripe_account_id
+                        
+            except stripe.error.StripeError as e:
+                return Response(
+                    {"success": False, "error": e.user_message or "Stripe system processing error."},
+                    status=status.HTTP_424_FAILED_DEPENDENCY
+                )
+            except Exception as e:
+                logger.error(f"Unexpected error creating internal database mapping model: {str(e)}")
+                return Response(
+                    {"success": False, "error": "Internal ledger configuration failure."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        # 4. Generate the onboarding session URL
+        try:
+            onboarding_url = StripeConnectProvider.create_account_link(stripe_account_id)
+        except stripe.error.StripeError as e:
+            return Response(
+                {"success": False, "error": e.user_message or "Could not initialize link pipeline."},
+                status=status.HTTP_424_FAILED_DEPENDENCY
+            )
+
+        # 5. Return success structure response matching requirements
+        return Response(
+            {
+                "success": True, 
+                "onboarding_url": onboarding_url
+            }, 
+            status=status.HTTP_201_CREATED if not existing_account else status.HTTP_200_OK
+        )

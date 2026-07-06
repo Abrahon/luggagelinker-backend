@@ -30,6 +30,7 @@ class Wallet(models.Model):
         decimal_places=2, 
         default=Decimal("0.00")
     )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -112,6 +113,7 @@ class WithdrawalRequest(models.Model):
         FAILED = "FAILED", "Failed"  #
 
     class WithdrawalMethod(models.TextChoices):
+        STRIPE = "STRIPE", "Stripe Bank Payout"
         BANK = "BANK", "Bank Account"
         BKASH = "BKASH", "bKash"
         NAGAD = "NAGAD", "Nagad"
@@ -194,3 +196,38 @@ class WithdrawalRequest(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["method"]),
         ]
+
+
+
+import uuid
+from django.db import models
+from django.conf import settings
+
+
+class StripeConnectedAccount(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="stripe_account",
+    )
+
+    # e.g. acct_1ABCDEFxxxxxxxx
+    stripe_account_id = models.CharField(
+        max_length=100,
+        unique=True,
+    )
+
+    payouts_enabled = models.BooleanField(default=False)
+
+    charges_enabled = models.BooleanField(default=False)
+
+    details_submitted = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} ({self.stripe_account_id})"
