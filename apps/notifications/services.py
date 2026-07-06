@@ -178,6 +178,10 @@ def mark_all_notifications_as_read(user):
     return updated
 
 
+from apps.notifications.models import NotificationType
+# Assuming create_notification is imported here from your utilities
+# from .utils import create_notification
+
 
 # ==========================================================
 # WALLET CREDITED
@@ -196,7 +200,7 @@ def notify_wallet_credited(
             f"${amount} has been credited to your wallet "
             f"for booking #{booking.tracking_number}."
         ),
-        notification_type="WALLET",
+        notification_type=NotificationType.WALLET,
         object_id=booking.id,
         action_url="/wallet/",
     )
@@ -218,7 +222,7 @@ def notify_withdrawal_requested(
             f"Your withdrawal request of "
             f"${withdrawal.amount} has been submitted."
         ),
-        notification_type="WALLET",
+        notification_type=NotificationType.WALLET,
         object_id=withdrawal.id,
         action_url="/wallet/withdrawals/",
     )
@@ -240,7 +244,7 @@ def notify_withdrawal_approved(
             f"Your withdrawal request of "
             f"${withdrawal.amount} has been approved."
         ),
-        notification_type="WALLET",
+        notification_type=NotificationType.WALLET,
         object_id=withdrawal.id,
         action_url="/wallet/withdrawals/",
     )
@@ -262,7 +266,7 @@ def notify_withdrawal_rejected(
             f"Your withdrawal request of "
             f"${withdrawal.amount} has been rejected."
         ),
-        notification_type="WALLET",
+        notification_type=NotificationType.WALLET,
         object_id=withdrawal.id,
         action_url="/wallet/withdrawals/",
     )
@@ -285,7 +289,7 @@ def notify_refund_completed(
             f"${amount} has been refunded "
             f"for booking #{booking.tracking_number}."
         ),
-        notification_type="PAYMENT",
+        notification_type=NotificationType.PAYMENT,
         object_id=booking.id,
         action_url=f"/bookings/{booking.id}/",
     )

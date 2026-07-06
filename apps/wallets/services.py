@@ -2,193 +2,23 @@ import logging
 from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
-from .models import Wallet, WalletTransaction, WithdrawalRequest
-from django.db import transaction
-from django.utils import timezone
 from django.core.exceptions import ValidationError
 from apps.wallets.models import Wallet, WithdrawalRequest, WalletTransaction
+
+# Notification service imports
+from apps.notifications.services import (
+    notify_wallet_credited,
+    notify_withdrawal_requested,
+    notify_withdrawal_approved,
+    notify_withdrawal_rejected,
+    notify_refund_completed,
+)
+
 logger = logging.getLogger(__name__)
-
-
-
 
 
 class WalletService:
     
-    @classmethod
-    def hold_escrow(cls, user, booking, amount: Decimal, reference: str = "") -> WalletTransaction:
-        """
-        Locks up user funds into pending escrow when a booking is created/confirmed.
-        Moves funds: available_balance -> pending_balance
-        """
-        if amount <= Decimal("0.00"):
-            raise ValueError("Escrow amount must be positive.")
-
-        with transaction.atomic():
-            try:
-                wallet = Wallet.objects.select_for_update().get(user=user)
-            except Wallet.DoesNotExist:
-                raise ValueError("Wallet not found.")
-            
-            if wallet.available_balance < amount:
-                raise ValueError(f"Insufficient funds to hold escrow. Available: ${wallet.available_balance}")
-
-            balance_before = wallet.available_balance
-            
-            # Adjust balances
-            wallet.available_balance -= amount
-            wallet.pending_balance += amount
-            wallet.save(update_fields=["available_balance", "pending_balance", "updated_at"])
-
-            # Log audit trail record
-            tx = WalletTransaction.objects.create(
-                wallet=wallet,
-                booking=booking,
-                type=WalletTransaction.TransactionType.ESCROW_HOLD,
-                amount=amount,
-                status=WalletTransaction.TransactionStatus.COMPLETED,
-                balance_before=balance_before,
-                balance_after=wallet.available_balance,
-                description=f"Escrow lock applied for Booking #{booking.tracking_number}",
-                reference=reference or f"HOLD-{booking.id}"
-            )
-            
-            logger.info(f"Escrow hold of ${amount} applied successfully on wallet {wallet.id}")
-            return tx
-
-    @classmethod
-    def release_escrow_to_traveler(cls, booking) -> WalletTransaction:
-
-        sender = booking.sender
-        traveler = booking.traveler
-        amount = Decimal(str(booking.agreed_reward))
-
-        if not traveler:
-            raise ValueError("No traveler assigned.")
-
-        if amount <= Decimal("0.00"):
-            raise ValueError("Invalid amount.")
-
-        with transaction.atomic():
-
-            sender_wallet = Wallet.objects.select_for_update().get(user=sender)
-            traveler_wallet = Wallet.objects.select_for_update().get(user=traveler)
-
-            # 🔒 Prevent double release
-            if WalletTransaction.objects.filter(
-                booking=booking,
-                type=WalletTransaction.TransactionType.ESCROW_RELEASE,
-                status=WalletTransaction.TransactionStatus.COMPLETED
-            ).exists():
-                raise ValueError("Escrow already released.")
-
-            # 🔍 Validate escrow exists
-            escrow = WalletTransaction.objects.filter(
-                wallet=sender_wallet,
-                booking=booking,
-                type=WalletTransaction.TransactionType.ESCROW_HOLD,
-                status=WalletTransaction.TransactionStatus.PENDING
-            ).first()
-
-            if not escrow:
-                raise ValueError("No active escrow found.")
-
-            if sender_wallet.pending_balance < amount:
-                raise ValueError("Insufficient escrow balance.")
-
-            # 💰 Sender deduction
-            sender_before = sender_wallet.pending_balance
-            sender_wallet.pending_balance -= amount
-            sender_wallet.save(update_fields=["pending_balance"])
-
-            # 💰 Traveler credit
-            traveler_before = traveler_wallet.available_balance
-            traveler_wallet.available_balance += amount
-            traveler_wallet.total_earned += amount
-            traveler_wallet.save(update_fields=["available_balance", "total_earned"])
-
-            # 📊 Ledger sender
-            WalletTransaction.objects.create(
-                wallet=sender_wallet,
-                booking=booking,
-                type=WalletTransaction.TransactionType.ESCROW_RELEASE,
-                amount=-amount,
-                status=WalletTransaction.TransactionStatus.COMPLETED,
-                balance_before=sender_before,
-                balance_after=sender_wallet.pending_balance,
-            )
-
-            # 📊 Ledger traveler
-            tx = WalletTransaction.objects.create(
-                wallet=traveler_wallet,
-                booking=booking,
-                type=WalletTransaction.TransactionType.ESCROW_RELEASE,
-                amount=amount,
-                status=WalletTransaction.TransactionStatus.COMPLETED,
-                balance_before=traveler_before,
-                balance_after=traveler_wallet.available_balance,
-            )
-
-            return tx
-        
-
-    @classmethod
-    def request_withdrawal(cls, user, amount: Decimal, bank_account_info: dict) -> WithdrawalRequest:
-        """
-        Initiates a liquid payout pipeline.
-        Deducts from available balance immediately to prevent double-spending while review is pending.
-        """
-        # ✅ Decimal type strict evaluation
-        if amount <= Decimal("0.00"):
-            raise ValueError("Withdrawal amount must be positive.")
-
-        with transaction.atomic():
-            try:
-                wallet = Wallet.objects.select_for_update().get(user=user)
-            except Wallet.DoesNotExist:
-                raise ValueError("Wallet not found.")
-
-            # ✅ Prevent duplicate pending withdrawal spamming exploits
-            if WithdrawalRequest.objects.filter(
-                wallet=wallet,
-                status=WithdrawalRequest.WithdrawalStatus.PENDING
-            ).exists():
-                raise ValueError("You already have an active pending withdrawal request processing.")
-
-            if wallet.available_balance < amount:
-                raise ValueError(f"Insufficient funds for withdrawal request. Available: ${wallet.available_balance}")
-
-            balance_before = wallet.available_balance
-
-            # Freeze the balance immediately
-            wallet.available_balance -= amount
-            wallet.save(update_fields=["available_balance", "updated_at"])
-
-            # Create internal system payout tracking request
-            withdrawal = WithdrawalRequest.objects.create(
-                wallet=wallet,
-                amount=amount,
-                status=WithdrawalRequest.WithdrawalStatus.PENDING,
-                bank_account_info=bank_account_info
-            )
-
-            # Record systemic audit transaction entry
-            WalletTransaction.objects.create(
-                wallet=wallet,
-                type=WalletTransaction.TransactionType.WITHDRAWAL,
-                amount=amount,
-                status=WalletTransaction.TransactionStatus.PENDING,
-                balance_before=balance_before,
-                balance_after=wallet.available_balance,
-                description=f"Withdrawal request initialized (ID: {withdrawal.id})",
-                reference=f"WTH-{withdrawal.id}"
-            )
-
-            logger.info(f"Withdrawal request {withdrawal.id} filed for user {user.id}")
-            return withdrawal
-
-
-
     @classmethod
     @transaction.atomic
     def hold_escrow(cls, booking) -> WalletTransaction:
@@ -303,6 +133,14 @@ class WalletService:
             balance_after=traveler_wallet.available_balance,
             description=f"Earnings payout received for delivering Booking #{booking.id}"
         )
+
+        # 🔔 Notification: Notify traveler that they received their reward
+        transaction.on_commit(lambda: notify_wallet_credited(
+            user=traveler,
+            booking=booking,
+            amount=amount,
+        ))
+
         return tx
 
     @classmethod
@@ -350,6 +188,14 @@ class WalletService:
             balance_after=wallet.available_balance,
             description=f"Escrow refund reversed to available wallet for booking: {booking.id}"
         )
+
+        # 🔔 Notification: Notify sender that their escrow refund completed successfully
+        transaction.on_commit(lambda: notify_refund_completed(
+            user=booking.sender,
+            booking=booking,
+            amount=amount,
+        ))
+
         return tx
 
     @classmethod
@@ -364,8 +210,17 @@ class WalletService:
 
         wallet = Wallet.objects.select_for_update().get(user=user)
 
+        # Prevent duplicate pending withdrawal spamming exploits
+        if WithdrawalRequest.objects.filter(
+            wallet=wallet,
+            status="PENDING"
+        ).exists():
+            raise ValidationError("You already have an active pending withdrawal request processing.")
+
         if wallet.available_balance < amount:
             raise ValidationError(f"Insufficient funds available. Cashout requests cannot exceed ${wallet.available_balance}")
+
+        balance_before = wallet.available_balance
 
         # Immediately lock availability block values
         wallet.available_balance -= amount
@@ -378,6 +233,26 @@ class WalletService:
             bank_account_info=bank_account_info,
             status="PENDING"
         )
+
+        # Record systemic audit transaction entry
+        WalletTransaction.objects.create(
+            wallet=wallet,
+            type="WITHDRAWAL",
+            amount=amount,
+            status="PENDING",
+            balance_before=balance_before,
+            balance_after=wallet.available_balance,
+            description=f"Withdrawal request initialized (ID: {withdrawal.id})",
+            reference=f"WTH-{withdrawal.id}"
+        )
+
+        # 🔔 Notification: Trigger withdrawal request submission notification
+        transaction.on_commit(lambda: notify_withdrawal_requested(
+            user=user,
+            withdrawal=withdrawal,
+        ))
+
+        logger.info(f"Withdrawal request {withdrawal.id} filed for user {user.id}")
         return withdrawal
 
     @classmethod
@@ -452,13 +327,10 @@ class WalletService:
         return tx
 
 
-# admin service class for handling withdrawal approvals, rejections, and marking as paid
-
 class AdminWithdrawalService:
 
     @classmethod
     @transaction.atomic
-
     def approve_withdrawal(cls, withdrawal_id: str, admin_user) -> WithdrawalRequest:
         try:
             withdrawal = WithdrawalRequest.objects.select_for_update().get(id=withdrawal_id)
@@ -477,7 +349,6 @@ class AdminWithdrawalService:
         withdrawal.status = "APPROVED"
         withdrawal.save(update_fields=["status"])
 
-        # 🟢 FIXED: Removed the invalid withdrawal_request column assignment
         WalletTransaction.objects.create(
             wallet=wallet,
             type="WITHDRAWAL",  
@@ -487,6 +358,12 @@ class AdminWithdrawalService:
             balance_after=wallet.available_balance,
             description=f"Withdrawal Request ID: {withdrawal.id} successfully approved by admin."
         )
+
+        # 🔔 Notification: Trigger approval alert
+        transaction.on_commit(lambda: notify_withdrawal_approved(
+            user=withdrawal.wallet.user,
+            withdrawal=withdrawal,
+        ))
 
         return withdrawal
 
@@ -515,7 +392,6 @@ class AdminWithdrawalService:
         withdrawal.rejection_reason = rejection_reason
         withdrawal.save(update_fields=["status", "rejection_reason"])
 
-        # 🟢 FIXED: Removed the invalid withdrawal_request column assignment
         WalletTransaction.objects.create(
             wallet=wallet,
             type="WITHDRAWAL_REFUND", 
@@ -526,8 +402,13 @@ class AdminWithdrawalService:
             description=f"Refund: Withdrawal Request ID {withdrawal.id} was rejected. Reason: {rejection_reason}"
         )
 
-        return withdrawal
+        # 🔔 Notification: Trigger rejection alert
+        transaction.on_commit(lambda: notify_withdrawal_rejected(
+            user=withdrawal.wallet.user,
+            withdrawal=withdrawal,
+        ))
 
+        return withdrawal
 
     @classmethod
     @transaction.atomic
@@ -541,12 +422,8 @@ class AdminWithdrawalService:
         if withdrawal.status != "APPROVED":
             raise ValidationError(f"Only 'APPROVED' requests can be marked as paid. Current state: {withdrawal.status}")
 
-        # 🟢 FIXED: Removed paid_at reference to align completely with your model schema fields
         withdrawal.status = "PAID"
         withdrawal.save(update_fields=["status"])
 
         logger.info(f"Admin {admin_user.email} marked withdrawal {withdrawal.id} as physically paid.")
         return withdrawal
-
-
-
