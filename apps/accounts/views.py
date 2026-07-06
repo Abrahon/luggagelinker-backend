@@ -1,3 +1,5 @@
+import profile
+
 from django.shortcuts import render
 from django.db import transaction
 from rest_framework.views import APIView
@@ -251,7 +253,21 @@ class LoginView(generics.GenericAPIView):
                 )
 
 
-            user_data = LoginSerializer(user, context={"request": request}).data
+            profile = getattr(user, "profile", None)
+            
+
+            user_data = {
+                "id": str(user.id),
+                "name": profile.full_name if profile else "",
+                "email": user.email,
+                "role": user.role,
+                "profile_picture": (
+                    request.build_absolute_uri(profile.profile_picture.url)
+                    if profile
+                    and profile.profile_picture
+                    else None
+                ),
+            }
 
             # NORMAL LOGIN (ALL USERS INCLUDING SUPER ADMIN)
             try:

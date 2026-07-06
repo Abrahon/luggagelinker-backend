@@ -13,7 +13,7 @@ class GenderChoices(models.TextChoices):
     MALE = "male", "Male"
     FEMALE = "female", "Female"
     OTHER = "other", "Other"
-    # PREFER_NOT_TO_SAY = "prefer_not_to_say", "Prefer not to say"
+
 
 
 class Profile(models.Model):
@@ -69,6 +69,22 @@ class Profile(models.Model):
     country = models.CharField(
         max_length=100,
         blank=True,
+    )
+    total_reviews = models.PositiveIntegerField(
+    default=0,
+    help_text="Total number of reviews received by this traveler.",
+    )
+
+    total_rating = models.PositiveIntegerField(
+        default=0,
+        help_text="Sum of all received ratings.",
+    )
+
+    average_rating = models.DecimalField(
+        max_digits=3,
+        decimal_places=2,
+        default=0.00,
+        help_text="Average traveler rating.",
     )
 
     city = models.CharField(

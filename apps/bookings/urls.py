@@ -6,6 +6,7 @@ from .views import (
     BookingCreateView,
     BookingDeliveryVerificationView,
     BookingPickupVerificationView,
+    CompletedBookingListView,
     MyBookingListView,
     BookingDetailView,
     BookingRespondView,
@@ -43,6 +44,12 @@ urlpatterns = [
         BookingRespondView.as_view(), 
         name="booking-respond"
     ),
+
+    path(
+        "bookings/completed/", 
+        CompletedBookingListView.as_view(), 
+        name="booking-completed-list"
+),
 
     path("booking/verify-pickup/", BookingPickupVerificationView.as_view(), name="verify-pickup"),
     path("booking/start-transit/", BookingStartTransitView.as_view(), name="start-transit"),

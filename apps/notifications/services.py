@@ -293,3 +293,30 @@ def notify_refund_completed(
         object_id=booking.id,
         action_url=f"/bookings/{booking.id}/",
     )
+
+
+# ==========================================================
+# REVIEW RECEIVED
+# ==========================================================
+
+@transaction.atomic
+def notify_review_received(
+    *,
+    user,
+    review,
+):
+    """
+    Notify traveler that a new review has been received.
+    """
+
+    return create_notification(
+        user=user,
+        title="New Review Received ⭐",
+        message=(
+            f"You received a {review.rating}★ review "
+            f"from {review.sender.name}."
+        ),
+        notification_type=Notification.NotificationType.REVIEW,
+        object_id=str(review.id),
+        action_url=f"/reviews/{review.id}/",
+    )

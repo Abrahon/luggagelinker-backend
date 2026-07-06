@@ -22,6 +22,11 @@ class ProfileSerializer(serializers.ModelSerializer):
             "date_of_birth",
             "profile_picture",
             "bio",
+            "average_rating",
+            "total_reviews",
+            "completed_deliveries",
+            "cancelled_deliveries",
+            "total_earnings",
             "created_at",
             "updated_at",
         ]

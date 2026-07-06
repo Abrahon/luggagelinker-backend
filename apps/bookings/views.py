@@ -461,3 +461,53 @@ class BookingCancellationView(generics.GenericAPIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+from rest_framework import generics, permissions
+
+from apps.bookings.models import Booking
+from apps.bookings.serializers import BookingSerializer
+
+
+class CompletedBookingListView(generics.ListAPIView):
+    """
+    Returns completed bookings for the authenticated sender.
+    """
+
+    serializer_class = BookingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+
+        user = self.request.user
+
+        print("=" * 60)
+        print("Authenticated:", user.is_authenticated)
+        print("User Email:", user.email)
+        print("User ID:", user.id)
+
+        queryset = (
+            Booking.objects.filter(
+                sender_id=user.id,
+                status="COMPLETED",
+            )
+            .select_related(
+                "sender",
+                "traveler",
+                "booking_payment",
+            )
+            .order_by("-updated_at")
+        )
+
+        print("Completed Booking Count:", queryset.count())
+
+        for booking in queryset:
+            print(
+                booking.id,
+                booking.sender.email,
+                booking.status,
+            )
+
+        print("=" * 60)
+
+        return queryset

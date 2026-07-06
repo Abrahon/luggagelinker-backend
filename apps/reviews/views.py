@@ -7,6 +7,10 @@ from rest_framework.exceptions import PermissionDenied
 from django.db.models import Q
 from .models import Review
 from .serializers import ReviewSerializer
+from django.db import transaction
+
+from apps.reviews.services import update_traveler_rating
+from apps.notifications.services import notify_review_received
 
 
 class ReviewListCreateAPIView(generics.ListCreateAPIView):
@@ -35,10 +39,26 @@ class ReviewListCreateAPIView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         """
-        The serializer takes care of assigning the sender from the request context,
-        but perform_create ensures the logic executes cleanly during saving.
+        Save the review, then update traveler rating and
+        send a notification after the transaction commits.
         """
-        serializer.save()
+
+        review = serializer.save()
+
+        transaction.on_commit(
+            lambda: update_traveler_rating(
+                traveler=review.traveler,
+                rating=review.rating,
+            )
+        )
+
+        transaction.on_commit(
+            lambda: notify_review_received(
+                traveler=review.traveler,
+                sender=review.sender,
+                review=review,
+            )
+        )
 
 
 class ReviewRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
