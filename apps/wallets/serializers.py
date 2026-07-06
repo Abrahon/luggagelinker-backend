@@ -48,12 +48,23 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             "id",
             "amount",
             "status",
-            "bank_account_info",
+            "method",
+            "account_name",
+            "account_number",
+            "bank_name",
+            "branch_name",
+            "routing_number",
             "rejection_reason",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "status", "rejection_reason", "created_at", "updated_at"]
+        read_only_fields = [
+            "id", 
+            "status", 
+            "rejection_reason", 
+            "created_at", 
+            "updated_at"
+        ]
 
     def validate_amount(self, value):
         if value <= Decimal("0.00"):
@@ -69,8 +80,9 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
 
         user = request.user
         amount = attrs.get("amount")
+        method = attrs.get("method")
 
-        # ✅ Clean read-only retrieval during validation step
+        # 1. Check Wallet Balance
         try:
             wallet = Wallet.objects.get(user=user)
         except Wallet.DoesNotExist:
@@ -80,6 +92,27 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "amount": f"Insufficient available funds. Liquid balance: ${wallet.available_balance}."
             })
+
+        # 2. Conditional Payout Information Validation
+        if method == WithdrawalRequest.WithdrawalMethod.BANK:
+            # Bank accounts require all routing and structural details
+            missing_fields = {}
+            for field in ["account_name", "account_number", "bank_name", "branch_name", "routing_number"]:
+                if not attrs.get(field):
+                    missing_fields[field] = "This field is required for Bank withdrawals."
+            if missing_fields:
+                raise serializers.ValidationError(missing_fields)
+                
+        elif method in [
+            WithdrawalRequest.WithdrawalMethod.BKASH,
+            WithdrawalRequest.WithdrawalMethod.NAGAD,
+            WithdrawalRequest.WithdrawalMethod.ROCKET
+        ]:
+            # Mobile financial services only strictly need the account number (wallet phone number)
+            if not attrs.get("account_number"):
+                raise serializers.ValidationError({
+                    "account_number": f"Account number (mobile number) is required for {method} payouts."
+                })
 
         return attrs
 

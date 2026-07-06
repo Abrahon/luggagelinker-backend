@@ -95,30 +95,96 @@ class WalletTransaction(models.Model):
         return f"{self.type} ({self.status}) - ${self.amount}"
 
 
+
+
+import uuid
+import logging
+from django.db import models
+from apps.wallets.models import Wallet  # Adjust import path if needed
+
 class WithdrawalRequest(models.Model):
+
     class WithdrawalStatus(models.TextChoices):
         PENDING = "PENDING", "Pending Approval"
         APPROVED = "APPROVED", "Approved & Processing"
         COMPLETED = "COMPLETED", "Completed"
         REJECTED = "REJECTED", "Rejected"
+        FAILED = "FAILED", "Failed"  #
+
+    class WithdrawalMethod(models.TextChoices):
+        BANK = "BANK", "Bank Account"
+        BKASH = "BKASH", "bKash"
+        NAGAD = "NAGAD", "Nagad"
+        ROCKET = "ROCKET", "Rocket"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
     wallet = models.ForeignKey(
-        Wallet, 
-        on_delete=models.CASCADE, 
+        Wallet,
+        on_delete=models.CASCADE,
         related_name="withdrawals"
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
+
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2
+    )
+
     status = models.CharField(
-        max_length=15, 
-        choices=WithdrawalStatus.choices, 
+        max_length=15,
+        choices=WithdrawalStatus.choices,
         default=WithdrawalStatus.PENDING
     )
-    
-    # Target payout architecture configuration
-    bank_account_info = models.JSONField(help_text="Stores encrypted routing/account or Stripe recipient reference")
-    rejection_reason = models.TextField(blank=True, null=True)
-    
+
+    # -----------------------------
+    # Withdrawal Method (Kept the required, non-nullable one)
+    # -----------------------------
+    method = models.CharField(
+        max_length=20,
+        choices=WithdrawalMethod.choices
+    )
+
+    # -----------------------------
+    # Common Information
+    # -----------------------------
+    account_name = models.CharField(
+        max_length=150,
+        blank=True,
+        null=True
+    )
+
+    account_number = models.CharField(
+        max_length=50, 
+        blank=True, 
+        null=True
+    )
+
+    # -----------------------------
+    # Only for BANK
+    # -----------------------------
+    bank_name = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    branch_name = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    routing_number = models.CharField(
+        max_length=50,
+        blank=True
+    )
+
+    # -----------------------------
+    # Admin
+    # -----------------------------
+    rejection_reason = models.TextField(
+        blank=True,
+        null=True
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -126,4 +192,5 @@ class WithdrawalRequest(models.Model):
         indexes = [
             models.Index(fields=["wallet", "-created_at"]),
             models.Index(fields=["status"]),
+            models.Index(fields=["method"]),
         ]
