@@ -104,27 +104,208 @@ def send_pickup_pin_email(user_email, booking, pickup_pin):
     </html>
     """
 
-    # --- Fallback Text Assembly Component ---
-    # Automatically strip away nested markdown layouts for classic text readers
     text_content = strip_tags(html_content)
 
     try:
-        # Construct the specialized MultiAlternatives distribution system
         email = EmailMultiAlternatives(
             subject=subject,
             body=text_content,
             from_email=from_email,
             to=to_emails
         )
-        # Bind the rich browser HTML rendering layer
         email.attach_alternative(html_content, "text/html")
         email.send(fail_silently=False)
-        
         logger.info(f"Successfully sent pickup pin notification to {user_email} for booking {booking.id}")
     except Exception as e:
-        # Capture integration faults silently in logs so crashing mail servers do not disrupt payment processing states
         logger.error(f"Failed to transmit Pickup PIN mail to user {user_email}: {str(e)}", exc_info=True)
 
+
+def send_withdrawal_approved_email(user, withdrawal):
+    """
+    Sends an operational email confirming that a withdrawal request has been 
+    approved by administration and is now processing via the Stripe settlement systems.
+    """
+    subject = f"💸 Withdrawal Approved & Initiated - Request #{withdrawal.id}"
+    from_email = settings.DEFAULT_FROM_EMAIL
+    to_emails = [user.email]
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Withdrawal Approved</title>
+    </head>
+    <body style="margin: 0; padding: 0; background-color: #f4f6f8; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout: fixed;">
+            <tr>
+                <td align="center" style="padding: 40px 0 20px 0; background-color: #f4f6f8;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="500" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+                        <tr>
+                            <td align="center" style="background-color: #635bff; padding: 30px 20px;">
+                                <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">LuggageLinker</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 30px 40px;">
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
+                                    Hello {user.first_name or "there"},
+                                </p>
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
+                                    Great news! Your request to withdraw funds has been approved by our administration team and has been initiated via Stripe Connect.
+                                </p>
+                                
+                                <div style="border: 1px dashed #e1e6eb; background-color: #f7f9fc; border-radius: 8px; padding: 24px; text-align: center; margin-bottom: 24px;">
+                                    <div style="font-size: 32px; font-weight: 700; color: #635bff; line-height: 1; margin-bottom: 4px;">${withdrawal.amount}</div>
+                                    <div style="font-size: 13px; font-weight: 500; color: #697386; text-transform: uppercase; letter-spacing: 0.5px;">Transfer Initiated</div>
+                                </div>
+
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-size: 14px; color: #3c4043; margin-bottom: 24px;">
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Withdrawal ID</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 600;">#{withdrawal.id}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Payout Method</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 600;">{withdrawal.method}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Status</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 600; color: #e67e22;">Processing (Bank Routing)</td>
+                                    </tr>
+                                </table>
+
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #e8eaed; padding-top: 20px;">
+                                    <tr>
+                                        <td style="font-size: 13px; line-height: 20px; color: #70757a;">
+                                            <strong>Note:</strong> It typically takes 1–3 business days for banking institutions to clear and settle funds directly into your external account balance.
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td align="center" style="background-color: #f8f9fa; padding: 20px; font-size: 12px; color: #70757a; border-top: 1px solid #e8eaed;">
+                                This is an automated secure operational notification. Please do not reply directly to this mail.<br>
+                                © 2026 LuggageLinker Logistics Framework.
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    text_content = strip_tags(html_content)
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_content,
+            from_email=from_email,
+            to=to_emails
+        )
+        email.attach_alternative(html_content, "text/html")
+        email.send(fail_silently=False)
+        logger.info(f"Successfully sent withdrawal approved email to {user.email} for request {withdrawal.id}")
+    except Exception as e:
+        logger.error(f"Failed to transmit withdrawal approved mail to user {user.email}: {str(e)}", exc_info=True)
+
+
+def send_withdrawal_completed_email(user, withdrawal):
+    """
+    Sends an operational confirmation email once the Stripe webhook verifies 
+    that the payout funds have successfully cleared bank network settlement routing.
+    """
+    subject = f"✅ Funds Cleared Safely - Withdrawal #{withdrawal.id} Complete"
+    from_email = settings.DEFAULT_FROM_EMAIL
+    to_emails = [user.email]
+
+    completed_time = withdrawal.completed_at.strftime("%b %d, %Y %H:%M") if withdrawal.completed_at else "Recently"
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Withdrawal Completed</title>
+    </head>
+    <body style="margin: 0; padding: 0; background-color: #f4f6f8; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout: fixed;">
+            <tr>
+                <td align="center" style="padding: 40px 0 20px 0; background-color: #f4f6f8;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="500" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+                        <tr>
+                            <td align="center" style="background-color: #00d68f; padding: 30px 20px;">
+                                <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">LuggageLinker</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 30px 40px;">
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
+                                    Hello {user.first_name or "there"},
+                                </p>
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
+                                    Stripe has successfully confirmed clearing parameters with your banking network. Your funds are now officially delivered!
+                                </p>
+                                
+                                <div style="border: 1px solid #a3ebd2; background-color: #f0fbf7; border-radius: 8px; padding: 24px; text-align: center; margin-bottom: 24px;">
+                                    <div style="font-size: 32px; font-weight: 700; color: #00a870; line-height: 1; margin-bottom: 4px;">${withdrawal.amount}</div>
+                                    <div style="font-size: 13px; font-weight: 600; color: #00a870;">✓ Deposited</div>
+                                </div>
+
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-size: 14px; color: #3c4043; margin-bottom: 24px;">
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Withdrawal Reference</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 600;">#{withdrawal.id}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Stripe Tracking Code</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 500; font-family: monospace; font-size: 12px; color: #1f2937;">{withdrawal.stripe_payout_id or "N/A"}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Completion Date</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 600;">{completed_time}</td>
+                                    </tr>
+                                </table>
+
+                                <p style="font-size: 14px; line-height: 22px; color: #3c4043; margin: 24px 0 0 0;">
+                                    Thank you for using our platform framework pipelines. If you don't see the deposit listed in your bank statement within 24 hours, please contact your local banking institution directly with the tracking code listed above.
+                                </p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td align="center" style="background-color: #f8f9fa; padding: 20px; font-size: 12px; color: #70757a; border-top: 1px solid #e8eaed;">
+                                This is an automated secure operational notification. Please do not reply directly to this mail.<br>
+                                © 2026 LuggageLinker Logistics Framework.
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    text_content = strip_tags(html_content)
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_content,
+            from_email=from_email,
+            to=to_emails
+        )
+        email.attach_alternative(html_content, "text/html")
+        email.send(fail_silently=False)
+        logger.info(f"Successfully sent withdrawal completed email to {user.email} for request {withdrawal.id}")
+    except Exception as e:
+        logger.error(f"Failed to transmit withdrawal completed mail to user {user.email}: {str(e)}", exc_info=True)
 
 # send delivery pin email to receiver
 def send_delivery_pin_email(user_email, booking, delivery_pin):
@@ -216,3 +397,5 @@ def send_delivery_pin_email(user_email, booking, delivery_pin):
         logger.info(f"Successfully sent delivery pin notification to {user_email} for booking {booking.id}")
     except Exception as e:
         logger.error(f"Failed to transmit Delivery PIN mail to user {user_email}: {str(e)}", exc_info=True)
+
+

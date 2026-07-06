@@ -9,39 +9,20 @@ logger = logging.getLogger(__name__)
 class StripeConnectProvider:
 
     @staticmethod
-    def create_connected_account(email: str) -> stripe.Account:
-        """
-        Creates a Stripe Express Connected Account for a user.
-        """
+    @classmethod
+    def create_account_link(cls, stripe_account_id, user):  
         try:
-            account = stripe.Account.create(
-                type="express",
-                country="US",
-                email=email,
-                capabilities={
-                    "transfers": {"requested": True},
-                },
-            )
-            return account
-        except stripe.error.StripeError as e:
-            logger.error(f"Failed to create Stripe Express account for {email}: {str(e)}")
-            raise e
+            return_url_with_context = f"{settings.STRIPE_CONNECT_RETURN_URL}?user_id={user.id}"
 
-    @staticmethod
-    def create_account_link(account_id: str) -> str:
-        """
-        Generates a secure, temporary onboarding flow redirection URL.
-        """
-        try:
             link = stripe.AccountLink.create(
-                account=account_id,
+                account=stripe_account_id,
                 refresh_url=settings.STRIPE_CONNECT_REFRESH_URL,
-                return_url=settings.STRIPE_CONNECT_RETURN_URL,
+                return_url=return_url_with_context,  
                 type="account_onboarding",
             )
             return link.url
         except stripe.error.StripeError as e:
-            logger.error(f"Failed to create Stripe Account Link for {account_id}: {str(e)}")
+            logger.error(f"Failed to create Stripe Account Link for {stripe_account_id}: {str(e)}")
             raise e
         
         

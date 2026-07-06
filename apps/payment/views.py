@@ -42,18 +42,12 @@ from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
 from .serializers import BookingPaymentHistorySerializer
-
-
-# 🟢 Import your notification model structures here
 from apps.notifications.models import Notification, NotificationType 
 
 from .serializers import InitiateBookingPaymentSerializer
-from .services import BookingPaymentService
-
+from .services import BookingPaymentService,SubscriptionWebhookService
 logger = logging.getLogger(__name__)
-
 
 User = get_user_model()
 
@@ -196,23 +190,125 @@ class CreateCheckoutSessionView(APIView):
 
 # new webhook view for booking payments
 
-import stripe
-import logging
 
-from django.conf import settings
-from django.http import HttpResponse
-from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework import status
+
+
+# @csrf_exempt
+# @api_view(["POST"])
+# @permission_classes([AllowAny])
+# def stripe_webhook(request):
+
+#     payload = request.body
+#     sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
+#     endpoint_secret = settings.STRIPE_WEBHOOK_SECRET
+
+#     # -----------------------------------------------------
+#     # Verify Stripe Signature
+#     # -----------------------------------------------------
+
+#     try:
+#         event = stripe.Webhook.construct_event(
+#             payload=payload,
+#             sig_header=sig_header,
+#             secret=endpoint_secret,
+#         )
+#         print("EVENT OBJECT TYPE:", type(event["data"]["object"]))
+#         print("EVENT OBJECT:", event["data"]["object"])
+
+#     except ValueError:
+#         logger.exception("Invalid Stripe webhook payload.")
+#         return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
+
+#     except stripe.error.SignatureVerificationError:
+#         logger.exception("Invalid Stripe webhook signature.")
+#         return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
+
+#     event_type = event["type"]
+
+#     event_data = event["data"]["object"].to_dict()
+
+#     metadata = event_data.get("metadata", {})
+#     payment_type = metadata.get("payment_type")
+
+#     try:
+
+#         # =====================================================
+#         # CHECKOUT SESSION COMPLETED
+#         # =====================================================
+
+#         if event_type == "checkout.session.completed":
+
+#             metadata = event_data.get("metadata", {}) or {}
+#             payment_type = metadata.get("payment_type")
+
+#             if payment_type == "booking":
+
+#                 BookingPaymentService.process_webhook(event, raw_json=request.data)
+
+#             elif payment_type == "subscription":
+
+#                 SubscriptionWebhookService.process(event)
+
+#             else:
+
+#                 logger.warning(
+#                     "Unknown payment_type received: %s",
+#                     payment_type,
+#                 )
+
+#         # =====================================================
+#         # SUBSCRIPTION EVENTS
+#         # =====================================================
+
+#         elif event_type in [
+#             "invoice.paid",
+#             "invoice.payment_failed",
+#         ]:
+
+#             SubscriptionWebhookService.process(event)
+
+#         # =====================================================
+#         # BOOKING PAYMENT EVENTS
+#         # =====================================================
+
+#         elif event_type in [
+#             "payment_intent.payment_failed",
+#             "charge.refunded",
+#             "checkout.session.expired",
+#         ]:
+
+#             BookingPaymentService.process_webhook(event, raw_json=request.data)
+
+#         else:
+
+#             logger.info(
+#                 "Ignoring unsupported Stripe event: %s",
+#                 event_type,
+#             )
+
+#     except Exception:
+
+#         logger.exception(
+#             "Stripe webhook processing failed for event: %s",
+#             event_type,
+#         )
+
+#         return HttpResponse(
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
+
+#     return HttpResponse(status=status.HTTP_200_OK)
+
+
+from apps.notifications.services import create_bulk_notifications
+
+
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
-from .services import BookingPaymentService,SubscriptionWebhookService
 
-
-logger = logging.getLogger(__name__)
-
-
-
+from apps.wallets.models import Wallet, WithdrawalRequest, WalletTransaction
 
 @csrf_exempt
 @api_view(["POST"])
@@ -226,102 +322,148 @@ def stripe_webhook(request):
     # -----------------------------------------------------
     # Verify Stripe Signature
     # -----------------------------------------------------
-
     try:
         event = stripe.Webhook.construct_event(
             payload=payload,
             sig_header=sig_header,
             secret=endpoint_secret,
         )
-        print("EVENT OBJECT TYPE:", type(event["data"]["object"]))
-        print("EVENT OBJECT:", event["data"]["object"])
-
     except ValueError:
         logger.exception("Invalid Stripe webhook payload.")
         return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
-
     except stripe.error.SignatureVerificationError:
         logger.exception("Invalid Stripe webhook signature.")
         return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
 
     event_type = event["type"]
-
     event_data = event["data"]["object"].to_dict()
 
-    metadata = event_data.get("metadata", {})
-    payment_type = metadata.get("payment_type")
-
     try:
-
         # =====================================================
         # CHECKOUT SESSION COMPLETED
         # =====================================================
-
         if event_type == "checkout.session.completed":
-
             metadata = event_data.get("metadata", {}) or {}
             payment_type = metadata.get("payment_type")
 
             if payment_type == "booking":
-
                 BookingPaymentService.process_webhook(event, raw_json=request.data)
-
             elif payment_type == "subscription":
-
                 SubscriptionWebhookService.process(event)
-
             else:
-
-                logger.warning(
-                    "Unknown payment_type received: %s",
-                    payment_type,
-                )
+                logger.warning("Unknown payment_type received: %s", payment_type)
 
         # =====================================================
         # SUBSCRIPTION EVENTS
         # =====================================================
-
         elif event_type in [
             "invoice.paid",
             "invoice.payment_failed",
         ]:
-
             SubscriptionWebhookService.process(event)
 
         # =====================================================
         # BOOKING PAYMENT EVENTS
         # =====================================================
-
         elif event_type in [
             "payment_intent.payment_failed",
             "charge.refunded",
             "checkout.session.expired",
         ]:
-
             BookingPaymentService.process_webhook(event, raw_json=request.data)
 
-        else:
+        # =====================================================
+        # CONNECT WITHDRAWAL PAYOUT EVENTS (🔗 STEP 7 ENUM UPDATED)
+        # =====================================================
+        elif event_type in [
+            "payout.paid",
+            "payout.failed",
+            "payout.canceled"
+        ]:
+            payout_id = event_data.get("id")
+            
+            with transaction.atomic():
+                try:
+                    # Match the unique payout ID tracked on your WithdrawalRequest model
+                    withdrawal = WithdrawalRequest.objects.select_for_update().get(stripe_payout_id=payout_id)
+                except WithdrawalRequest.DoesNotExist:
+                    logger.warning("Withdrawal request record not found for payout: %s", payout_id)
+                    return HttpResponse(status=status.HTTP_200_OK)
 
-            logger.info(
-                "Ignoring unsupported Stripe event: %s",
-                event_type,
-            )
+                wallet = Wallet.objects.select_for_update().get(id=withdrawal.wallet_id)
+                user = wallet.user
+
+                # 🟢 STRIPE CONFIRMS SUCCESS
+                if event_type == "payout.paid":
+                    if withdrawal.status != WithdrawalRequest.WithdrawalStatus.COMPLETED:
+                        withdrawal.status = WithdrawalRequest.WithdrawalStatus.COMPLETED
+                        withdrawal.completed_at = timezone.now()
+                        withdrawal.save(update_fields=["status", "completed_at"])
+
+                        # Update total payout amounts
+                        wallet.total_withdrawn += withdrawal.amount
+                        wallet.save(update_fields=["total_withdrawn"])
+
+                        # Create the historical withdrawal ledger record using explicit Model Enums
+                        WalletTransaction.objects.create(
+                            wallet=wallet,
+                            type=WalletTransaction.TransactionType.WITHDRAWAL,
+                            amount=-withdrawal.amount,
+                            status=WalletTransaction.TransactionStatus.COMPLETED,
+                            reference=withdrawal.stripe_payout_id,
+                            description=f"Withdrawal settled safely to bank account profile."
+                        )
+                        
+                        # 🔔 Trigger Notifications and Email delivery pipelines on successful commit
+                        transaction.on_commit(lambda: create_bulk_notifications(
+                            users=[user],
+                            title="Withdrawal Completed",
+                            message=f"Success! Your payout of ${withdrawal.amount} has cleared and settled in your bank account."
+                        ))
+                        
+                        try:
+                            from apps.notifications.utils.email import send_withdrawal_completed_email
+                            transaction.on_commit(lambda: send_withdrawal_completed_email(user, withdrawal))
+                        except ImportError:
+                            logger.warning("send_withdrawal_completed_email function missing or not found.")
+
+                # 🔴 STRIPE CONFIRMS BANK REJECTION / CANCELLATION
+                elif event_type in ["payout.failed", "payout.canceled"]:
+                    if withdrawal.status != WithdrawalRequest.WithdrawalStatus.FAILED:
+                        withdrawal.status = WithdrawalRequest.WithdrawalStatus.FAILED
+                        withdrawal.rejection_reason = event_data.get("failure_message") or "Stripe bank clearance failure."
+                        withdrawal.save(update_fields=["status", "rejection_reason"])
+
+                        # Revert frozen liquidity back to user liquid available balance
+                        balance_before = wallet.available_balance
+                        wallet.available_balance += withdrawal.amount
+                        wallet.save(update_fields=["available_balance"])
+
+                        # Create a reversal logging trace using your exact Model Enums
+                        WalletTransaction.objects.create(
+                            wallet=wallet,
+                            type=WalletTransaction.TransactionType.REFUND,
+                            amount=withdrawal.amount,
+                            status=WalletTransaction.TransactionStatus.COMPLETED,
+                            reference=payout_id,
+                            description=f"Bank Clearance Failed: {withdrawal.rejection_reason}. Funds returned to account balance."
+                        )
+
+                        # 🔔 Notify Failed Flow
+                        transaction.on_commit(lambda: create_bulk_notifications(
+                            users=[user],
+                            title="Withdrawal Failed",
+                            message=f"Your bank transfer of ${withdrawal.amount} could not clear. Funds have been returned to your wallet balance."
+                        ))
+
+        else:
+            logger.info("Ignoring unsupported Stripe event: %s", event_type)
 
     except Exception:
-
-        logger.exception(
-            "Stripe webhook processing failed for event: %s",
-            event_type,
-        )
-
-        return HttpResponse(
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        logger.exception("Stripe webhook processing failed for event: %s", event_type)
+        return HttpResponse(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     return HttpResponse(status=status.HTTP_200_OK)
-
-
-
 
 
 
@@ -849,3 +991,131 @@ class BookingPaymentHistoryListView(generics.ListAPIView):
             )
             .order_by("-created_at")
         )
+
+
+from django.http import HttpResponse
+
+import stripe
+from django.conf import settings
+from django.http import HttpResponse
+from django.contrib.auth import get_user_model
+from django.db import transaction
+
+# Ensure this matches the actual import path for your custom Stripe Account model
+# e.g., from apps.profiles.models import StripeAccount 
+# adjusting below based on your architecture:
+
+def stripe_connect_success_view(request):
+    """
+    Callback endpoint triggered when a user returns from Stripe onboarding.
+    Queries Stripe to sync account verification statuses in real-time.
+    """
+    user = request.user
+    
+    # Fallback if testing directly in browser session context without API token auth header
+    if not user.is_authenticated:
+        # For development testing, pick the user who initiated it or prompt login
+        # Here we attempt to fetch a fallback user or query string parameter if needed
+        user_id = request.GET.get("user_id")
+        User = get_user_model()
+        user = User.objects.filter(id=user_id).first() if user_id else None
+        
+    if not user:
+        return HttpResponse(
+            "<h3>Authentication Context Missing</h3><p>Please include ?user_id=<id> in your testing browser URL to simulate auth context.</p>", 
+            status=401
+        )
+
+    try:
+        # Fetch the user's linked Stripe profile record
+        # Adjust the related_name here if it's user.stripeaccount or user.stripe_profile
+        stripe_account_profile = user.stripe_account 
+    except Exception:
+        return HttpResponse("<h3>Error</h3><p>No Stripe Account profile linked to this user.</p>", status=400)
+
+    stripe_account_id = stripe_account_profile.stripe_account_id
+
+    try:
+        # 1. Retrieve current data directly from Stripe
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        account = stripe.Account.retrieve(stripe_account_id)
+
+        # 2. Update database flags in an atomic transaction blocks
+        with transaction.atomic():
+            # Refreshing the profile lock to avoid race conditions
+            profile = type(stripe_account_profile).objects.select_for_update().get(id=stripe_account_profile.id)
+            profile.payouts_enabled = account.payouts_enabled
+            profile.charges_enabled = account.charges_enabled
+            profile.details_submitted = account.details_submitted
+            profile.save(update_fields=["payouts_enabled", "charges_enabled", "details_submitted"])
+
+        # 3. Dynamic Visual Response based on their actual state
+        if profile.payouts_enabled and profile.details_submitted:
+            status_title = "✓ Connection Successful!"
+            status_color = "#00d68f"
+            status_desc = "Your Stripe Connected Account is fully verified, active, and configured for secure balance withdrawals."
+        else:
+            status_title = "⚠ Onboarding Incomplete"
+            status_color = "#e67e22"
+            status_desc = "Your account link was registered, but Stripe requires more identification documentation before your payouts can be unlocked."
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Onboarding Status</title>
+            <style>
+                body {{ font-family: system-ui, -apple-system, sans-serif; text-align: center; background: #f4f6f8; padding: 50px; color: #202124; }}
+                .card {{ max-width: 450px; background: white; padding: 40px; border-radius: 12px; margin: 0 auto; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }}
+                h1 {{ color: {status_color}; margin-bottom: 8px; }}
+                p {{ color: #5f6368; line-height: 1.5; }}
+                .badge-table {{ width: 100%; margin-top: 20px; border-collapse: collapse; }}
+                .badge-table td {{ padding: 8px 12px; font-size: 14px; text-align: left; border-bottom: 1px solid #f0f2f5; }}
+                .status-tag {{ font-weight: bold; float: right; color: {"#00a870" if profile.payouts_enabled else "#e67e22"}; }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>{status_title}</h1>
+                <p>{status_desc}</p>
+                <table class="badge-table">
+                    <tr><td>Details Submitted</td><td><span class="status-tag">{"True" if profile.details_submitted else "False"}</span></td></tr>
+                    <tr><td>Charges Enabled</td><td><span class="status-tag">{"True" if profile.charges_enabled else "False"}</span></td></tr>
+                    <tr><td>Payouts Enabled</td><td><span class="status-tag">{"True" if profile.payouts_enabled else "False"}</span></td></tr>
+                </table>
+                <p style="font-size: 13px; color: #70757a; margin-top: 24px;">You can safely close this browser tab or return to your application profile window.</p>
+            </div>
+        </body>
+        </html>
+        """
+        return HttpResponse(html_content, content_type="text/html")
+
+    except Exception as e:
+        logger.exception("Failed to verify return state with Stripe Connect.")
+        return HttpResponse(f"<h3>Verification Error</h3><p>{str(e)}</p>", status=500)
+
+
+def stripe_connect_refresh_view(request):
+    """Fallback expired onboarding renewal page."""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Session Expired</title>
+        <style>
+            body { font-family: system-ui, sans-serif; text-align: center; background: #f4f6f8; padding: 50px; color: #202124; }
+            .card { max-width: 450px; background: white; padding: 40px; border-radius: 12px; margin: 0 auto; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+            h1 { color: #e67e22; margin-bottom: 8px; }
+            p { color: #5f6368; line-height: 1.5; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Session Timeout</h1>
+            <p>Your secure verification setup link with Stripe has expired or been used already.</p>
+            <p>Please return to your wallet dashboard menu and click <strong>"Connect Bank"</strong> again to generate a new onboarding link.</p>
+        </div>
+    </body>
+    </html>
+    """
+    return HttpResponse(html_content, content_type="text/html")

@@ -11,7 +11,8 @@ from decimal import Decimal
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.conf import settings
-
+# 1. Change the import to look for your actual function name
+from apps.notifications.services import create_bulk_notifications
 from apps.wallets.models import Wallet, WithdrawalRequest, WalletTransaction
 from apps.notifications.services import notify_withdrawal_approved, notify_withdrawal_rejected
 
@@ -360,13 +361,21 @@ class AdminWithdrawalService:
             user = withdrawal.wallet.user
 
             # Verify onboarding status via your exact StripeConnectedAccount relationship
+            # ─── EXTRACTION & VERIFICATION CHECKS ───
             try:
                 stripe_account = user.stripe_account
             except Exception:
                 raise ValidationError("No Stripe Connected Account profile is linked to this user.")
 
+            # Step 3: Enforcement Guard Rails
+            if not stripe_account.details_submitted:
+                raise ValidationError("Finish Stripe onboarding profile registration details first.")
+
+            if not stripe_account.charges_enabled:
+                raise ValidationError("Charges capabilities are not enabled on this Connect sub-account profile.")
+
             if not stripe_account.payouts_enabled:
-                raise ValidationError("Complete Stripe onboarding first.")
+                raise ValidationError("Payout configurations are not enabled. Check bank clearance documentation requirements on Stripe.")
 
             # Temporarily transition state to APPROVED to prevent concurrent double-clicks
             withdrawal.status = WithdrawalRequest.WithdrawalStatus.APPROVED
@@ -380,25 +389,25 @@ class AdminWithdrawalService:
             amount_in_cents = int(float(withdrawal.amount) * 100)
             
             try:
-                # 1. Transfer funds from Platform Balance -> User Connected Account Balance
+                # 1. Transfer funds from Platform Balance -> User Connected Account Balance [Phase 1]
                 transfer = stripe.Transfer.create(
                     amount=amount_in_cents,
                     currency="usd",
-                    destination=stripe_account_id,  # using stripe_account.stripe_account_id
-                    transfer_group=f"WTH-{withdrawal.id}",
-                    description=f"Withdrawal transfer for Request #{withdrawal.id}"
+                    destination=stripe_account_id,
+                    transfer_group=f"withdrawal_{withdrawal.id}", # Match standard naming
+                    description=f"Withdrawal {withdrawal.id}"
                 )
 
-                # 2. Trigger Bank payout out of their Connected Account balance instantly
+                # 2. Trigger Bank payout out of their Connected Account balance instantly [Phase 2]
                 payout = stripe.Payout.create(
                     amount=amount_in_cents,
                     currency="usd",
-                    description=f"Withdrawal settlement to external bank account.",
                     stripe_account=stripe_account_id  # explicitly targets the connected account context
                 )
                 
                 stripe_response = {
                     "success": True,
+                    "transfer_id": transfer.id,
                     "payout_id": payout.id
                 }
 
@@ -415,24 +424,24 @@ class AdminWithdrawalService:
                 wallet = Wallet.objects.select_for_update().get(id=withdrawal.wallet_id)
 
                 if stripe_response.get("success") is True:
-                    # Success Flow
-                    wallet.total_withdrawn += withdrawal.amount
-                    wallet.save(update_fields=["total_withdrawn"])
+                    # Success Flow: Save tracking IDs to model fields [Phase 3]
+                    withdrawal.stripe_transfer_id = stripe_response["transfer_id"]
+                    withdrawal.stripe_payout_id = stripe_response["payout_id"]
+                    withdrawal.save(update_fields=["stripe_transfer_id", "stripe_payout_id"])
 
-                    withdrawal.status = WithdrawalRequest.WithdrawalStatus.COMPLETED
-                    withdrawal.save(update_fields=["status"])
-
+                    # Create a PENDING ledger entry. The Webhook will mark this COMPLETED [Phase 6]
                     WalletTransaction.objects.create(
                         wallet=wallet,
                         type="WITHDRAWAL",  
                         amount=-withdrawal.amount,     
-                        status="COMPLETED",
+                        status="PENDING", # Status is pending until bank clears it
                         balance_before=wallet.available_balance,
                         balance_after=wallet.available_balance,
-                        description=f"Stripe Connect Payout completed. Payout ID: {stripe_response.get('payout_id')}"
+                        reference=stripe_response["payout_id"],
+                        description=f"Stripe processing withdrawal. Reference: {stripe_response['payout_id']}"
                     )
 
-                    # 🔔 Trigger notification upon successful completion
+                    # 🔔 Trigger notification upon successful generation
                     transaction.on_commit(lambda: notify_withdrawal_approved(
                         user=wallet.user,
                         withdrawal=withdrawal,
@@ -464,7 +473,6 @@ class AdminWithdrawalService:
                     ))
 
             return withdrawal
-    
 
 
     @classmethod

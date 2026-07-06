@@ -99,7 +99,12 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 10
 }
 # Database
-# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
+# ==============================================================================
+# STRIPE CONNECT ONBOARDING REDIRECT CONFIGURATIONS
+# ==============================================================================
+# This overrides the hidden defaults and forces Stripe to redirect back to Django
+STRIPE_CONNECT_REFRESH_URL = "http://localhost:8000/api/connect/refresh/"
+STRIPE_CONNECT_RETURN_URL = "http://localhost:8000/api/connect/success/"
 
 
 DATABASES = {
