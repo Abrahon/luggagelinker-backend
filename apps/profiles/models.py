@@ -86,6 +86,10 @@ class Profile(models.Model):
         default=0.00,
         help_text="Average traveler rating.",
     )
+    completed_deliveries = models.PositiveIntegerField(default=0)
+
+    cancelled_deliveries = models.PositiveIntegerField(default=0)
+
 
     city = models.CharField(
         max_length=100,
