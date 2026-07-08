@@ -7,7 +7,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from cloudinary.models import CloudinaryField  
-from apps.disputes.enums import DisputeReason, DisputeStatus, ResolutionType
+from apps.disputes.enums import DisputeReason, DisputeStatus, ResolutionType,EvidenceType
 
 
 # Ensure you import your actual Booking model's choice enum class
@@ -145,16 +145,16 @@ class DisputeEvidence(models.Model):
     Verification files and assets submitted via Cloudinary by ecosystem users 
     to back up claims.
     """
-    class EvidenceType(models.TextChoices):
-        IMAGE = "IMAGE", "Image Proof"
-        VIDEO = "VIDEO", "Video Recording"
-        DOCUMENT = "DOCUMENT", "Document Verification"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     dispute = models.ForeignKey(Dispute, on_delete=models.CASCADE, related_name="evidence")
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     
-    evidence_type = models.CharField(max_length=15, choices=EvidenceType.choices, default=EvidenceType.IMAGE)
+    evidence_type = models.CharField(
+        max_length=15, 
+        choices=EvidenceType.choices, 
+        default=EvidenceType.DAMAGE_PHOTO
+    )
     file_attachment = CloudinaryField("file", folder="disputes/evidence/")  
     
     description = models.CharField(max_length=255, blank=True, help_text="Briefly explain what this proof substantiates.")

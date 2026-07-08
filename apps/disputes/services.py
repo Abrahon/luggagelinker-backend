@@ -157,34 +157,53 @@ class DisputeService:
         logger.info("Communication record entry %s added to dispute %s by user %s", message.id, dispute.id, sender.id)
         return message
 
+
+
     @staticmethod
     @transaction.atomic
-    def add_evidence(dispute_id, uploaded_by, file_object, evidence_type, notes="") -> DisputeEvidence:
+    def add_evidence(
+        dispute_id,
+        uploaded_by,
+        file_object,
+        evidence_type,
+        description=""
+    ) -> DisputeEvidence:
         """
-        Saves uploaded file proof layers into the database record securely.
-        Guarantees that files match valid workflow states and links them cleanly.
+        Save uploaded evidence for a dispute.
         """
-        dispute = DisputeService.get_dispute(dispute_id=dispute_id, user=uploaded_by)
+        dispute = DisputeService.get_dispute(
+            dispute_id=dispute_id,
+            user=uploaded_by
+        )
 
-        if dispute.status in [DisputeStatus.RESOLVED, DisputeStatus.REJECTED]:
-            raise ValidationError("Operational Error: File vault uploads are permanently locked for archived cases.")
+        if dispute.status in [
+            DisputeStatus.RESOLVED,
+            DisputeStatus.REJECTED,
+        ]:
+            raise ValidationError(
+                "Evidence cannot be uploaded because this dispute has been closed."
+            )
 
-        # Create the evidence data entry boundary record
         evidence = DisputeEvidence.objects.create(
             dispute=dispute,
             uploaded_by=uploaded_by,
-            file=file_object,
+            file_attachment=file_object,
             evidence_type=evidence_type,
-            notes=notes
+            description=description,
         )
 
-        # Update tracking status parameters across the transaction block bounds
         old_status = dispute.status
         dispute.last_updated_by = uploaded_by
 
         if dispute.status == DisputeStatus.WAITING_FOR_USER:
             dispute.status = DisputeStatus.UNDER_REVIEW
-            dispute.save(update_fields=["status", "updated_at", "last_updated_by"])
+            dispute.save(
+                update_fields=[
+                    "status",
+                    "updated_at",
+                    "last_updated_by",
+                ]
+            )
 
             DisputeHistory.objects.create(
                 dispute=dispute,
@@ -192,208 +211,24 @@ class DisputeService:
                 action=DisputeHistoryAction.EVIDENCE_SUBMITTED,
                 status_from=old_status,
                 status_to=DisputeStatus.UNDER_REVIEW,
-                notes=f"Document file matrix attached by {uploaded_by.email}. Review state restored."
+                notes=f"Evidence uploaded by {uploaded_by.email}.",
             )
         else:
-            dispute.save(update_fields=["updated_at", "last_updated_by"])
+            dispute.save(
+                update_fields=[
+                    "updated_at",
+                    "last_updated_by",
+                ]
+            )
 
         logger.info(
-            "Evidence payload file %s uploaded successfully", 
-            evidence.id, 
+            "Evidence %s uploaded successfully.",
+            evidence.id,
             extra={
                 "dispute": str(dispute.id),
+                "user": str(uploaded_by.id),
                 "type": evidence_type,
-                "user": str(uploaded_by.id)
-            }
+            },
         )
+
         return evidence
-
-
-
-
-
-# ==============================================================================
-# AUDIT TRAIL LOG SERIALIZER (READ-ONLY)
-# ==============================================================================
-class DisputeHistorySerializer(serializers.ModelSerializer):
-    """Read-only log output trace displaying historical system transitions."""
-    action_display = serializers.CharField(source="get_action_display", read_only=True)
-    status_from_display = serializers.CharField(source="get_status_from_display", read_only=True)
-    status_to_display = serializers.CharField(source="get_status_to_display", read_only=True)
-    actor_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = DisputeHistory
-        fields = [
-            "id", "actor", "actor_name", "action", "action_display",
-            "status_from", "status_from_display", "status_to", "status_to_display",
-            "notes", "created_at"
-        ]
-        read_only_fields = fields
-
-    def get_actor_name(self, obj):
-        actor = obj.actor
-        full_name = f"{actor.get_full_name()}".strip() if hasattr(actor, "get_full_name") else ""
-        return full_name if full_name else (getattr(actor, "username", "") or actor.email)
-
-
-# ==============================================================================
-# DISPUTE EVIDENCE SERIALIZER
-# ==============================================================================
-class DisputeEvidenceSerializer(serializers.ModelSerializer):
-    """Handles secure payload uploads and verification for dispute evidence files."""
-    # 🟢 Use your custom EvidenceType choice boundaries for safe validation parsing
-    evidence_type = serializers.ChoiceField(choices=EvidenceType.choices)
-    evidence_type_display = serializers.CharField(source="get_evidence_type_display", read_only=True)
-    uploaded_by_email = serializers.ReadOnlyField(source="uploaded_by.email")
-
-    class Meta:
-        model = DisputeEvidence
-        fields = [
-            "id", "dispute", "uploaded_by", "uploaded_by_email",
-            "file", "evidence_type", "evidence_type_display", "notes", "created_at"
-        ]
-        read_only_fields = ["id", "uploaded_by", "created_at"]
-
-    def validate_file(self, value):
-        """File guard checking attachment size constraints."""
-        max_size_mb = 10
-        if value.size > max_size_mb * 1024 * 1024:
-            raise serializers.ValidationError(f"File sizing limits exceeded. Maximum payload boundary: {max_size_mb}MB.")
-        return value
-
-    def validate(self, attrs):
-        """Validates that evidence can only be added to open or active disputes."""
-        dispute = attrs.get("dispute")
-        if dispute and dispute.status in [DisputeStatus.RESOLVED, DisputeStatus.REJECTED]:
-            raise serializers.ValidationError("File upload failure: Case file is permanently closed and archived.")
-        return attrs
-
-
-# ==============================================================================
-# DISPUTE CONVERSATION THREAD MESSAGE SERIALIZER
-# ==============================================================================
-class DisputeMessageSerializer(serializers.ModelSerializer):
-    """Transforms raw textual inputs into chronological dispute messaging feeds."""
-    sender_email = serializers.ReadOnlyField(source="sender.email")
-    sender_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = DisputeMessage
-        fields = ["id", "dispute", "sender", "sender_email", "sender_name", "message_text", "created_at"]
-        read_only_fields = ["id", "sender", "created_at"]
-
-    def get_sender_name(self, obj):
-        sender = obj.sender
-        full_name = f"{sender.get_full_name()}".strip() if hasattr(sender, "get_full_name") else ""
-        return full_name if full_name else (getattr(sender, "username", "") or sender.email)
-
-    def validate(self, attrs):
-        """Enforces message thread restrictions on finalized archives."""
-        dispute = attrs.get("dispute")
-        if dispute and dispute.status in [DisputeStatus.RESOLVED, DisputeStatus.REJECTED]:
-            raise serializers.ValidationError("Thread Locked: Cannot transmit updates on a resolved dispute ledger.")
-        return attrs
-
-
-# ==============================================================================
-# USER INITIALIZATION FIELD GENERATION SERIALIZER
-# ==============================================================================
-class CreateDisputeSerializer(serializers.ModelSerializer):
-    """Validates structural balance and authority limitations on creation endpoints."""
-    booking_id = serializers.UUIDField(write_only=True)
-
-    class Meta:
-        model = Dispute
-        fields = ["booking_id", "reason", "description", "disputed_amount"]
-
-    def validate(self, attrs):
-        user = self.context["request"].user
-        booking_id = attrs["booking_id"]
-        disputed_amount = attrs["disputed_amount"]
-
-        # 1. Look up target reference context object mapping
-        try:
-            booking = Booking.objects.get(id=booking_id)
-        except Booking.DoesNotExist:
-            raise serializers.ValidationError({"booking_id": "Target booking reference location went missing."})
-
-        # 2. Authority context checking
-        if user != booking.sender and user != booking.traveler:
-            raise serializers.ValidationError("Access Denied: You must be an explicit party to this transaction to claim a dispute.")
-
-        # 3. Duplicate checks
-        if Dispute.objects.filter(booking=booking).exists():
-            raise serializers.ValidationError("A dispute ledger already exists for this package routing contract assignment.")
-
-        # 4. Escrow status locking check
-        try:
-            payment = BookingPayment.objects.get(booking=booking)
-        except BookingPayment.DoesNotExist:
-            raise serializers.ValidationError("Financial ledger transaction trace error: Payment not logged.")
-
-        if payment.status != BookingPaymentStatus.AUTHORIZED:
-            raise serializers.ValidationError(f"Escrow Hold Missing: Cannot dispute unless funds are locked. Current Status: {payment.status}")
-
-        # 5. Financial volume checks
-        if disputed_amount <= Decimal("0.00"):
-            raise serializers.ValidationError({"disputed_amount": "Disputed monetary allocations must be greater than zero."})
-        
-        if disputed_amount > booking.agreed_reward:
-            raise serializers.ValidationError({"disputed_amount": f"Disputed value limits exceeded. Bound max ceiling: {booking.agreed_reward}"})
-
-        # Attach booking into validated data context output pipeline
-        attrs["booking"] = booking
-        return attrs
-
-
-# ==============================================================================
-# CLIENT STANDARD DATA PRESENTATION DISPUTE SERIALIZER
-# ==============================================================================
-class DisputeSerializer(serializers.ModelSerializer):
-    """Clean data view optimized for client-side presentation layers (Senders & Travelers)."""
-    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    resolution_display = serializers.CharField(source="get_resolution_display", read_only=True)
-    
-    messages = DisputeMessageSerializer(many=True, read_only=True)
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Dispute
-        fields = [
-            "id", "booking", "opened_by", "against_user", "reason", "reason_display",
-            "description", "disputed_amount", "status", "status_display",
-            "resolution", "resolution_display", "messages", "evidence", "created_at", "updated_at"
-        ]
-        read_only_fields = fields # All mutations for users go through discrete action endpoints
-
-
-# ==============================================================================
-# PLATFORM ADMINISTRATIVE MODERATION DISPUTE SERIALIZER
-# ==============================================================================
-class AdminDisputeSerializer(serializers.ModelSerializer):
-    """Full-visibility management serializer tailored for administrative back-office panels."""
-    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    resolution_display = serializers.CharField(source="get_resolution_display", read_only=True)
-    
-    opened_by_email = serializers.ReadOnlyField(source="opened_by.email")
-    against_user_email = serializers.ReadOnlyField(source="against_user.email")
-    assigned_admin_email = serializers.ReadOnlyField(source="assigned_admin.email")
-    
-    messages = DisputeMessageSerializer(many=True, read_only=True)
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
-    history = DisputeHistorySerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Dispute
-        fields = [
-            "id", "booking", "opened_by", "opened_by_email", "against_user", "against_user_email",
-            "assigned_admin", "assigned_admin_email", "reason", "reason_display", "description", 
-            "disputed_amount", "status", "status_display", "resolution", "resolution_display", 
-            "admin_notes", "resolved_by", "resolved_at", "messages", "evidence", "history", 
-            "created_at", "updated_at"
-        ]
-        # Admin interfaces manipulate rows through deliberate class services, not raw model binding
-        read_only_fields = [f for f in fields if f not in ["admin_notes"]]

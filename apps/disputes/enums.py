@@ -1,9 +1,4 @@
-# ==============================================================================
-# ENUMS / TEXT CHOICES
-# ==============================================================================
-
 from django.db import models
-
 
 # ==============================================================================
 # DISPUTE HISTORY ACTIONS
@@ -11,7 +6,8 @@ from django.db import models
 
 class DisputeHistoryAction(models.TextChoices):
     """System-level actions recorded in the immutable audit trail."""
-
+    OPEN = "OPEN", "Open"
+    OPENED = "OPENED", "Opened"  # 🟢 Fixed: Both attributes are now distinct and unique!
     CREATED = "CREATED", "Dispute Case Initialized"
     ASSIGNED = "ASSIGNED", "Moderator Assigned"
     EVIDENCE_ADDED = "EVIDENCE_ADDED", "User Evidence Uploaded"
@@ -31,7 +27,6 @@ class DisputeHistoryAction(models.TextChoices):
 
 class DisputeStatus(models.TextChoices):
     """Current workflow state of a dispute."""
-
     OPEN = "OPEN", "Open"
     UNDER_REVIEW = "UNDER_REVIEW", "Under Review"
     WAITING_FOR_USER = "WAITING_FOR_USER", "Waiting for User"
@@ -46,7 +41,6 @@ class DisputeStatus(models.TextChoices):
 
 class DisputeReason(models.TextChoices):
     """Reason selected when opening a dispute."""
-
     DAMAGED_CARGO = "DAMAGED_CARGO", "Items Damaged Upon Delivery"
     MISSING_ITEMS = "MISSING_ITEMS", "Items Missing From Shipment"
     NO_SHOW = "NO_SHOW", "Traveler Failed to Meet/Deliver"
@@ -60,8 +54,20 @@ class DisputeReason(models.TextChoices):
 
 class ResolutionType(models.TextChoices):
     """Final resolution applied by an administrator."""
-
     REFUND = "REFUND", "Refund Sender"
     RELEASE_ESCROW = "RELEASE_ESCROW", "Release Escrow"
     PARTIAL_REFUND = "PARTIAL_REFUND", "Partial Refund"
     NO_ACTION = "NO_ACTION", "No Action"
+
+
+# ==============================================================================
+# EVIDENCE TYPE ATTACHMENTS
+# ==============================================================================
+
+class EvidenceType(models.TextChoices):
+    """Physical verification media format categories."""
+    IMAGE = "IMAGE", "Image"  # 🟢 Added explicit fallback choice matching your models default
+    DAMAGE_PHOTO = "DAMAGE_PHOTO", "Damage Photo"
+    RECEIPT = "RECEIPT", "Receipt"
+    CHAT_LOG = "CHAT_LOG", "Chat Log"
+    OTHER = "OTHER", "Other"

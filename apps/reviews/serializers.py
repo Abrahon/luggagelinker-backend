@@ -78,3 +78,139 @@ class ReviewSerializer(serializers.ModelSerializer):
         """
         validated_data['sender'] = self.context['request'].user
         return super().create(validated_data)
+
+
+
+
+from rest_framework import serializers
+from django.utils import timezone
+
+from .models import Report
+from apps.bookings.models import Booking
+
+
+class ReportSerializer(serializers.ModelSerializer):
+    reporter_email = serializers.ReadOnlyField(source="reporter.email")
+    reported_user_email = serializers.ReadOnlyField(source="reported_user.email")
+    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = Report
+        fields = [
+            "id",
+            "reporter",
+            "reporter_email",
+            "reported_user",
+            "reported_user_email",
+            "booking",
+            "reason",
+            "reason_display",
+            "description",
+            "status",
+            "status_display",
+            "assigned_admin",
+            "admin_notes",
+            "resolved_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = (
+            "id",
+            "reporter",
+            "status",
+            "assigned_admin",
+            "admin_notes",
+            "resolved_at",
+            "created_at",
+            "updated_at",
+        )
+
+
+class CreateReportSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Report
+        fields = (
+            "reported_user",
+            "booking",
+            "reason",
+            "description",
+        )
+
+    def validate_description(self, value):
+        value = value.strip()
+
+        if len(value) < 15:
+            raise serializers.ValidationError(
+                "Please provide a detailed description (minimum 15 characters)."
+            )
+
+        return value
+
+    def validate(self, attrs):
+
+        request = self.context["request"]
+        reporter = request.user
+
+        reported_user = attrs["reported_user"]
+        booking = attrs.get("booking")
+
+        if reporter == reported_user:
+            raise serializers.ValidationError(
+                {"reported_user": "You cannot report yourself."}
+            )
+
+        if booking:
+
+            if booking.status != "COMPLETED":
+                raise serializers.ValidationError(
+                    {
+                        "booking": "Reports can only be submitted for completed bookings."
+                    }
+                )
+
+            if reporter not in [booking.sender, booking.traveler]:
+                raise serializers.ValidationError(
+                    {
+                        "booking": "You are not associated with this booking."
+                    }
+                )
+
+            if reported_user not in [booking.sender, booking.traveler]:
+                raise serializers.ValidationError(
+                    {
+                        "reported_user": "Reported user is not part of this booking."
+                    }
+                )
+
+            if reporter == booking.sender and reported_user != booking.traveler:
+                raise serializers.ValidationError(
+                    {
+                        "reported_user": "Sender can only report the assigned traveler."
+                    }
+                )
+
+            if reporter == booking.traveler and reported_user != booking.sender:
+                raise serializers.ValidationError(
+                    {
+                        "reported_user": "Traveler can only report the sender."
+                    }
+                )
+
+        exists = Report.objects.filter(
+            reporter=reporter,
+            reported_user=reported_user,
+            booking=booking,
+        ).exists()
+
+        if exists:
+            raise serializers.ValidationError(
+                "You have already submitted a report for this booking."
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        validated_data["reporter"] = self.context["request"].user
+        return super().create(validated_data)
