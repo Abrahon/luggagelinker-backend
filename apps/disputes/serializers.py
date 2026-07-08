@@ -3,6 +3,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from .models import Dispute, DisputeEvidence, DisputeMessage
+from django.contrib.auth import get_user_model
+from .models import DisputeHistory
 
 User = get_user_model()
 
@@ -165,3 +167,66 @@ class AdminDisputeSerializer(serializers.ModelSerializer):
             attrs['resolved_at'] = timezone.now()
 
         return attrs
+
+
+
+
+
+class DisputeHistorySerializer(serializers.ModelSerializer):
+    """
+    Read-only audit serializer transforming the immutable structural history 
+    timeline logs for admin dashboards and client tracking states.
+    """
+    # Expose the human-readable display titles from your TextChoices enums
+    action_display = serializers.CharField(source="get_action_display", read_only=True)
+    status_from_display = serializers.CharField(source="get_status_from_display", read_only=True)
+    status_to_display = serializers.CharField(source="get_status_to_display", read_only=True)
+    
+    # Audit participant signatures
+    actor_email = serializers.ReadOnlyField(source="actor.email")
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DisputeHistory
+        fields = [
+            "id",
+            "dispute",
+            "actor",
+            "actor_email",
+            "actor_name",
+            "action",
+            "action_display",
+            "status_from",
+            "status_from_display",
+            "status_to",
+            "status_to_display",
+            "notes",
+            "created_at"
+        ]
+        # Audit trails must remain read-only across all endpoints to prevent system tampering
+        read_only_fields = fields
+
+    def get_actor_name(self, obj):
+        """Safely generates a fallback name for UI presentation."""
+        actor = obj.actor
+        full_name = f"{actor.get_full_name()}".strip()
+        if full_name:
+            return full_name
+        return actor.username if hasattr(actor, "username") else actor.email
+
+
+class AdminDisputeSerializer(serializers.ModelSerializer):
+    # 👇 Add this nested relationship line right here
+    history = DisputeHistorySerializer(many=True, read_only=True)
+    
+    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
+    messages = DisputeMessageSerializer(many=True, read_only=True)
+    # ... keep your existing attributes ...
+
+    class Meta:
+        model = Dispute
+        fields = [
+            'id', 'booking', 'opened_by', 'against_user', 'status',
+            'evidence', 'messages', 'history', # 👈 Make sure it's added here
+            # ... keep your remaining field declarations ...
+        ]

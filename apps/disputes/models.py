@@ -223,7 +223,7 @@ class DisputeHistory(models.Model):
         max_length=30, 
         choices=DisputeStatus.choices,
         blank=True, 
-        null=True,  # Allowed to be null for the initial "CREATED" action
+        null=True, 
         help_text="Previous status before the action."
     )
     status_to = models.CharField(
