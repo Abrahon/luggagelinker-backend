@@ -193,3 +193,55 @@ class DisputeMessage(models.Model):
 
     def __str__(self):
         return f"Message by {self.sender.email} on Dispute {self.dispute.id}"
+
+
+
+import uuid
+from django.db import models
+from django.conf import settings
+
+# Import the enums you created
+from apps.disputes.enums import DisputeHistoryAction,DisputeStatus
+
+class DisputeHistory(models.Model):
+    """
+    Immutable audit ledger capturing every atomic transition, status shift, 
+    and monetary modification executed on a dispute case file.
+    """
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Note: Use a string 'Dispute' if the Dispute model is defined below this one to avoid reference errors
+    dispute = models.ForeignKey('Dispute', on_delete=models.CASCADE, related_name="history")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    
+    action = models.CharField(
+        max_length=50, 
+        choices=DisputeHistoryAction.choices,
+        help_text="System-level action captured in the audit trail."
+    )
+    status_from = models.CharField(
+        max_length=30, 
+        choices=DisputeStatus.choices,
+        blank=True, 
+        null=True,  # Allowed to be null for the initial "CREATED" action
+        help_text="Previous status before the action."
+    )
+    status_to = models.CharField(
+        max_length=30, 
+        choices=DisputeStatus.choices,
+        help_text="New status after the action."
+    )
+    
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Dispute History Log"
+        verbose_name_plural = "Dispute History Logs"
+        indexes = [
+            models.Index(fields=["dispute", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.get_action_display()} on Dispute {self.dispute_id} by User {self.actor_id}"
