@@ -8,17 +8,15 @@ from .models import Dispute, DisputeHistory
 from .services import DisputeService
 from apps.disputes.enums import DisputeStatus, ResolutionType, DisputeHistoryAction
 
-# 💳 Concrete internal service layouts
+# 💳 Internal application imports
 from apps.payment.services import BookingPaymentService
 from apps.payment.models import BookingPayment, BookingPaymentStatus
+from apps.bookings.models import BookingStatus  # Enums for point #1
 from apps.wallets.services import WalletService
 from apps.notifications.services import (
-    notify_dispute_resolved,
-    notify_dispute_evidence_requested,
-    notify_refund_completed,
-    notify_wallet_credited
+    notify_dispute_resolution,          # 👈 Your new function
+    notify_dispute_evidence_requested,  # 👈 Reverted function
 )
-
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +24,7 @@ class AdminDisputeService:
 
     @staticmethod
     def _verify_admin_clearance(admin_user):
+        """Standardized structural permission gatekeeper."""
         if not admin_user.is_staff and not admin_user.is_superuser:
             raise ValidationError("Permission Denied: Only platform administrators can perform this action.")
 
@@ -73,6 +72,10 @@ class AdminDisputeService:
         if dispute.status != DisputeStatus.UNDER_REVIEW:
             raise ValidationError(f"Invalid status state: Cannot request evidence unless ticket is UNDER_REVIEW. Current: {dispute.status}")
 
+        # ✅ Fix #2: Verify dispute belongs to assigned admin before making updates
+        if dispute.assigned_admin and dispute.assigned_admin != admin_user:
+            raise ValidationError("This dispute is assigned to another administrator.")
+
         old_status = dispute.status
         dispute.status = DisputeStatus.WAITING_FOR_USER
         dispute.last_updated_by = admin_user
@@ -97,19 +100,27 @@ class AdminDisputeService:
 
     @staticmethod
     @transaction.atomic
-    def resolve(dispute_id, admin_user, resolution_type, admin_notes="", refund_ratio=decimal.Decimal("1.00")) -> Dispute:
+    def resolve(dispute_id, admin_user, resolution_type, admin_notes="", refund_ratio="1.00") -> Dispute:
         AdminDisputeService._verify_admin_clearance(admin_user)
         
-        if not isinstance(refund_ratio, decimal.Decimal):
-            raise ValidationError("Precision Error: refund_ratio parameters must be an explicit decimal instance.")
+        # ✅ Fix #4: Accept input types (strings/floats) gracefully and convert safely to Decimal
+        try:
+            refund_ratio = decimal.Decimal(str(refund_ratio))
+        except (decimal.InvalidOperation, ValueError):
+            raise ValidationError("Invalid refund ratio parameter. Must be a valid numerical representation.")
             
         try:
             dispute = Dispute.objects.select_for_update().select_related('booking').get(id=dispute_id)
         except Dispute.DoesNotExist:
             raise ValidationError("Dispute not found.")
         
-        if dispute.status in [DisputeStatus.RESOLVED, DisputeStatus.REJECTED]:
-            raise ValidationError("This dispute ledger instance has already been finalized.")
+        # ✅ Fix #3: Prevent resolving unreviewed or already closed disputes
+        if dispute.status not in [DisputeStatus.UNDER_REVIEW, DisputeStatus.WAITING_FOR_USER]:
+            raise ValidationError(f"Workflow State Error: Cannot resolve a dispute in '{dispute.status}' status.")
+
+        # ✅ Fix #2: Verify dispute belongs to the assigning moderator
+        if dispute.assigned_admin and dispute.assigned_admin != admin_user:
+            raise ValidationError("This dispute is assigned to another administrator.")
 
         old_status = dispute.status
         booking = dispute.booking
@@ -125,15 +136,14 @@ class AdminDisputeService:
             dispute.status = DisputeStatus.RESOLVED
             dispute.resolution = ResolutionType.REFUND
             
-            # Use your built-in payment service infrastructure directly
+            # ✅ Fix #7: BookingPaymentService propagates errors natively; if Stripe fails, this transaction rolls back cleanly
             BookingPaymentService.refund(payment=payment)
             WalletService.refund_escrow_to_sender(booking=booking, amount=total_held)
             
-            booking.payment_status = "REFUNDED"
-            booking.status = "CANCELLED"
+            # ✅ Fix #1: Eliminated string literals for status parameters
+            booking.payment_status = BookingPaymentStatus.REFUNDED
+            booking.status = BookingStatus.CANCELLED
             booking.save(update_fields=["status", "payment_status"])
-
-            transaction.on_commit(lambda: notify_refund_completed(user=booking.sender, booking=booking, amount=total_held))
 
         elif resolution_type == ResolutionType.RELEASE_ESCROW:
             dispute.status = DisputeStatus.RESOLVED
@@ -142,11 +152,9 @@ class AdminDisputeService:
             BookingPaymentService.release(payment=payment)
             WalletService.release_escrow_to_traveler(booking=booking, amount=total_held)
             
-            booking.payment_status = "PAID"
-            booking.status = "COMPLETED"
+            booking.payment_status = BookingPaymentStatus.CAPTURED
+            booking.status = BookingStatus.COMPLETED
             booking.save(update_fields=["status", "payment_status"])
-
-            transaction.on_commit(lambda: notify_wallet_credited(user=booking.traveler, booking=booking, amount=total_held))
 
         elif resolution_type == ResolutionType.PARTIAL_REFUND:
             if not (decimal.Decimal("0.01") <= refund_ratio <= decimal.Decimal("0.99")):
@@ -161,32 +169,41 @@ class AdminDisputeService:
             BookingPaymentService.partial_refund(payment=payment, refund_to_sender=refund_to_sender, payout_to_traveler=payout_to_traveler)
             WalletService.split_partial_escrow(booking=booking, sender_amt=refund_to_sender, traveler_amt=payout_to_traveler)
             
-            booking.payment_status = "PARTIALLY_REFUNDED"
-            booking.status = "COMPLETED"
+            booking.payment_status = BookingPaymentStatus.PARTIALLY_REFUNDED
+            booking.status = BookingStatus.COMPLETED
             booking.save(update_fields=["status", "payment_status"])
-
-            transaction.on_commit(lambda: notify_refund_completed(user=booking.sender, booking=booking, amount=refund_to_sender))
-            transaction.on_commit(lambda: notify_wallet_credited(user=booking.traveler, booking=booking, amount=payout_to_traveler))
 
         elif resolution_type == ResolutionType.NO_ACTION:
             dispute.status = DisputeStatus.REJECTED
             dispute.resolution = ResolutionType.NO_ACTION
             
-            booking.status = "COMPLETED"
+            booking.status = BookingStatus.COMPLETED
             booking.save(update_fields=["status"])
 
         else:
             raise ValidationError(f"Invalid execution resolution choice type strategy: {resolution_type}")
 
+        # Commit final administrative variables
         dispute.admin_notes = admin_notes
         dispute.resolved_by = admin_user
         dispute.resolved_at = timezone.now()
         dispute.last_updated_by = admin_user
         dispute.sender_notified = True
         dispute.traveler_notified = True
-        dispute.save()
+        
+        # ✅ Fix #8: Optimized save routine using strict update_fields
+        dispute.save(update_fields=[
+            "status",
+            "resolution",
+            "admin_notes",
+            "resolved_by",
+            "resolved_at",
+            "last_updated_by",
+            "sender_notified",
+            "traveler_notified",
+            "updated_at"
+        ])
 
-        # Route matching execution string label for standard logging mappings
         history_action_map = {
             ResolutionType.REFUND: DisputeHistoryAction.RESOLVED_REFUND,
             ResolutionType.RELEASE_ESCROW: DisputeHistoryAction.RESOLVED_RELEASE,
@@ -203,10 +220,19 @@ class AdminDisputeService:
             notes=f"Verdict applied: {resolution_type}. Admin notes: {admin_notes}"
         )
 
-        logger.info("Dispute %s resolved by %s using %s", dispute.id, admin_user.id, resolution_type)
+        # ✅ Fix #9: Replaced basic string interpolation with structured logging context metrics
+        logger.info(
+            "Dispute %s resolved seamlessly",
+            dispute.id,
+            extra={
+                "admin": str(admin_user.id),
+                "booking": str(booking.id),
+                "resolution": resolution_type,
+                "refund_ratio": str(refund_ratio)
+            }
+        )
 
-        # Notify endpoints post transactional database commitment phase bounds
-        transaction.on_commit(lambda: notify_dispute_resolved(user=booking.sender, dispute=dispute, resolution_type=resolution_type))
-        transaction.on_commit(lambda: notify_dispute_resolved(user=booking.traveler, dispute=dispute, resolution_type=resolution_type))
+        # ✅ Fix #5: Unified resolution engine to notify all active structural parties at once
+        transaction.on_commit(lambda: notify_dispute_resolution(dispute))
 
         return dispute

@@ -320,7 +320,6 @@
 #         object_id=str(review.id),
 #         action_url=f"/reviews/{review.id}/",
 #     )
-
 """
 ==========================================================
 NOTIFICATION SERVICES
@@ -332,8 +331,6 @@ Every module uses this service to ensure uniform message distribution.
 
 import logging
 from django.db import transaction
-
-from apps import disputes
 from .models import Notification, NotificationType
 
 logger = logging.getLogger(__name__)
@@ -438,7 +435,7 @@ def mark_all_notifications_as_read(user):
 
 
 # ==========================================================
-# DISPUTE MODULE INTEGRATIONS ⚖️
+# DISPUTE MODULE INTEGRATIONS ⚖️ (Standalone Functions)
 # ==========================================================
 
 def notify_dispute_opened(*, user, dispute):
@@ -461,7 +458,7 @@ def notify_dispute_evidence_requested(*, user, dispute):
         message="An administrator has requested additional supporting evidence for your active dispute file.",
         notification_type=NotificationType.BOOKING,
         object_id=dispute.id,
-        action_url=f"/disputes/{disputes.id}/",
+        action_url=f"/disputes/{dispute.id}/",
     )
 
 
@@ -477,11 +474,39 @@ def notify_dispute_resolved(*, user, dispute, resolution_type):
     )
 
 
+def notify_dispute_resolution(dispute):
+    """
+    New function: Dispatches resolution alerts to both parties at the same time.
+    Perfect for clean importing within AdminDisputeService.
+    """
+    booking = dispute.booking
+    resolution_label = dispute.get_resolution_display() if hasattr(dispute, 'get_resolution_display') else dispute.resolution
+    message_text = f"Dispute case #{dispute.id} has been resolved via: {resolution_label}."
+
+    # Notify Payer / Sender
+    create_notification(
+        user=booking.sender,
+        title="Dispute Verdict Rendered ⚖️",
+        message=message_text,
+        notification_type=NotificationType.PAYMENT,
+        object_id=dispute.id,
+        action_url=f"/disputes/{dispute.id}/",
+    )
+    # Notify Receiver / Traveler
+    return create_notification(
+        user=booking.traveler,
+        title="Dispute Verdict Rendered ⚖️",
+        message=message_text,
+        notification_type=NotificationType.PAYMENT,
+        object_id=dispute.id,
+        action_url=f"/disputes/{dispute.id}/",
+    )
+
+
 # ==========================================================
 # WALLET CREDITED
 # ==========================================================
 def notify_wallet_credited(*, user, booking, amount):
-    # Safe handling if tracking_number or id is preferred
     tracking = getattr(booking, 'tracking_number', booking.id)
     return create_notification(
         user=user,
@@ -552,7 +577,6 @@ def notify_review_received(*, user, review):
     """
     Notify traveler that a new review has been received.
     """
-    # 🔄 Fix: Fallback protection logic for name fields across user variations
     sender = review.sender
     sender_name = f"{sender.get_full_name()}".strip() if hasattr(sender, 'get_full_name') else ""
     if not sender_name:
@@ -562,7 +586,7 @@ def notify_review_received(*, user, review):
         user=user,
         title="New Review Received ⭐",
         message=f"You received a {review.rating}★ review from {sender_name}.",
-        notification_type=NotificationType.REVIEW,  # 🔄 Fix: Unified types mapping
+        notification_type=NotificationType.REVIEW,
         object_id=str(review.id),
         action_url=f"/reviews/{review.id}/",
     )
