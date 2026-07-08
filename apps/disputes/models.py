@@ -7,6 +7,8 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from cloudinary.models import CloudinaryField  
+from apps.disputes.enums import DisputeReason, DisputeStatus, ResolutionType
+
 
 # Ensure you import your actual Booking model's choice enum class
 # Example: from apps.bookings.models import BookingStatus
@@ -17,26 +19,7 @@ class Dispute(models.Model):
     Production-grade management engine tracking transactional escrow holds, 
     operational life cycles, and administrative arbitrations.
     """
-    class DisputeStatus(models.TextChoices):
-        OPEN = "OPEN", "Open"
-        UNDER_REVIEW = "UNDER_REVIEW", "Under Review"
-        WAITING_FOR_USER = "WAITING_FOR_USER", "Waiting for User"
-        RESOLVED = "RESOLVED", "Resolved"
-        REJECTED = "REJECTED", "Rejected"
-        CLOSED = "CLOSED", "Closed"
 
-    class DisputeReason(models.TextChoices):
-        DAMAGED_CARGO = "DAMAGED_CARGO", "Items Damaged Upon Delivery"
-        MISSING_ITEMS = "MISSING_ITEMS", "Items Missing From Shipment"
-        NO_SHOW = "NO_SHOW", "Traveler Failed to Meet/Deliver"
-        DELAYED_DELIVERY = "DELAYED_DELIVERY", "Unacceptable Delivery Delay"
-        OTHER = "OTHER", "Other Policy Violation"
-
-    class ResolutionType(models.TextChoices):
-        REFUND = "REFUND", "Refund Sender"
-        RELEASE_ESCROW = "RELEASE_ESCROW", "Release Escrow"
-        PARTIAL_REFUND = "PARTIAL_REFUND", "Partial Refund"
-        NO_ACTION = "NO_ACTION", "No Action"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
@@ -83,9 +66,24 @@ class Dispute(models.Model):
         help_text="Audit tracker of the last user or admin to alter this ticket state."
     )
     
-    reason = models.CharField(max_length=30, choices=DisputeReason.choices, default=DisputeReason.OTHER)
-    status = models.CharField(max_length=30, choices=DisputeStatus.choices, default=DisputeStatus.OPEN)
-    resolution = models.CharField(max_length=30, choices=ResolutionType.choices, blank=True)
+    reason = models.CharField(
+        max_length=30,
+        choices=DisputeReason.choices,
+        default=DisputeReason.OTHER,
+    )
+
+    status = models.CharField(
+        max_length=30,
+        choices=DisputeStatus.choices,
+        default=DisputeStatus.OPEN,
+    )
+
+    resolution = models.CharField(
+        max_length=30,
+        choices=ResolutionType.choices,
+        blank=True,
+        null=True,
+    )
     
     description = models.TextField(max_length=2000, help_text="Detailed narrative describing the incident.")
     admin_notes = models.TextField(max_length=2000, blank=True, help_text="Internal confidential workspace logs for admins.")
