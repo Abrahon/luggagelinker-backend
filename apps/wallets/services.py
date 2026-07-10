@@ -273,11 +273,21 @@ class WalletService:
         wallet.save(update_fields=["available_balance"])
 
         # Instantiate tracking structural state row
+        # Inside apps/wallets/services.py -> WalletService.withdraw Method:
+        # Change your model instantiation block to look like this:
+
+        # Instantiate tracking structural state row
         withdrawal = WithdrawalRequest.objects.create(
             wallet=wallet,
             amount=amount,
-            bank_account_info=bank_account_info,
-            status="PENDING"
+            status="PENDING",
+            method=bank_account_info.get("method", "BANK"), # fallback support
+            # 🟢 FIX: Flatten the fields out into the object parameters dynamically
+            account_name=bank_account_info.get("account_name"),
+            account_number=bank_account_info.get("account_number"),
+            bank_name=bank_account_info.get("bank_name"),
+            branch_name=bank_account_info.get("branch_name"),
+            routing_number=bank_account_info.get("routing_number"),
         )
 
         # Record systemic audit transaction entry
@@ -300,6 +310,9 @@ class WalletService:
 
         logger.info(f"Withdrawal request {withdrawal.id} filed for user {user.id}")
         return withdrawal
+    
+
+
 
     @classmethod
     @transaction.atomic
@@ -379,7 +392,7 @@ class AdminWithdrawalService:
     @classmethod
     def approve_withdrawal(cls, withdrawal_id: str, admin_user) -> WithdrawalRequest:
         
-        # ─── PHASE 1: ROW SELECTION, ONBOARDING AND VALIDATION CHECKS ───
+        # ─── PHASE 1: ROW SELECTION AND METHOD-SPECIFIC VALIDATION CHECKS ───
         with transaction.atomic():
             try:
                 withdrawal = WithdrawalRequest.objects.select_for_update().get(id=withdrawal_id)
@@ -390,50 +403,52 @@ class AdminWithdrawalService:
                 raise ValidationError(f"Cannot process an already processed request ({withdrawal.status}).")
 
             user = withdrawal.wallet.user
+            stripe_account_id = None
 
-            # Verify onboarding status via your exact StripeConnectedAccount relationship
-            # ─── EXTRACTION & VERIFICATION CHECKS ───
-            try:
-                stripe_account = user.stripe_account
-            except Exception:
-                raise ValidationError("No Stripe Connected Account profile is linked to this user.")
+            # 🟢 FIX: Wrap the Stripe onboarding guard rails so they ONLY apply to STRIPE method cashouts
+            if withdrawal.method == WithdrawalRequest.WithdrawalMethod.STRIPE:
+                try:
+                    stripe_account = user.stripe_account
+                except Exception:
+                    raise ValidationError("No Stripe Connected Account profile is linked to this user.")
 
-            # Step 3: Enforcement Guard Rails
-            if not stripe_account.details_submitted:
-                raise ValidationError("Finish Stripe onboarding profile registration details first.")
+                if not stripe_account.details_submitted:
+                    raise ValidationError("Finish Stripe onboarding profile registration details first.")
 
-            if not stripe_account.charges_enabled:
-                raise ValidationError("Charges capabilities are not enabled on this Connect sub-account profile.")
+                if not stripe_account.charges_enabled:
+                    raise ValidationError("Charges capabilities are not enabled on this Connect sub-account profile.")
 
-            if not stripe_account.payouts_enabled:
-                raise ValidationError("Payout configurations are not enabled. Check bank clearance documentation requirements on Stripe.")
+                if not stripe_account.payouts_enabled:
+                    raise ValidationError("Payout configurations are not enabled. Check bank clearance documentation requirements on Stripe.")
+
+                # Keep a read-only variable of the target account ID for Phase 2
+                stripe_account_id = stripe_account.stripe_account_id
 
             # Temporarily transition state to APPROVED to prevent concurrent double-clicks
             withdrawal.status = WithdrawalRequest.WithdrawalStatus.APPROVED
             withdrawal.save(update_fields=["status"])
 
-            # Keep a read-only variable of the target account ID for Phase 2
-            stripe_account_id = stripe_account.stripe_account_id
-
         # ─── PHASE 2: EXTERNAL STRIPE API EXECUTION (OUTSIDE DATABASE LOCK) ───
+        stripe_response = None
+
         if withdrawal.method == WithdrawalRequest.WithdrawalMethod.STRIPE:
             amount_in_cents = int(float(withdrawal.amount) * 100)
             
             try:
-                # 1. Transfer funds from Platform Balance -> User Connected Account Balance [Phase 1]
+                # 1. Transfer funds from Platform Balance -> User Connected Account Balance
                 transfer = stripe.Transfer.create(
                     amount=amount_in_cents,
                     currency="usd",
                     destination=stripe_account_id,
-                    transfer_group=f"withdrawal_{withdrawal.id}", # Match standard naming
+                    transfer_group=f"withdrawal_{withdrawal.id}",
                     description=f"Withdrawal {withdrawal.id}"
                 )
 
-                # 2. Trigger Bank payout out of their Connected Account balance instantly [Phase 2]
+                # 2. Trigger Bank payout out of their Connected Account balance instantly
                 payout = stripe.Payout.create(
                     amount=amount_in_cents,
                     currency="usd",
-                    stripe_account=stripe_account_id  # explicitly targets the connected account context
+                    stripe_account=stripe_account_id
                 )
                 
                 stripe_response = {
@@ -449,36 +464,35 @@ class AdminWithdrawalService:
                     "error_message": e.user_message or str(e)
                 }
 
-            # ─── PHASE 3: FINAL BALANCE AND LEDGER RESOLUTIONS ───
-            with transaction.atomic():
-                withdrawal = WithdrawalRequest.objects.select_for_update().get(id=withdrawal_id)
-                wallet = Wallet.objects.select_for_update().get(id=withdrawal.wallet_id)
+        # ─── PHASE 3: FINAL BALANCE AND LEDGER RESOLUTIONS ───
+        with transaction.atomic():
+            withdrawal = WithdrawalRequest.objects.select_for_update().get(id=withdrawal_id)
+            wallet = Wallet.objects.select_for_update().get(id=withdrawal.wallet_id)
 
+            # 🟢 STRIPE EXECUTION ROUTE RESULTS
+            if withdrawal.method == WithdrawalRequest.WithdrawalMethod.STRIPE and stripe_response:
                 if stripe_response.get("success") is True:
-                    # Success Flow: Save tracking IDs to model fields [Phase 3]
                     withdrawal.stripe_transfer_id = stripe_response["transfer_id"]
                     withdrawal.stripe_payout_id = stripe_response["payout_id"]
                     withdrawal.save(update_fields=["stripe_transfer_id", "stripe_payout_id"])
 
-                    # Create a PENDING ledger entry. The Webhook will mark this COMPLETED [Phase 6]
                     WalletTransaction.objects.create(
                         wallet=wallet,
                         type="WITHDRAWAL",  
                         amount=-withdrawal.amount,     
-                        status="PENDING", # Status is pending until bank clears it
+                        status="PENDING",
                         balance_before=wallet.available_balance,
                         balance_after=wallet.available_balance,
                         reference=stripe_response["payout_id"],
                         description=f"Stripe processing withdrawal. Reference: {stripe_response['payout_id']}"
                     )
 
-                    # 🔔 Trigger notification upon successful generation
                     transaction.on_commit(lambda: notify_withdrawal_approved(
                         user=wallet.user,
                         withdrawal=withdrawal,
                     ))
                 else:
-                    # Gateway Error Flow -> Automatically return frozen liquidity back home
+                    # Stripe Gateway Failed Reversal Flow
                     withdrawal.status = WithdrawalRequest.WithdrawalStatus.FAILED
                     withdrawal.rejection_reason = stripe_response.get("error_message")
                     withdrawal.save(update_fields=["status", "rejection_reason"])
@@ -497,14 +511,37 @@ class AdminWithdrawalService:
                         description=f"Stripe transaction failed: {stripe_response.get('error_message')}. Funds returned to account balance."
                     )
 
-                    # 🔔 Trigger notification upon failure
                     transaction.on_commit(lambda: notify_withdrawal_rejected(
                         user=wallet.user,
                         withdrawal=withdrawal,
                     ))
 
-            return withdrawal
+            # 🟢 MANUAL / STANDARD BANK EXECUTION ROUTE
+            else:
+                # For manual bank payouts, advance straight to COMPLETED (or leave as PENDING if using ACH file exports)
+                withdrawal.status = WithdrawalRequest.WithdrawalStatus.COMPLETED
+                withdrawal.save(update_fields=["status"])
 
+                wallet.total_withdrawn += withdrawal.amount
+                wallet.save(update_fields=["total_withdrawn"])
+
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    type="WITHDRAWAL",  
+                    amount=-withdrawal.amount,     
+                    status="COMPLETED",
+                    balance_before=wallet.available_balance,
+                    balance_after=wallet.available_balance,
+                    reference=f"MAN-BANK-{withdrawal.id}",
+                    description=f"Manual bank routing payout successfully processed and approved."
+                )
+
+                transaction.on_commit(lambda: notify_withdrawal_approved(
+                    user=wallet.user,
+                    withdrawal=withdrawal,
+                ))
+
+        return withdrawal
 
     @classmethod
     @transaction.atomic

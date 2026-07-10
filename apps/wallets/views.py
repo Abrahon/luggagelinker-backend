@@ -21,7 +21,7 @@ from apps.wallets.models import WithdrawalRequest
 from apps.wallets.serializers import WithdrawalRequestSerializer
 from core.permissions import IsPlatformAdmin
 from apps.wallets.services import AdminWithdrawalService
-
+from django.core.exceptions import ValidationError
 from .models import Wallet, WalletTransaction, WithdrawalRequest
 from .serializers import (
     WalletSerializer, 
@@ -29,6 +29,17 @@ from .serializers import (
     WithdrawalRequestSerializer
 )
 from .services import WalletService
+from django.db import transaction
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+
+from apps.wallets.models import StripeConnectedAccount
+from apps.wallets.serializers import StripeConnectSerializer
+from apps.payment.providers.stripe_connect import StripeConnectProvider
+import stripe  
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,32 +109,59 @@ class WithdrawalRequestView(generics.ListCreateAPIView):
         return WithdrawalRequest.objects.filter(wallet__user=self.request.user)
 
     def create(self, request, *args, **kwargs):
-        """Overrides the POST creation hooks to inject business service layer rules."""
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        amount = Decimal(str(serializer.validated_data["amount"]))
-        bank_account_info = serializer.validated_data["bank_account_info"]
-
-        try:
-            withdrawal = WalletService.request_withdrawal(
-                user=request.user,
-                amount=amount,
-                bank_account_info=bank_account_info
-            )
-            response_serializer = self.get_serializer(withdrawal)
-            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+            """Overrides the POST creation hooks to inject business service layer rules."""
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
             
-        except ValueError as exc:
-            return Response(
-                {"non_field_errors": [str(exc)]}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except Exception:
-            return Response(
-                {"detail": "An error occurred while routing payment systems processing."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            amount = Decimal(str(serializer.validated_data["amount"]))
+            withdrawal_type = str(serializer.validated_data.get("method", "")).upper()
+
+            # Safely retrieve bank_account_info using .get() to prevent KeyErrors
+            bank_account_info = serializer.validated_data.get("bank_account_info", None)
+
+            # Fallback: If bank fields are sent flat at the root level, capture them dynamically
+            # Fallback: If bank fields are sent flat at the root level, capture them dynamically
+            if not bank_account_info:
+                bank_account_info = {
+                    "method": withdrawal_type,
+                    "account_name": serializer.validated_data.get("account_name"),
+                    "account_number": serializer.validated_data.get("account_number"),
+                    "bank_name": serializer.validated_data.get("bank_name"),
+                    "branch_name": serializer.validated_data.get("branch_name"),
+                    "routing_number": serializer.validated_data.get("routing_number"),
+                }
+            
+            # 🟢 FIX: Ensure bank_account_info is an empty dict if None, preventing JSONField database issues
+            if bank_account_info is None:
+                bank_account_info = {}
+
+            try:
+                # 🟢 FIX: Routed successfully to WalletService.withdraw matching your exact schema signature
+                withdrawal = WalletService.withdraw(
+                    user=request.user,
+                    amount=amount,
+                    bank_account_info=bank_account_info
+                )
+                response_serializer = self.get_serializer(withdrawal)
+                return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+                
+            except (ValueError, ValidationError) as exc:
+                # Cleanly catch both standard and Django ValidationErrors to pass up messaging strings
+                return Response(
+                    {"non_field_errors": [str(exc.message if hasattr(exc, 'message') else exc)]}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except Exception as e:
+                import traceback
+                logger.error("Withdrawal failure trace: %s", traceback.format_exc())
+                return Response(
+                    {
+                        "detail": "An error occurred while routing payment systems processing.",
+                        "debug_error": str(e)
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
 
 
 
@@ -349,17 +387,7 @@ class AdminAdjustBalanceView(generics.GenericAPIView):
 
 
 
-from django.db import transaction
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
 
-from apps.wallets.models import StripeConnectedAccount
-from apps.wallets.serializers import StripeConnectSerializer
-from apps.payment.providers.stripe_connect import StripeConnectProvider
-import stripe  
-logger = logging.getLogger(__name__)
 
 
 class CreateStripeConnectAccount(APIView):
