@@ -214,3 +214,60 @@ class KYCSerializer(serializers.ModelSerializer):
             })
 
         return super().update(instance, validated_data)
+
+
+
+
+# admin management from rest_framework import serializers
+from apps.kyc.models import KYC, KYCStatus
+
+
+class AdminUserSerializer(serializers.Serializer):
+    """Minimal representation of the user for admin readability."""
+    id = serializers.UUIDField()
+    email = serializers.EmailField()
+    first_name = serializers.CharField(source="profile.first_name", read_only=True)
+    last_name = serializers.CharField(source="profile.last_name", read_only=True)
+
+
+class AdminKYCDetailSerializer(serializers.ModelSerializer):
+    user = AdminUserSerializer(read_only=True)
+    verified_by_email = serializers.EmailField(source="verified_by.email", read_only=True)
+
+    class Meta:
+        model = KYC
+        fields = (
+            "id",
+            "user",
+            "id_type",
+            "id_number",
+            "document_front",
+            "document_back",
+            "selfie",
+            "status",
+            "rejection_reason",
+            "verified_at",
+            "verified_by_email",
+            "created_at",
+            "updated_at",
+        )
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Safe URL parsing for Cloudinary fields
+        data["document_front"] = instance.document_front.url if instance.document_front else None
+        data["document_back"] = instance.document_back.url if instance.document_back else None
+        data["selfie"] = instance.selfie.url if instance.selfie else None
+        return data
+
+
+class KYCRejectSerializer(serializers.Serializer):
+    """Validates that a reason is supplied when rejection occurs."""
+    rejection_reason = serializers.CharField(
+        required=True, 
+        allow_blank=False,
+        error_messages={
+            "required": "You must provide a reason for rejecting this KYC application.",
+            "blank": "Rejection reason cannot be empty."
+        }
+    )
