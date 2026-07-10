@@ -31,6 +31,7 @@ class PaymentStatus(models.TextChoices):
     PENDING = "PENDING", "Pending"
     PAID = "PAID", "Paid"
     REFUNDED = "REFUNDED", "Refunded"
+    
 
 class Booking(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

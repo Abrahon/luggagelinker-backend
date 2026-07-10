@@ -166,7 +166,6 @@ class BookingPaymentService:
 
 
 
-
     @classmethod
     def process_webhook(cls, event, raw_json=None):
         """
@@ -206,7 +205,7 @@ class BookingPaymentService:
                     if payment_record.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
                         return
 
-                    # ✅ FIX: Convert the Stripe Event instance to a clean Python dict
+                    # Log the Stripe event record trace
                     StripeEventLog.objects.create(
                         event_id=event_id,
                         event_type=event_type,
@@ -214,21 +213,24 @@ class BookingPaymentService:
                     )
 
                     # ---------------------------------------------------------
-                    # 🟢 PHASE 4 INTEGRATION: Trigger Centralized Wallet Escrow
-                    # This safely locks up the funds from available -> pending balances
+                    # Trigger Centralized Wallet Escrow (Hold allocations)
                     # ---------------------------------------------------------
                     WalletService.hold_escrow(booking)
 
                     # ---------------------------------------------------------
-                    # 3. UPDATE BOOKING & PAYMENT STATES
+                    # 🟢 FIX: SEPARATION OF CONCERNS FIELD STATUS UPDATES
                     # ---------------------------------------------------------
-                    payment_record.status = BookingPaymentStatus.AUTHORIZED  # payment = AUTHORIZED
-                    payment_record.save(update_fields=["status"])
+                    # 1. ESCROW LEDGER RECORD STATUS: Set to AUTHORIZED (Locked on Hold)
+                    payment_record.status = BookingPaymentStatus.AUTHORIZED
+                    payment_record.authorized_at = timezone.now() 
+                    payment_record.save(update_fields=["status", "authorized_at"])
 
-                    booking.status = BookingStatus.CONFIRMED  # status = CONFIRMED
+                    # 2. SENDER CONTRACT WORKFLOW STATES: Mark as PAID and CONFIRMED
+                    booking.status = BookingStatus.CONFIRMED  
+                    booking.payment_status = PaymentStatus.PAID  # 👈 Added explicit assignment field tag here
 
                     # ---------------------------------------------------------
-                    # 4. GENERATE PIN HERE (Only if it doesn't already exist)
+                    # GENERATE PIN HERE (Only if it doesn't already exist)
                     # ---------------------------------------------------------
                     if not getattr(booking, "pickup_verification_pin", None):
                         secure_pin = str(secrets.randbelow(900000) + 100000)
@@ -237,9 +239,9 @@ class BookingPaymentService:
                         secure_pin = booking.pickup_verification_pin
 
                     # ---------------------------------------------------------
-                    # 5. SAVE PIN IN BOOKING MODEL
+                    # SAVE BOOKING STATES (Added payment_status to explicit track)
                     # ---------------------------------------------------------
-                    booking.save(update_fields=["status", "pickup_verification_pin"])
+                    booking.save(update_fields=["status", "payment_status", "pickup_verification_pin"])
                     logger.info("Escrow secured and PIN assigned for booking #%s", booking.tracking_number)
 
                 except BookingPayment.DoesNotExist:
@@ -250,7 +252,7 @@ class BookingPaymentService:
                     return
 
             # ---------------------------------------------------------
-            # 6. SEND EMAIL TO SENDER (Outside open row transaction locks)
+            # SEND EMAIL TO SENDER (Outside open row transaction locks)
             # ---------------------------------------------------------
             if booking and secure_pin:
                 try:
@@ -288,6 +290,7 @@ class BookingPaymentService:
                     pass
                 except Booking.DoesNotExist:
                     pass
+
 
 
     @classmethod

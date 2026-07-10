@@ -113,8 +113,6 @@ class BookingSerializer(serializers.ModelSerializer):
 
 # 
 
-
-
 class VerifyPickupPinSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)
     pickup_pin = serializers.CharField(max_length=6, min_length=6, required=True)
@@ -129,10 +127,31 @@ class VerifyPickupPinSerializer(serializers.Serializer):
         except Booking.DoesNotExist:
             raise serializers.ValidationError({"booking_id": _("Target booking contract instance not found.")})
 
-        # 1. State Guard: Enforce sequence integrity
-        if booking.status != BookingStatus.CONFIRMED:
-            raise serializers.ValidationError(_("Pickup cannot be performed unless transaction is CONFIRMED."))
+        # =====================================================================
+        # 1. State Guard: Support CONFIRMED (or PAID status flows)
+        # =====================================================================
+        # Adjust this list if your system considers PAYMENT_PENDING/PAID valid for pickup transitions
+        valid_pickup_statuses = [BookingStatus.CONFIRMED] 
+        
+        if booking.status == BookingStatus.PAYMENT_PENDING:
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        "Payment has not been completed yet. "
+                        "The sender must complete payment before pickup can be verified."
+                    )
+                }
+            )
 
+        if booking.status != BookingStatus.CONFIRMED:
+            raise serializers.ValidationError(
+                {
+                    "detail": (
+                        f"Pickup cannot be performed while the booking is '{booking.status}'. "
+                        "Only confirmed bookings are eligible for pickup verification."
+                    )
+                }
+            )
         # 2. Authentication Check: Only the assigned Traveler can submit the validation PIN
         request_user = self.context["request"].user
         if booking.traveler != request_user:
@@ -144,7 +163,6 @@ class VerifyPickupPinSerializer(serializers.Serializer):
 
         attrs["booking"] = booking
         return attrs
-
 
 
 

@@ -106,11 +106,6 @@ class BookingService:
 
 
 
-
-
-
-
-
     @staticmethod
     @transaction.atomic
     def respond_to_booking_request(booking_id, traveler, action):
@@ -210,6 +205,13 @@ class BookingLifecycleService:
             # Re-fetch with a row lock to guarantee absolute concurrency protection
             booking = Booking.objects.select_for_update().get(id=booking.id)
             
+            # Anti-Double execution check block
+            if booking.status == BookingStatus.PICKED_UP:
+                return booking
+                
+            if booking.status != BookingStatus.CONFIRMED:
+                raise DjangoValidationError(f"Cannot execute pickup state mutation from current status: {booking.status}")
+            
             # 🟢 Set status and the requested timestamp
             booking.status = BookingStatus.PICKED_UP
             booking.picked_up_at = timezone.now()
@@ -238,7 +240,6 @@ class BookingLifecycleService:
 
             logger.info(f"Booking {booking.id} successfully transitioned to PICKED_UP by service orchestration.")
             return booking
-
 
     @classmethod
     def execute_start_transit(cls, booking: Booking) -> Booking:
@@ -271,59 +272,6 @@ class BookingLifecycleService:
 
 
 
-    # @classmethod
-    # def verify_and_execute_delivery(cls, booking_or_id) -> Booking:
-
-    #     from django.db import transaction
-    #     from django.utils import timezone
-    #     from rest_framework.exceptions import ValidationError
-    #     from apps.wallets.models import WalletTransaction
-    #     from apps.wallets.services import WalletService
-    #     from apps.bookings.models import BookingStatus # Ensure this is imported
-
-    #     with transaction.atomic():
-            
-    #         # 🟢 FIXED: Extract UUID cleanly if instance object is passed
-    #         if isinstance(booking_or_id, Booking):
-    #             booking_id = booking_or_id.id
-    #         else:
-    #             booking_id = booking_or_id
-
-    #         booking = Booking.objects.select_for_update().get(id=booking_id)
-
-    #         # 1. Prevent double execution
-    #         if booking.status == BookingStatus.COMPLETED:
-    #             raise ValidationError("This delivery is already completed.")
-
-    #         # 2. 🟢 MODIFIED: Accept validation directly from the IN_TRANSIT workflow status state
-    #         if booking.status != BookingStatus.IN_TRANSIT:
-    #             raise ValidationError(
-    #                 f"Booking is not in a valid state for delivery confirmation. "
-    #                 f"Current status is: {booking.status}"
-    #             )
-
-    #         # 3. Ensure escrow exists
-    #         # 3. Ensure escrow exists
-    #         escrow_exists = WalletTransaction.objects.filter(
-    #             booking=booking,
-    #             type="ESCROW_HOLD",
-    #             status="PENDING"
-    #         ).exists()
-
-    #         if not escrow_exists:
-    #             raise ValidationError("No escrow found for this booking.")
-
-    #         # 4. Release escrow to traveler
-    #         WalletService.release_escrow_to_traveler(booking)
-
-    #         # 5. 🟢 MODIFIED: Update both delivery and completion timestamps at the same time
-    #         booking.status = BookingStatus.COMPLETED
-    #         booking.delivered_at = timezone.now()  # Marks physical drop-off time
-    #         booking.completed_at = timezone.now()  # Marks wallet settlement time
-            
-    #         booking.save(update_fields=["status", "delivered_at", "completed_at"])
-
-    #         return booking
 
 
     @classmethod

@@ -44,7 +44,13 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from .serializers import BookingPaymentHistorySerializer
 from apps.notifications.models import Notification, NotificationType 
+from django.http import HttpResponse
 
+import stripe
+from django.conf import settings
+from django.http import HttpResponse
+from django.contrib.auth import get_user_model
+from django.db import transaction
 from .serializers import InitiateBookingPaymentSerializer
 from .services import BookingPaymentService,SubscriptionWebhookService
 logger = logging.getLogger(__name__)
@@ -192,113 +198,6 @@ class CreateCheckoutSessionView(APIView):
 
 
 
-
-
-# @csrf_exempt
-# @api_view(["POST"])
-# @permission_classes([AllowAny])
-# def stripe_webhook(request):
-
-#     payload = request.body
-#     sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-#     endpoint_secret = settings.STRIPE_WEBHOOK_SECRET
-
-#     # -----------------------------------------------------
-#     # Verify Stripe Signature
-#     # -----------------------------------------------------
-
-#     try:
-#         event = stripe.Webhook.construct_event(
-#             payload=payload,
-#             sig_header=sig_header,
-#             secret=endpoint_secret,
-#         )
-#         print("EVENT OBJECT TYPE:", type(event["data"]["object"]))
-#         print("EVENT OBJECT:", event["data"]["object"])
-
-#     except ValueError:
-#         logger.exception("Invalid Stripe webhook payload.")
-#         return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
-
-#     except stripe.error.SignatureVerificationError:
-#         logger.exception("Invalid Stripe webhook signature.")
-#         return HttpResponse(status=status.HTTP_400_BAD_REQUEST)
-
-#     event_type = event["type"]
-
-#     event_data = event["data"]["object"].to_dict()
-
-#     metadata = event_data.get("metadata", {})
-#     payment_type = metadata.get("payment_type")
-
-#     try:
-
-#         # =====================================================
-#         # CHECKOUT SESSION COMPLETED
-#         # =====================================================
-
-#         if event_type == "checkout.session.completed":
-
-#             metadata = event_data.get("metadata", {}) or {}
-#             payment_type = metadata.get("payment_type")
-
-#             if payment_type == "booking":
-
-#                 BookingPaymentService.process_webhook(event, raw_json=request.data)
-
-#             elif payment_type == "subscription":
-
-#                 SubscriptionWebhookService.process(event)
-
-#             else:
-
-#                 logger.warning(
-#                     "Unknown payment_type received: %s",
-#                     payment_type,
-#                 )
-
-#         # =====================================================
-#         # SUBSCRIPTION EVENTS
-#         # =====================================================
-
-#         elif event_type in [
-#             "invoice.paid",
-#             "invoice.payment_failed",
-#         ]:
-
-#             SubscriptionWebhookService.process(event)
-
-#         # =====================================================
-#         # BOOKING PAYMENT EVENTS
-#         # =====================================================
-
-#         elif event_type in [
-#             "payment_intent.payment_failed",
-#             "charge.refunded",
-#             "checkout.session.expired",
-#         ]:
-
-#             BookingPaymentService.process_webhook(event, raw_json=request.data)
-
-#         else:
-
-#             logger.info(
-#                 "Ignoring unsupported Stripe event: %s",
-#                 event_type,
-#             )
-
-#     except Exception:
-
-#         logger.exception(
-#             "Stripe webhook processing failed for event: %s",
-#             event_type,
-#         )
-
-#         return HttpResponse(
-#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#         )
-
-#     return HttpResponse(status=status.HTTP_200_OK)
 
 
 from apps.notifications.services import create_bulk_notifications
@@ -467,204 +366,6 @@ def stripe_webhook(request):
 
 
 
-# class StripeWebhookView(APIView):
-#     authentication_classes = []
-#     permission_classes = [AllowAny]
-
-#     def post(self, request):
-#         payload = request.body
-#         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-
-#         if not sig_header:
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Missing Stripe signature.",
-#                 },
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         try:
-#             event = stripe.Webhook.construct_event(
-#                 payload=payload,
-#                 sig_header=sig_header,
-#                 secret=settings.STRIPE_WEBHOOK_SECRET,
-#             )
-
-#         except ValueError:
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Invalid payload.",
-#                 },
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         except stripe.error.SignatureVerificationError:
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Invalid Stripe signature.",
-#                 },
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         try:
-#             event_type = event["type"]
-#             data = event["data"]["object"].to_dict()
-
-#             print(f"Webhook Event: {event_type}")
-
-#             # =====================================================
-#             # CHECKOUT COMPLETED
-#             # =====================================================
-#             if event_type == "checkout.session.completed":
-
-#                 metadata = data.get("metadata", {})
-
-#                 payment_id = metadata.get("payment_id")
-#                 plan_id = metadata.get("plan_id")
-#                 user_id = metadata.get("user_id")
-
-#                 print("Metadata:", metadata)
-
-#                 if not all([payment_id, plan_id, user_id]):
-#                     return Response(
-#                         {
-#                             "success": False,
-#                             "message": "Missing metadata.",
-#                         },
-#                         status=status.HTTP_400_BAD_REQUEST,
-#                     )
-
-#                 with transaction.atomic():
-
-#                     payment = (
-#                         Payment.objects
-#                         .select_for_update()
-#                         .get(id=payment_id)
-#                     )
-
-#                     # Prevent duplicate processing
-#                     if payment.status == PaymentStatus.SUCCEEDED:
-#                         return Response({"received": True})
-
-#                     user = User.objects.get(id=user_id)
-#                     plan = Plan.objects.get(id=plan_id)
-
-#                     # Update payment
-#                     payment.status = PaymentStatus.SUCCEEDED
-#                     payment.stripe_payment_intent_id = data.get(
-#                         "payment_intent"
-#                     )
-#                     payment.stripe_customer_id = data.get("customer")
-#                     payment.paid_at = timezone.now()
-#                     payment.save()
-
-#                     # Expire previous subscriptions
-#                     Subscription.objects.filter(
-#                         user=user,
-#                         is_current=True,
-#                     ).update(
-#                         is_current=False,
-#                         status=SubscriptionStatus.EXPIRED,
-#                     )
-
-#                     # Create new subscription
-#                     subscription = Subscription.objects.create(
-#                         user=user,
-#                         plan=plan,
-#                         status=SubscriptionStatus.ACTIVE,
-#                         started_at=timezone.now(),
-#                         expires_at=timezone.now()
-#                         + timedelta(days=plan.duration_days),
-#                         is_current=True,
-#                     )
-
-#                     print("Payment Updated:", payment.id)
-#                     print("Subscription Created:", subscription.id)
-
-#             # =====================================================
-#             # PAYMENT FAILED
-#             # =====================================================
-#             elif event_type == "invoice.payment_failed":
-
-#                 payment_intent = data.get("payment_intent")
-
-#                 Payment.objects.filter(
-#                     stripe_payment_intent_id=payment_intent
-#                 ).update(
-#                     status=PaymentStatus.FAILED,
-#                     failure_reason="Stripe payment failed",
-#                 )
-
-#                 print("Payment Failed:", payment_intent)
-
-#             # =====================================================
-#             # INVOICE PAID (Backup)
-#             # =====================================================
-#             elif event_type == "invoice.paid":
-
-#                 payment_intent = data.get("payment_intent")
-
-#                 Payment.objects.filter(
-#                     stripe_payment_intent_id=payment_intent
-#                 ).update(
-#                     status=PaymentStatus.SUCCEEDED,
-#                     paid_at=timezone.now(),
-#                 )
-
-#                 print("Invoice Paid:", payment_intent)
-
-#             # =====================================================
-#             # IGNORE OTHER EVENTS
-#             # =====================================================
-#             else:
-#                 print(f"Ignoring event: {event_type}")
-
-#             return Response({"received": True}, status=status.HTTP_200_OK)
-
-#         except Payment.DoesNotExist:
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Payment not found.",
-#                 },
-#                 status=status.HTTP_404_NOT_FOUND,
-#             )
-
-#         except User.DoesNotExist:
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "User not found.",
-#                 },
-#                 status=status.HTTP_404_NOT_FOUND,
-#             )
-
-#         except Plan.DoesNotExist:
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Plan not found.",
-#                 },
-#                 status=status.HTTP_404_NOT_FOUND,
-#             )
-
-#         except Exception as e:
-#             traceback.print_exc()
-
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Webhook processing failed.",
-#                     "error": str(e),
-#                 },
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             )
-
-
-
 class PaymentHistoryView(generics.ListAPIView):
 
     serializer_class = PaymentSerializer
@@ -772,152 +473,6 @@ class BookingPaymentInitiateView(generics.CreateAPIView):
             )
 
 
-# from .models import BookingPayment, BookingPaymentLog, BookingPaymentStatus
-# # webhook for payment verification
-# @method_decorator(csrf_exempt, name="dispatch")
-# class StripeWebhookView(APIView):
-#     """
-#     Enterprise-grade Webhook Listener enforcing transaction idempotency, multi-event routing,
-#     global audit tracking, and cryptographic authenticity verification.
-#     """
-#     permission_classes = [AllowAny]
-
-#     def post(self, request, *args, **kwargs):
-#         payload = request.body
-#         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-#         webhook_secret = getattr(settings, "STRIPE_WEBHOOK_SECRET", "")
-
-#         event = None
-
-#         # 1. Cryptographic Signature Verification (Anti-Spoofing)
-#         try:
-#             event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-#         except (ValueError, stripe.error.SignatureVerificationError) as e:
-#             logger.error(f"Stripe Webhook signature verification rejected: {str(e)}")
-#             return HttpResponse(status=400)
-
-#         event_type = event["type"]
-
-#         # Convert StripeObject to a normal Python dict
-#         event_data = event["data"]["object"].to_dict()
-
-#         metadata = event_data.get("metadata", {})
-#         payment_id = metadata.get("booking_payment_id")
-
-
-#         # 4.  LOG EVERY WEBHOOK: Capture all incoming traffic immutably for debugging
-#         payment_instance = None
-#         if payment_id:
-#             try:
-#                 payment_instance = BookingPayment.objects.get(id=payment_id)
-#             except BookingPayment.DoesNotExist:
-#                 logger.warning(f"Webhook {event_type} contained an untrackable Payment ID: {payment_id}")
-
-#         BookingPaymentLog.objects.create(
-#             booking_payment=payment_instance,
-#             event_type=event_type,
-#             raw_payload=json.loads(payload.decode("utf-8")),
-#         )
-
-#         if not payment_instance:
-#             return HttpResponse(status=200)
-
-#         # 6. 🟢 WRAP WEBHOOK EXECUTION IN A DATABASE TRANSACTION BLOCK
-#         try:
-#             with transaction.atomic():
-#                 # Acquire a row lock to prevent race conditions from concurrent duplicate deliveries
-#                 payment = BookingPayment.objects.select_for_update().get(id=payment_instance.id)
-
-#                 # 1. & 3. 🟢 MULTI-EVENT HANDLING & VALIDATION STATUS CHECKING
-                
-#                 # --- EVENT A: CHECKOUT SESSION COMPLETED ---
-#                 if event_type == "checkout.session.completed":
-#                     # 3. 🟢 Verify payment status: explicitly check that it is actually "paid"
-#                     if event_data.get("payment_status") != "paid":
-#                         logger.warning(f"Session completed but payment status was unconfirmed: {event_data.get('payment_status')}")
-#                         return HttpResponse(status=200)
-
-#                     # 2. 🟢 Prevent duplicate webhook processing (Idempotency Guard)
-#                     if payment.status == BookingPaymentStatus.AUTHORIZED:
-#                         logger.info(f"Idempotency Triggered: Payment {payment.id} already authorized.")
-#                         return HttpResponse(status=200)
-
-#                     # Execute state progression and trip capacity adjustments
-#                     BookingPaymentService.verify_checkout(
-#                         payment=payment,
-#                         provider_session_id=event_data["id"],
-#                         final_transaction_id=event_data.get("payment_intent")
-#                     )
-
-#                     # Dispatch User Notifications
-#                     Notification.objects.create(
-#                         user=payment.payer,
-#                         title="Payment Secured in Escrow",
-#                         message=f"Your payment of {payment.amount} {payment.currency} for order #{payment.booking.tracking_number} is locked in escrow.",
-#                         notification_type=NotificationType.PAYMENT,
-#                         object_id=payment.booking.id,
-#                         action_url=f"/bookings/{payment.booking.id}/"
-#                     )
-#                     Notification.objects.create(
-#                         user=payment.payee,
-#                         title="Luggage Space Reserved",
-#                         message=f"The sender funded the escrow for order #{payment.booking.tracking_number}. Your reward balance is secured.",
-#                         notification_type=NotificationType.PAYMENT,
-#                         object_id=payment.booking.id,
-#                         action_url=f"/bookings/{payment.booking.id}/"
-#                     )
-
-#                 # --- EVENT B: CHECKOUT SESSION EXPIRED ---
-#                 elif event_type == "checkout.session.expired":
-#                     if payment.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
-#                         return HttpResponse(status=200)  # Safeguard active payments
-                        
-#                     BookingPaymentService.mark_failed(payment, reason="Stripe checkout redirection window expired.")
-                    
-#                     Notification.objects.create(
-#                         user=payment.payer,
-#                         title="Payment Redirection Expired",
-#                         message=f"Checkout session timed out for order #{payment.booking.tracking_number}. Please try initiating payment again.",
-#                         notification_type=NotificationType.PAYMENT,
-#                         object_id=payment.booking.id,
-#                     )
-
-#                 # --- EVENT C: PAYMENT INTENT FAILED ---
-#                 elif event_type == "payment_intent.payment_failed":
-#                     last_error = event_data.get("last_payment_error", {})
-#                     error_msg = last_error.get("message", "Declined by issuing bank.")
-                    
-#                     BookingPaymentService.mark_failed(payment, reason=f"Stripe Intent Failed: {error_msg}")
-                    
-#                     Notification.objects.create(
-#                         user=payment.payer,
-#                         title="Escrow Deposit Declined",
-#                         message=f"Transaction processing failed for order #{payment.booking.tracking_number}: {error_msg}",
-#                         notification_type=NotificationType.PAYMENT,
-#                         object_id=payment.booking.id,
-#                     )
-
-#                 # --- EVENT D: CHARGE REFUNDED ---
-#                 elif event_type == "charge.refunded":
-#                     if payment.status == BookingPaymentStatus.REFUNDED:
-#                         return HttpResponse(status=200)
-
-#                     BookingPaymentService.refund(payment)
-                    
-#                     Notification.objects.create(
-#                         user=payment.payer,
-#                         title="Funds Refunded Successfully",
-#                         message=f"Escrow settlement balance of {payment.amount} {payment.currency} has been returned to your original card issuer.",
-#                         notification_type=NotificationType.PAYMENT,
-#                         object_id=payment.booking.id,
-#                     )
-
-#         except Exception as e:
-#             logger.critical(f"Database error executing webhook updates: {str(e)}", exc_info=True)
-#             return HttpResponse(status=500)
-
-#         return HttpResponse(status=200)
-
 
 
 
@@ -968,10 +523,12 @@ class BookingPaymentReleaseView(APIView):
 
 logger = logging.getLogger(__name__)
 
+from django.db.models import Q
+
 class BookingPaymentHistoryListView(generics.ListAPIView):
     """
     Production API Endpoint to retrieve paginated, historical escrow booking payments 
-    initiated by the authenticated user (sender).
+    initiated by (or released to) the authenticated user.
     """
     serializer_class = BookingPaymentHistorySerializer
     permission_classes = [IsAuthenticated]
@@ -981,10 +538,12 @@ class BookingPaymentHistoryListView(generics.ListAPIView):
         
         logger.info("User %s requested their escrow booking payment history.", user.id)
 
-        # Optimization: Fetch booking and nested package records in a single JOIN query
+        # 🟢 FIX: Allow both Senders (who paid) and Travelers (who earned) to see the history
         return (
             BookingPayment.objects
-            .filter(booking__sender=user)
+            .filter(
+                Q(booking__sender=user) | Q(booking__traveler=user)
+            )
             .select_related(
                 "booking", 
                 "booking__package"
@@ -993,13 +552,7 @@ class BookingPaymentHistoryListView(generics.ListAPIView):
         )
 
 
-from django.http import HttpResponse
 
-import stripe
-from django.conf import settings
-from django.http import HttpResponse
-from django.contrib.auth import get_user_model
-from django.db import transaction
 
 
 # adjusting below based on your architecture:
