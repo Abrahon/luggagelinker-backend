@@ -18,18 +18,25 @@ https://docs.djangoproject.com/en/6.0/howto/deployment/asgi/
 import os
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.auth import AuthMiddlewareStack
-# import your chat routing here (e.g., from apps.chat.routing import websocket_urlpatterns)
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "my_project.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 
+# 🚨 CRITICAL: Initialize the HTTP ASGI application handler BEFORE importing consumers/routing
+# This ensures all standard models and system settings load properly in memory first.
 django_asgi_app = get_asgi_application()
 
+# Now safe to import your custom middleware and routes
+from apps.chat.middleware import JWTQueryAuthMiddleware
+from apps.chat.routing import websocket_urlpatterns
+
 application = ProtocolTypeRouter({
+    # Handles normal HTTP REST requests
     "http": django_asgi_app,
-    "websocket": AuthMiddlewareStack(
+    
+    # Handles persistent WebSocket connections with token security
+    "websocket": JWTQueryAuthMiddleware(
         URLRouter(
-            # websocket_urlpatterns goes here
+            websocket_urlpatterns  # 💡 The missing argument is now supplied here!
         )
     ),
 })
