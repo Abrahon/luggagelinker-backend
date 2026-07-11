@@ -39,7 +39,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-
+from apps.packages.serializers import PackageSerializer
+from apps.packages.services import PackageService  # 🧠 Import our service layer
 from .models import Package, PackageImage
 from .serializers import PackageImageSerializer
 from apps.matching.services.package_matching import run_package_matching
@@ -54,14 +55,16 @@ from .serializers import (
 
 
 
-class CreatePackageView(generics.CreateAPIView):
 
+
+
+
+class CreatePackageView(generics.CreateAPIView):
     serializer_class = PackageSerializer
     permission_classes = [IsAuthenticated]
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-
         serializer = self.get_serializer(
             data=request.data,
             context={"request": request},
@@ -69,28 +72,38 @@ class CreatePackageView(generics.CreateAPIView):
 
         try:
             serializer.is_valid(raise_exception=True)
-
+            
+            # 1. Save the basic package instance as a draft safely
             package = serializer.save()
 
-            run_package_matching(package)
-            
+            # 2. Run the decoupled safety engine to compute the risk score & verification_status
+            PackageService.process_and_evaluate_risk(package)
+
+            # 3. Try publishing via the business policy routing rule block
+            is_published = PackageService.publish_package(package)
+
+            # 4. SAFETY CHECK: Only match if it bypassed review barriers and went public!
+            if is_published:
+                run_package_matching(package)
+                user_message = "Package created and published successfully."
+            else:
+                user_message = "Package submitted successfully and is currently under administrative review."
 
             logger.info(
-                f"Package created successfully | "
-                f"Package={package.id} | User={request.user.id}"
+                f"Package processed | Package={package.id} | "
+                f"Status={package.status} | Verification={package.verification_status} | User={request.user.id}"
             )
 
             return Response(
                 {
                     "success": True,
-                    "message": "Package created successfully.",
+                    "message": user_message,
                     "data": PackageSerializer(package).data,
                 },
                 status=status.HTTP_201_CREATED,
             )
 
         except ValidationError as e:
-
             return Response(
                 {
                     "success": False,
@@ -101,20 +114,17 @@ class CreatePackageView(generics.CreateAPIView):
             )
 
         except Exception as e:
-
             logger.exception(
                 f"Package creation failed | User={request.user.id}"
             )
-
             return Response(
                 {
                     "success": False,
                     "message": "Unable to create package at this time.",
-                    "error": str(e),   # 👈 IMPORTANT for debugging
+                    "error": str(e),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
 
 
 class MyPackageListView(generics.ListAPIView):

@@ -5,8 +5,10 @@ from rest_framework import serializers
 from .models import Package, PackageImage
 
 from rest_framework import serializers
-
 from .models import PackageImage
+from decimal import Decimal
+from rest_framework import serializers
+from apps.packages.models import Package
 
 
 # ===========================================================
@@ -33,177 +35,160 @@ class PackageImageSerializer(serializers.ModelSerializer):
 # PACKAGE
 # ===========================================================
 
-
-
 class PackageSerializer(serializers.ModelSerializer):
-
+    # Nested fields representation
     images = PackageImageSerializer(
         many=True,
         read_only=True,
     )
 
     class Meta:
-
         model = Package
-
         fields = [
             "id",
             "sender",
-
             "title",
             "description",
             "category",
-
             "weight",
             "declared_value",
             "reward_amount",
             "currency",
-
             "pickup_country",
             "pickup_city",
             "pickup_address",
-
             "destination_country",
             "destination_city",
             "destination_address",
-
             "pickup_date",
             "latest_delivery_date",
-
             "is_fragile",
             "requires_signature",
             "is_public",
-
             "status",
             "is_active",
-
             "images",
-
+            # =========================================================================
+            # NEW COMPLIANCE, PROOF & STATE CHANNELS INCLUDED IN THE FIELD MATRIX
+            # =========================================================================
+            "declared_as_legal",
+            "terms_accepted",
+            "verification_status",
+            "risk_score",
+            "purchase_receipt",
+            "serial_number",
+            "imei",
+            "traveler_matches_listing",
+            "traveler_refusal_reason",
             "created_at",
             "updated_at",
         ]
-
         read_only_fields = [
             "id",
             "sender",
             "status",
             "is_active",
+            # State engines cannot be manipulated externally by raw payload injections
+            "verification_status",
+            "risk_score",
+            "traveler_matches_listing",
+            "traveler_refusal_reason",
             "created_at",
             "updated_at",
         ]
 
     # =========================
-    # CREATE
+    # COMPLIANCE VALIDATION
     # =========================
+    def validate_declared_as_legal(self, value):
+        if not value:
+            raise serializers.ValidationError("You must declare that this package contains only legal items.")
+        return value
 
-    def create(self, validated_data):
-
-        validated_data["sender"] = self.context["request"].user
-
-        return Package.objects.create(**validated_data)
+    def validate_terms_accepted(self, value):
+        if not value:
+            raise serializers.ValidationError("You must confirm that your photos accurately represent the package contents.")
+        return value
 
     # =========================
     # TITLE
     # =========================
-
     def validate_title(self, value):
-
         value = value.strip()
-
         if len(value) < 5:
             raise serializers.ValidationError("Title too short.")
-
         if len(value) > 200:
             raise serializers.ValidationError("Title too long.")
-
         return value
 
     # =========================
     # DESCRIPTION
     # =========================
-
     def validate_description(self, value):
-
         value = value.strip()
-
         if len(value) < 20:
             raise serializers.ValidationError("Description too short.")
-
         return value
 
     # =========================
     # WEIGHT
     # =========================
-
     def validate_weight(self, value):
-
         if value <= 0:
             raise serializers.ValidationError("Weight must be > 0.")
-
         if value > Decimal("100"):
             raise serializers.ValidationError("Max weight is 100 KG.")
-
         return value
 
     # =========================
     # DECLARED VALUE
     # =========================
-
     def validate_declared_value(self, value):
-
         if value < 0:
             raise serializers.ValidationError("Invalid declared value.")
-
         return value
 
     # =========================
     # REWARD
     # =========================
-
     def validate_reward_amount(self, value):
-
         if value <= 0:
             raise serializers.ValidationError("Reward must be > 0.")
-
         return value
 
     # =========================
-    # DATE VALIDATION
+    # CROSS-FIELD DATES/LOCATIONS ARCHITECTURE
     # =========================
-
     def validate(self, attrs):
-
         pickup_date = attrs.get("pickup_date")
         latest_delivery_date = attrs.get("latest_delivery_date")
 
         pickup_country = attrs.get("pickup_country")
         destination_country = attrs.get("destination_country")
-
         pickup_city = attrs.get("pickup_city")
         destination_city = attrs.get("destination_city")
 
-        # same city check
+        # 1. Location Integrity Boundary Checks
         if (
             pickup_country
             and destination_country
             and pickup_city
             and destination_city
-            and pickup_country.lower() == destination_country.lower()
-            and pickup_city.lower() == destination_city.lower()
+            and pickup_country.lower().strip() == destination_country.lower().strip()
+            and pickup_city.lower().strip() == destination_city.lower().strip()
         ):
             raise serializers.ValidationError({
-                "destination_city": "Pickup and destination cannot be same."
+                "destination_city": "Pickup and destination locations cannot match identical points."
             })
 
-        # date check
+        # 2. Timeline Consistency Check
         if pickup_date and latest_delivery_date:
             if latest_delivery_date < pickup_date:
                 raise serializers.ValidationError({
-                    "latest_delivery_date": "Must be after pickup date."
+                    "latest_delivery_date": "The delivery buffer cannot schedule before the primary pick-up window."
                 })
 
         return attrs
-
 
 
 # ==========================================================
