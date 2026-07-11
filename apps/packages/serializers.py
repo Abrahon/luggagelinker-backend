@@ -191,6 +191,37 @@ class PackageSerializer(serializers.ModelSerializer):
         return attrs
 
 
+
+# =========================================================================
+# STANDALONE INPUT VALIDATION SERIALIZERS
+# =========================================================================
+
+class AdminReviewSerializer(serializers.Serializer):
+    """Handles explicit datatype validation for admin oversight choices."""
+    approve = serializers.BooleanField(
+        required=True,
+        error_messages={"invalid": "The approve field must be a valid boolean (true or false)."}
+    )
+
+
+# class TravelerHandshakeSerializer(serializers.Serializer):
+#     """Handles explicit parameter verification during package pickup handoff."""
+#     traveler_matches_listing = serializers.BooleanField(required=True)
+#     traveler_refusal_reason = serializers.CharField(required=False, allow_blank=True)
+
+#     def validate(self, attrs):
+#         matches_listing = attrs.get("traveler_matches_listing")
+#         refusal_reason = attrs.get("traveler_refusal_reason", "").strip()
+
+#         # Enforce textual feedback constraint natively inside serialization validation rules
+#         if not matches_listing and not refusal_reason:
+#             raise serializers.ValidationError({
+#                 "traveler_refusal_reason": "A detailed explanation is required when rejecting a physical package parcel."
+#             })
+            
+#         return attrs
+    
+
 # ==========================================================
 # Package Image Response Serializer
 # ==========================================================

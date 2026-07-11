@@ -22,12 +22,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from apps.bookings.models import BookingStatus
 # 🟢 IMPORT THE LIFECYCLE SERVICE HERE
 from apps.bookings.services import BookingLifecycleService
-
-
-
-
-
-
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -266,40 +260,71 @@ class BookingRespondView(generics.UpdateAPIView):
 
 # picup verification view
 class BookingPickupVerificationView(generics.GenericAPIView):
-    """
-    Validates the 6-digit physical handoff authorization token provided by the Sender.
-    Delegates database updates and tracking mutations completely to the Service Layer.
-    """
+
     serializer_class = VerifyPickupPinSerializer
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data, context={"request": request})
+
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request},
+        )
+
         serializer.is_valid(raise_exception=True)
 
-        # Retrieve the validated booking instance mapped by the serializer
         booking = serializer.validated_data["booking"]
-        
 
+        # ============================================================
+        # Traveler refused package
+        # ============================================================
+        if serializer.validated_data["traveler_matches_listing"] is False:
+
+            BookingLifecycleService.refuse_pickup(
+                booking=booking,
+                reason=serializer.validated_data["traveler_refusal_reason"],
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": (
+                        "Pickup refused successfully. "
+                        "Booking cancelled and package sent for manual review."
+                    ),
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # ============================================================
+        # Traveler accepted package
+        # ============================================================
         try:
-            # 🟢 Execute business mutations via service routing
-            updated_booking = BookingLifecycleService.verify_and_execute_pickup(booking)
-            
-            
+
+            updated_booking = (
+                BookingLifecycleService.verify_and_execute_pickup(
+                    booking
+                )
+            )
+
             return Response(
                 {
                     "success": True,
                     "message": "Physical package handoff successfully authenticated.",
                     "current_status": updated_booking.status,
-                    "picked_up_at": updated_booking.picked_up_at
+                    "picked_up_at": updated_booking.picked_up_at,
                 },
-                status=status.HTTP_200_OK
+                status=status.HTTP_200_OK,
             )
-            
+
         except DjangoValidationError as e:
+
             return Response(
-                {"success": False, "message": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "success": False,
+                    "message": str(e),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
     
 

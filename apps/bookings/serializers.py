@@ -113,26 +113,84 @@ class BookingSerializer(serializers.ModelSerializer):
 
 # 
 
+# class VerifyPickupPinSerializer(serializers.Serializer):
+#     booking_id = serializers.UUIDField(required=True)
+#     pickup_pin = serializers.CharField(max_length=6, min_length=6, required=True)
+
+#     def validate(self, attrs):
+#         booking_id = attrs.get("booking_id")
+#         input_pin = attrs.get("pickup_pin")
+
+#         try:
+#             # Row lock the booking to handle the state alteration sequence cleanly
+#             booking = Booking.objects.get(id=booking_id)
+#         except Booking.DoesNotExist:
+#             raise serializers.ValidationError({"booking_id": _("Target booking contract instance not found.")})
+
+#         # =====================================================================
+#         # 1. State Guard: Support CONFIRMED (or PAID status flows)
+#         # =====================================================================
+#         # Adjust this list if your system considers PAYMENT_PENDING/PAID valid for pickup transitions
+#         valid_pickup_statuses = [BookingStatus.CONFIRMED] 
+        
+#         if booking.status == BookingStatus.PAYMENT_PENDING:
+#             raise serializers.ValidationError(
+#                 {
+#                     "detail": (
+#                         "Payment has not been completed yet. "
+#                         "The sender must complete payment before pickup can be verified."
+#                     )
+#                 }
+#             )
+
+#         if booking.status != BookingStatus.CONFIRMED:
+#             raise serializers.ValidationError(
+#                 {
+#                     "detail": (
+#                         f"Pickup cannot be performed while the booking is '{booking.status}'. "
+#                         "Only confirmed bookings are eligible for pickup verification."
+#                     )
+#                 }
+#             )
+#         # 2. Authentication Check: Only the assigned Traveler can submit the validation PIN
+#         request_user = self.context["request"].user
+#         if booking.traveler != request_user:
+#             raise serializers.ValidationError(_("Access Denied. Only the designated traveler can execute pickup clearances."))
+
+#         # 3. Security Check: Validate matching pin entries
+#         if booking.pickup_verification_pin != input_pin:
+#             raise serializers.ValidationError({"pickup_pin": _("Invalid security verification passcode pin code entry.")})
+
+#         attrs["booking"] = booking
+#         return attrs
+
 class VerifyPickupPinSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)
-    pickup_pin = serializers.CharField(max_length=6, min_length=6, required=True)
+
+    traveler_matches_listing = serializers.BooleanField(required=True)
+
+    pickup_pin = serializers.CharField(
+        max_length=6,
+        min_length=6,
+        required=False,
+        allow_blank=True,
+    )
+
+    traveler_refusal_reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
 
     def validate(self, attrs):
         booking_id = attrs.get("booking_id")
-        input_pin = attrs.get("pickup_pin")
 
         try:
-            # Row lock the booking to handle the state alteration sequence cleanly
             booking = Booking.objects.get(id=booking_id)
         except Booking.DoesNotExist:
-            raise serializers.ValidationError({"booking_id": _("Target booking contract instance not found.")})
+            raise serializers.ValidationError(
+                {"booking_id": _("Booking not found.")}
+            )
 
-        # =====================================================================
-        # 1. State Guard: Support CONFIRMED (or PAID status flows)
-        # =====================================================================
-        # Adjust this list if your system considers PAYMENT_PENDING/PAID valid for pickup transitions
-        valid_pickup_statuses = [BookingStatus.CONFIRMED] 
-        
         if booking.status == BookingStatus.PAYMENT_PENDING:
             raise serializers.ValidationError(
                 {
@@ -152,18 +210,53 @@ class VerifyPickupPinSerializer(serializers.Serializer):
                     )
                 }
             )
-        # 2. Authentication Check: Only the assigned Traveler can submit the validation PIN
-        request_user = self.context["request"].user
-        if booking.traveler != request_user:
-            raise serializers.ValidationError(_("Access Denied. Only the designated traveler can execute pickup clearances."))
 
-        # 3. Security Check: Validate matching pin entries
-        if booking.pickup_verification_pin != input_pin:
-            raise serializers.ValidationError({"pickup_pin": _("Invalid security verification passcode pin code entry.")})
+        request_user = self.context["request"].user
+
+        if booking.traveler != request_user:
+            raise serializers.ValidationError(
+                _("Only the assigned traveler can verify pickup.")
+            )
+
+        # ============================================================
+        # Traveler refused package
+        # ============================================================
+        if attrs["traveler_matches_listing"] is False:
+
+            if not attrs.get("traveler_refusal_reason"):
+                raise serializers.ValidationError(
+                    {
+                        "traveler_refusal_reason":
+                        _("Please provide the reason for refusing the package.")
+                    }
+                )
+
+            attrs["booking"] = booking
+            return attrs
+
+        # ============================================================
+        # Traveler accepted package
+        # ============================================================
+        pickup_pin = attrs.get("pickup_pin")
+
+        if not pickup_pin:
+            raise serializers.ValidationError(
+                {
+                    "pickup_pin":
+                    _("Pickup PIN is required.")
+                }
+            )
+
+        if booking.pickup_verification_pin != pickup_pin:
+            raise serializers.ValidationError(
+                {
+                    "pickup_pin":
+                    _("Invalid pickup PIN.")
+                }
+            )
 
         attrs["booking"] = booking
         return attrs
-
 
 
 # Transit serilizer for booking pickup verification

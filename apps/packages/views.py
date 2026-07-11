@@ -39,22 +39,18 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from apps.packages.serializers import PackageSerializer
+from apps.packages.serializers import PackageSerializer,AdminReviewSerializer
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from apps.packages.services import PackageService  # 🧠 Import our service layer
 from .models import Package, PackageImage
 from .serializers import PackageImageSerializer
 from apps.matching.services.package_matching import run_package_matching
 
-from .models import Package, PackageImage
+from .models import Package, PackageImage,PackageStatus, VerificationStatus
 from .serializers import (
     PackageImageSerializer,
     PackageImageUploadSerializer,
 )
-
-
-
-
-
 
 
 
@@ -411,9 +407,6 @@ class UploadPackageImageView(generics.CreateAPIView):
         )
 
 
-
-
-
 class PackageImageListView(generics.ListAPIView):
 
     serializer_class = PackageImageSerializer
@@ -540,3 +533,100 @@ class DeleteUpdatePackageImageView(generics.RetrieveUpdateDestroyAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+# admin 
+class AdminPackageReviewView(generics.UpdateAPIView):
+    """
+    PATCH /package/<uuid:pk>/admin-review/
+    Allows administrative staff to resolve items stuck in MANUAL_REVIEW.
+    """
+    queryset = Package.objects.all()
+    permission_classes = [IsAuthenticated, IsAdminUser]
+    serializer_class = PackageSerializer
+
+    def patch(self, request, *args, **kwargs):
+        package = self.get_object()
+        
+        # Pull input schema verification directly from the external serializer definition
+        input_serializer = AdminReviewSerializer(data=request.data)
+        if not input_serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": "Validation failed.",
+                "errors": input_serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        approve = input_serializer.validated_data["approve"]
+
+        try:
+            updated_package = PackageService.review_package(package, approve=approve)
+            action_taken = "verified and published" if approve else "rejected and cancelled"
+            
+            return Response({
+                "success": True,
+                "message": f"Package has been successfully {action_taken} by admin management.",
+                "data": PackageSerializer(updated_package).data
+            }, status=status.HTTP_200_OK)
+
+        except ValueError as e:
+            return Response({
+                "success": False,
+                "message": str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+# class TravelerHandshakeView(generics.UpdateAPIView):
+#     """
+#     PATCH /package/<uuid:pk>/handshake/
+#     Executed strictly by the assigned Traveler at the physical pick-up point.
+#     """
+#     queryset = Package.objects.all()
+#     permission_classes = [IsAuthenticated]
+#     serializer_class = PackageSerializer
+
+#     def patch(self, request, *args, **kwargs):
+#         package = self.get_object()
+#         user = request.user
+
+#         # 1. Traveler Authorization check (Protects endpoint access)
+#         has_active_booking = package.bookings.filter(traveler=user, is_active=True).exists()
+#         if not has_active_booking:
+#             raise PermissionDenied("You are not authorized to perform the physical handshake verification for this package.")
+
+#         # 2. Schema Validation (Handles cross-field validation rules internally)
+#         input_serializer = TravelerHandshakeSerializer(data=request.data)
+#         if not input_serializer.is_valid():
+#             return Response({
+#                 "success": False,
+#                 "message": "Validation failed.",
+#                 "errors": input_serializer.errors
+#             }, status=status.HTTP_400_BAD_REQUEST)
+
+#         matches_listing = input_serializer.validated_data["traveler_matches_listing"]
+#         refusal_reason = input_serializer.validated_data.get("traveler_refusal_reason", "").strip()
+
+#         package.traveler_matches_listing = matches_listing
+
+#         # 3. Route Lifecycle States cleanly
+#         if matches_listing:
+#             package.status = PackageStatus.IN_TRANSIT
+#             package.traveler_refusal_reason = None
+#             update_fields = ["traveler_matches_listing", "status", "traveler_refusal_reason"]
+#             msg = "Handshake clear. Package status updated to In Transit."
+#         else:
+#             package.status = PackageStatus.CANCELLED
+#             package.verification_status = VerificationStatus.REJECTED
+#             package.traveler_refusal_reason = refusal_reason
+#             update_fields = ["traveler_matches_listing", "status", "verification_status", "traveler_refusal_reason"]
+#             msg = "Traveler refused package handoff. Listing has been cancelled and flagged for fraud check."
+
+#         # 4. Atomic field updates
+#         package.save(update_fields=update_fields)
+        
+#         return Response({
+#             "success": True,
+#             "message": msg,
+#             "data": PackageSerializer(package).data
+#         }, status=status.HTTP_200_OK)
+    

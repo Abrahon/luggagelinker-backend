@@ -17,7 +17,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
-
+from apps.packages.models import VerificationStatus
 from apps.bookings.models import Booking, BookingStatus
 from apps.payment.models import BookingPayment, BookingPaymentStatus
 from apps.payment.services import BookingPaymentService
@@ -241,6 +241,53 @@ class BookingLifecycleService:
             logger.info(f"Booking {booking.id} successfully transitioned to PICKED_UP by service orchestration.")
             return booking
 
+
+    @classmethod
+    def refuse_pickup(cls, booking: Booking, reason: str):
+
+        with transaction.atomic():
+
+            booking = Booking.objects.select_for_update().select_related(
+                "package",
+                "trip",
+            ).get(id=booking.id)
+
+            if booking.status != BookingStatus.CONFIRMED:
+                raise DjangoValidationError(
+                    "Only confirmed bookings can be refused."
+                )
+
+            package = booking.package
+
+            package.traveler_matches_listing = False
+            package.traveler_refusal_reason = reason
+            package.verification_status = VerificationStatus.MANUAL_REVIEW
+
+            package.save(
+                update_fields=[
+                    "traveler_matches_listing",
+                    "traveler_refusal_reason",
+                    "verification_status",
+                ]
+            )
+
+            booking.status = BookingStatus.CANCELLED
+            booking.save(update_fields=["status"])
+
+            # restore reserved capacity
+            booking.trip.available_weight_kg += booking.agreed_weight_kg
+            booking.trip.save(update_fields=["available_weight_kg"])
+
+            Notification.objects.create(...)
+
+            logger.info(
+                "Booking %s cancelled because traveler refused pickup.",
+                booking.id,
+            )
+
+            return booking
+        
+        
     @classmethod
     def execute_start_transit(cls, booking: Booking) -> Booking:
         """
