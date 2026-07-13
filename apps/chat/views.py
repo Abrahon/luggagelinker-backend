@@ -8,7 +8,9 @@ from django.shortcuts import get_object_or_404
 from rest_framework.generics import ListAPIView
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import IsAuthenticated
-
+from django.db.models import Q
+from .models import ChatRoom
+from .serializers import ChatRoomSerializer
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.parsers import FormParser
@@ -123,4 +125,32 @@ class ChatFileUploadView(APIView):
                 "created_at": message.created_at,
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+
+
+class ChatRoomListView(ListAPIView):
+    """
+    Returns all chat rooms for the authenticated user.
+    """
+
+    serializer_class = ChatRoomSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        return (
+            ChatRoom.objects
+            .filter(
+                Q(sender=user) | Q(traveler=user),
+                is_active=True,
+            )
+            .select_related(
+                "sender",
+                "traveler",
+                "booking",
+            )
+            .order_by("-last_message_at")
         )

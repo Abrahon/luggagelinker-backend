@@ -5,26 +5,35 @@ from django.core.cache import cache
 from .models import ChatRoom, ChatMessage
 
 import os
-
 from rest_framework import serializers
-
-from .models import ChatMessage
 
 User = get_user_model()
 
 class ChatParticipantSerializer(serializers.ModelSerializer):
-    """Minified user payload specifically structured for real-time messaging participants."""
-    is_online = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField()
+    profile_image = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "first_name", "last_name", "email", "is_online", "last_seen"]
-        read_only_fields = fields
+        fields = (
+            "id",
+            "full_name",
+            "profile_image",
+            "is_online",
+            "last_seen",
+        )
 
-    def get_is_online(self, obj) -> bool:
-        """Checks Redis memory store for active active socket footprint."""
-        return bool(cache.get(f"user_online_{obj.id}"))
+    def get_full_name(self, obj):
+        profile = getattr(obj, "profile", None)
+        if profile:
+            return profile.full_name
+        return ""
 
+    def get_profile_image(self, obj):
+        profile = getattr(obj, "profile", None)
+        if profile and profile.profile_picture:
+            return profile.profile_picture.url
+        return None
 
 class ChatMessageSerializer(serializers.ModelSerializer):
     attachment = serializers.SerializerMethodField()
@@ -83,30 +92,80 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         return attrs
 
 
+
+
 class ChatRoomSerializer(serializers.ModelSerializer):
-    """Optimized room presentation layer."""
-    sender = ChatParticipantSerializer(read_only=True)
-    traveler = ChatParticipantSerializer(read_only=True)
+    """
+    Chat room serializer for conversation list.
+    Returns only the other participant.
+    """
+
+    participant = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
+    last_message_type = serializers.SerializerMethodField()
+    last_message_sender = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatRoom
-        fields = [
-            "id", "booking", "sender", "traveler", 
-            "last_message", "last_message_at", 
-            "is_active", "unread_count", "created_at", "updated_at"
-        ]
+        fields = (
+            "id",
+            "booking",
+            "participant",
+            "last_message",
+            "last_message_type",
+            "last_message_sender",
+            "last_message_at",
+            "is_active",
+            "unread_count",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = fields
 
-    def get_unread_count(self, obj) -> int:
-        """Highly optimized unread counter using the explicit receiver column index."""
+    def get_participant(self, obj):
         request = self.context.get("request")
-        if request and request.user.is_authenticated:
-            return obj.messages.filter(
-                receiver=request.user, 
-                is_read=False
-            ).count()
-        return 0
+
+        if not request or not request.user.is_authenticated:
+            return None
+
+        if obj.sender_id == request.user.id:
+            other_user = obj.traveler
+        else:
+            other_user = obj.sender
+
+        return ChatParticipantSerializer(other_user).data
+
+    def get_unread_count(self, obj):
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            return 0
+
+        return obj.messages.filter(
+            receiver=request.user,
+            is_read=False,
+            is_deleted=False,
+        ).count()
+
+    def get_last_message_type(self, obj):
+        last_message = obj.messages.order_by("-created_at").only(
+            "message_type"
+        ).first()
+
+        if last_message:
+            return last_message.message_type
+
+        return None
+
+    def get_last_message_sender(self, obj):
+        last_message = obj.messages.order_by("-created_at").only(
+            "sender_id"
+        ).first()
+
+        if last_message:
+            return str(last_message.sender_id)
+
+        return None
 
 
 
