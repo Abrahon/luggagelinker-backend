@@ -94,7 +94,13 @@ class ChatMessage(models.Model):
         null=True, 
         blank=True
     )
-    
+    reply_to = models.ForeignKey(  
+    "self",
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name="replies",
+    )
     # Ephemeral State & Audit Controls
     is_read = models.BooleanField(default=False)
     is_delivered = models.BooleanField(default=False)

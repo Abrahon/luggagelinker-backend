@@ -9,6 +9,9 @@ from rest_framework import serializers
 
 User = get_user_model()
 
+
+
+
 class ChatParticipantSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     profile_image = serializers.SerializerMethodField()
@@ -35,7 +38,11 @@ class ChatParticipantSerializer(serializers.ModelSerializer):
             return profile.profile_picture.url
         return None
 
+
+
+
 class ChatMessageSerializer(serializers.ModelSerializer):
+    reply_to = serializers.SerializerMethodField()
     attachment = serializers.SerializerMethodField()
 
     class Meta:
@@ -46,6 +53,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "sender",
             "receiver",
             "message",
+            "reply_to",
             "message_type",
             "attachment",
             "is_delivered",
@@ -75,6 +83,17 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         if obj.attachment:
             return obj.attachment.url
         return None
+    
+    def get_reply_to(self, obj):
+        if not obj.reply_to:
+            return None
+
+        return {
+            "id": str(obj.reply_to.id),
+            "message": obj.reply_to.message,
+            "sender_id": str(obj.reply_to.sender_id),
+            "message_type": obj.reply_to.message_type,
+        }
 
 
     def validate(self, attrs):

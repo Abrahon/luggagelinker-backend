@@ -105,10 +105,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         event = payload.get("event")
         data = payload.get("data", {})
 
+       # recive a message 
         if event == "message":
             message = data.get("message", "").strip()
             msg_type = data.get("message_type", ChatMessage.MessageType.TEXT)
             attachment_url = data.get("attachment", None)
+            reply_to = data.get("reply_to")
 
             if not message and not attachment_url:
                 return
@@ -116,7 +118,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             msg, receiver_id = await self.save_chat_message(
                 message=message,
                 msg_type=msg_type,
-                attachment_url=attachment_url
+                attachment_url=attachment_url,
+                reply_to=reply_to
             )
 
 
@@ -149,6 +152,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 if msg.attachment
                                 else None
                             ),
+                            "reply_to": (
+                                {
+                                    "id": str(msg.reply_to.id),
+                                    "message": msg.reply_to.message,
+                                    "sender_id": str(msg.reply_to.sender_id),
+                                    "message_type": msg.reply_to.message_type,
+                                }
+                                if msg.reply_to
+                                else None
+                            ),
+                            
                             "is_read": msg.is_read,
                             "is_deleted": msg.is_deleted,
                             "is_edited": msg.edited_at is not None,
@@ -313,18 +327,38 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return False
 
     @database_sync_to_async
-    def save_chat_message(self, message, msg_type, attachment_url=None):
-        receiver_id = self.room_traveler_id if self.user.id == self.room_sender_id else self.room_sender_id
+    def save_chat_message(self, message, msg_type, attachment_url=None,reply_to=None):
+
+            if self.user.id == self.room_sender_id:
+                receiver_id = self.room_traveler_id
         
-        msg = ChatMessage.objects.create(
-            room_id=self.room_id,
-            sender=self.user,
-            receiver_id=receiver_id,
-            message=message,
-            message_type=msg_type,
-            attachment=attachment_url
-        )
-        return msg, receiver_id
+            else:
+                receiver_id = self.room_sender_id
+
+            # Load replied message if provided
+            reply_message = None
+
+            if reply_to:
+                try:
+                    reply_message = ChatMessage.objects.get(
+                        id=reply_to,
+                        room_id=self.room_id,
+                    )
+                except ChatMessage.DoesNotExist:
+                    reply_message = None
+
+            msg = ChatMessage.objects.create(
+                room_id=self.room_id,
+                sender=self.user,
+                receiver_id=receiver_id,
+                message=message,
+                message_type=msg_type,
+                attachment=attachment_url,
+                reply_to=reply_message,
+            )
+
+            return msg, receiver_id
+
 
     @database_sync_to_async
     def mark_messages_as_read(self):
@@ -437,3 +471,4 @@ class ChatConsumer(AsyncWebsocketConsumer):
             receiver_id=user_id,
             is_read=False,
         ).count()
+    
