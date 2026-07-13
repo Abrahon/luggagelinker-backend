@@ -4,6 +4,12 @@ from django.utils.translation import gettext_lazy as _
 from django.core.cache import cache
 from .models import ChatRoom, ChatMessage
 
+import os
+
+from rest_framework import serializers
+
+from .models import ChatMessage
+
 User = get_user_model()
 
 class ChatParticipantSerializer(serializers.ModelSerializer):
@@ -96,11 +102,6 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         return 0
 
 
-import os
-
-from rest_framework import serializers
-
-from .models import ChatMessage
 
 
 class ChatFileUploadSerializer(serializers.ModelSerializer):
