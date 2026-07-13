@@ -4,7 +4,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from .models import ChatRoom, ChatMessage
-
+from django.db.models import Count
 
 import json
 from django.utils import timezone
@@ -63,6 +63,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 },
             )
 
+        unread_count = await self.get_unread_count()
+
+        await self.send(
+            text_data=json.dumps({
+                "event": "unread_count",
+                "data": {
+                    "count": unread_count,
+                },
+            })
+        )
+
     async def disconnect(self, close_code):
         if hasattr(self, "presence_group_name"):
             await self.set_user_presence(status="offline")
@@ -106,6 +117,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 message=message,
                 msg_type=msg_type,
                 attachment_url=attachment_url
+            )
+
+
+            receiver_unread = await self.get_user_unread_count(receiver_id)
+
+            await self.channel_layer.group_send(
+                self.presence_group_name,
+                {
+                    "type": "unread_count_event",
+                    "user_id": str(receiver_id),
+                    "count": receiver_unread,
+                },
             )
 
             await self.channel_layer.group_send(
@@ -197,9 +220,43 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         }
                     }
                 )
+        elif event == "delivered":
+            message_id = data.get("message_id")
+            success = await self.mark_message_delivered(message_id)
+
+            if success:
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "delivered_event",
+                        "message_id": message_id,
+                    },
+                )
+
 
     async def broadcast_wrapper(self, event):
         await self.send(text_data=json.dumps(event["payload"]))
+
+    
+    async def chat_message(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "event": "message",
+                "data": event["message"],
+            })
+        )
+    
+
+    async def typing_event(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "event": "typing",
+                "data": {
+                    "user_id": event["user_id"],
+                    "is_typing": event["is_typing"],
+                },
+            })
+        )
 
     async def presence_event(self, event):
         await self.send(
@@ -222,6 +279,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }
             })
         )
+
+    async def delivered_event(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "event": "delivered",
+                "data": {
+                    "message_id": event["message_id"],
+                },
+            })
+        )
+    
+    async def unread_count_event(self, event):
+            if str(self.user.id) != event["user_id"]:
+                return
+            await self.send(
+                text_data=json.dumps({
+                    "event": "unread_count",
+                    "data": {
+                        "count": event["count"],
+                    },
+                })
+            )
 
     @database_sync_to_async
     def verify_room_membership(self):
@@ -324,3 +403,37 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "last_seen",
             ]
         )
+    @database_sync_to_async
+    def mark_message_delivered(self, message_id):
+        try:
+            msg = ChatMessage.objects.get(id=message_id)
+
+            if not msg.is_delivered:
+                msg.is_delivered = True
+                msg.delivered_at = timezone.now()
+                msg.save(update_fields=[
+                    "is_delivered",
+                    "delivered_at",
+                ])
+
+            return True
+
+        except ChatMessage.DoesNotExist:
+            return False
+
+
+
+    @database_sync_to_async
+    def get_unread_count(self):
+        return ChatMessage.objects.filter(
+            receiver=self.user,
+            is_read=False,
+        ).count()
+
+
+    @database_sync_to_async
+    def get_user_unread_count(self, user_id):
+        return ChatMessage.objects.filter(
+            receiver_id=user_id,
+            is_read=False,
+        ).count()
