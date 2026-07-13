@@ -27,43 +27,28 @@ class ChatParticipantSerializer(serializers.ModelSerializer):
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):
-     
     attachment = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
-        fields = [
-            "id", "room", "sender", "receiver", "message", 
-            "message_type", "attachment", "is_read", 
-            "is_deleted", "edited_at", "created_at"
-        ]
-        # 🔒 Room and critical structural routing details are locked to prevent arbitrary injection
-        read_only_fields = [
-            "id", 
-            "room", 
-            "sender", 
-            "receiver", 
-            "message_type", 
-            "is_read", 
-            "is_deleted", 
-            "edited_at", 
-            "created_at"
-        ]
-
+        fields = (
+            "id",
+            "room",
+            "sender",
+            "receiver",
+            "message",
+            "message_type",
+            "attachment",
+            "is_read",
+            "is_deleted",
+            "edited_at",
+            "created_at",
+        )
 
     def get_attachment(self, obj):
         if obj.attachment:
             return obj.attachment.url
         return None
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-
-        if instance.is_deleted:
-            data["message"] = "This message was deleted."
-            data["attachment"] = None
-
-        return data
 
 
     def validate(self, attrs):
@@ -108,8 +93,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 
 
 
-
 class ChatFileUploadSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = ChatMessage
         fields = (
@@ -120,7 +105,7 @@ class ChatFileUploadSerializer(serializers.ModelSerializer):
         )
 
     def validate_attachment(self, value):
-        max_size = 20 * 1024 * 1024  # 20MB
+        max_size = 20 * 1024 * 1024
 
         if value.size > max_size:
             raise serializers.ValidationError(
@@ -130,40 +115,28 @@ class ChatFileUploadSerializer(serializers.ModelSerializer):
         ext = os.path.splitext(value.name)[1].lower()
 
         allowed = [
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".webp",
-            ".pdf",
-            ".doc",
-            ".docx",
-            ".xls",
-            ".xlsx",
+            ".jpg", ".jpeg", ".png", ".gif", ".webp",
+            ".pdf", ".doc", ".docx",
+            ".xls", ".xlsx",
             ".zip",
-            ".mp4",
-            ".mov",
-            ".avi",
-            ".mp3",
-            ".wav",
-            ".aac",
+            ".mp4", ".mov", ".avi",
+            ".mp3", ".wav", ".aac",
         ]
 
-    def get_attachment(self, obj):
-        if obj.attachment:
-            return obj.attachment.url
-        return None
+        if ext not in allowed:
+            raise serializers.ValidationError(
+                "Unsupported file type."
+            )
+
+        return value
 
     def validate(self, attrs):
-
         message_type = attrs.get("message_type")
         attachment = attrs.get("attachment")
 
         if message_type != ChatMessage.MessageType.TEXT and not attachment:
             raise serializers.ValidationError(
-                {
-                    "attachment": "Attachment is required."
-                }
+                {"attachment": "Attachment is required."}
             )
 
         return attrs
