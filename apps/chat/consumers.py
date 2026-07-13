@@ -298,15 +298,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             "receiver_id": str(receiver_id),
                             "message": msg.message,
                             "message_type": msg.message_type,
-                            "attachment": msg.attachment if hasattr(msg, 'attachment') and msg.attachment else attachment_url,
+                            "attachment": (
+                                msg.attachment.url
+                                if msg.attachment
+                                else None
+                            ),
                             "is_read": msg.is_read,
-                            "is_edited": msg.is_edited,
                             "is_deleted": msg.is_deleted,
+                            "is_edited": msg.edited_at is not None,
                             "created_at": msg.created_at.isoformat(),
-                            "updated_at": msg.updated_at.isoformat() if msg.updated_at else None,
-                        }
-                    }
-                }
+                            "edited_at": (
+                                msg.edited_at.isoformat()
+                                if msg.edited_at
+                                else None
+                            ),
+                        },
+                    },
+                },
             )
 
         elif event == "typing":

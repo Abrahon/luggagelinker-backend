@@ -27,12 +27,9 @@ class ChatParticipantSerializer(serializers.ModelSerializer):
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):
-    """
-    Serializes message content securely. 
-    
-    All routing nodes (room, sender, receiver) are read-only and explicitly 
-    injected by the backend View via url parameters and request context.
-    """
+     
+    attachment = serializers.SerializerMethodField()
+
     class Meta:
         model = ChatMessage
         fields = [
@@ -53,13 +50,21 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "created_at"
         ]
 
+
+    def get_attachment(self, obj):
+        if obj.attachment:
+            return obj.attachment.url
+        return None
+
     def to_representation(self, instance):
-        """Masks private data elements instantly if a message has been soft-deleted."""
-        ret = super().to_representation(instance)
+        data = super().to_representation(instance)
+
         if instance.is_deleted:
-            ret["message"] = _("This message was deleted.")
-            ret["attachment"] = None
-        return ret
+            data["message"] = "This message was deleted."
+            data["attachment"] = None
+
+        return data
+
 
     def validate(self, attrs):
         """Validates that a message body exists unless an attachment is present."""
@@ -144,12 +149,10 @@ class ChatFileUploadSerializer(serializers.ModelSerializer):
             ".aac",
         ]
 
-        if ext not in allowed:
-            raise serializers.ValidationError(
-                "Unsupported file type."
-            )
-
-        return value
+    def get_attachment(self, obj):
+        if obj.attachment:
+            return obj.attachment.url
+        return None
 
     def validate(self, attrs):
 
