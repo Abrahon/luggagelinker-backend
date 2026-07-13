@@ -32,7 +32,12 @@ class User(AbstractBaseUser, PermissionsMixin):
         choices=UserRole.choices,
         default=UserRole.SENDER
     )
+    is_online = models.BooleanField(default=False)
 
+    last_seen = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
     is_active = models.BooleanField(default=True)
 
     is_staff = models.BooleanField(default=False)
