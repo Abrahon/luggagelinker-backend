@@ -94,3 +94,72 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                 is_read=False
             ).count()
         return 0
+
+
+import os
+
+from rest_framework import serializers
+
+from .models import ChatMessage
+
+
+class ChatFileUploadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMessage
+        fields = (
+            "room",
+            "attachment",
+            "message_type",
+            "message",
+        )
+
+    def validate_attachment(self, value):
+        max_size = 20 * 1024 * 1024  # 20MB
+
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                "Maximum upload size is 20MB."
+            )
+
+        ext = os.path.splitext(value.name)[1].lower()
+
+        allowed = [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".zip",
+            ".mp4",
+            ".mov",
+            ".avi",
+            ".mp3",
+            ".wav",
+            ".aac",
+        ]
+
+        if ext not in allowed:
+            raise serializers.ValidationError(
+                "Unsupported file type."
+            )
+
+        return value
+
+    def validate(self, attrs):
+
+        message_type = attrs.get("message_type")
+        attachment = attrs.get("attachment")
+
+        if message_type != ChatMessage.MessageType.TEXT and not attachment:
+            raise serializers.ValidationError(
+                {
+                    "attachment": "Attachment is required."
+                }
+            )
+
+        return attrs

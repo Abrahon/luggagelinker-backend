@@ -34,7 +34,7 @@ urlpatterns = [
     path("api/", include("apps.disputes.urls")), 
     path("api/", include("apps.invoices.urls")), 
     path("api/", include("apps.analytics.urls")),
-    # path("api/", include("apps.chat.urls")),
+    path("api/", include("apps.chat.urls")),
 
 
 ]

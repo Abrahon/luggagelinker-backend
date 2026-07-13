@@ -56,6 +56,9 @@ class ChatMessage(models.Model):
     class MessageType(models.TextChoices):
         TEXT = "TEXT", _("Text")
         IMAGE = "IMAGE", _("Image")
+        FILE = "FILE", _("File")
+        VIDEO = "VIDEO", _("Video")
+        AUDIO = "AUDIO", _("Audio")
         SYSTEM = "SYSTEM", _("System")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
