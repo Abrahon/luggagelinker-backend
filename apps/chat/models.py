@@ -97,6 +97,17 @@ class ChatMessage(models.Model):
     
     # Ephemeral State & Audit Controls
     is_read = models.BooleanField(default=False)
+    is_delivered = models.BooleanField(default=False)
+
+    delivered_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    read_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
     is_deleted = models.BooleanField(default=False)
     
     edited_at = models.DateTimeField(null=True, blank=True)
