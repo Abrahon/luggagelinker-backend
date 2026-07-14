@@ -198,7 +198,10 @@ class PinnedMessage(models.Model):
         on_delete=models.CASCADE,
         related_name="pins",
     )
-
+    audio_duration = models.PositiveIntegerField(
+        default=0,
+        help_text="Duration in seconds."
+    )
     pinned_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

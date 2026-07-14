@@ -56,6 +56,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "reply_to",
             "message_type",
             "attachment",
+            "audio_duration",
             "is_delivered",
             "delivered_at",
             "is_read",

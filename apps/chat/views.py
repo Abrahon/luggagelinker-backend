@@ -21,6 +21,7 @@ from .models import ChatRoom
 from .models import ChatMessage
 from .serializers import ChatFileUploadSerializer
 from .serializers import ChatMessageSerializer
+from rest_framework import generics
 
 
 class ChatMessagePagination(CursorPagination):
@@ -153,4 +154,50 @@ class ChatRoomListView(ListAPIView):
                 "booking",
             )
             .order_by("-last_message_at")
+        )
+
+
+
+#  search message viewsfrom django.db.models import Q
+
+
+class SearchMessageView(generics.ListAPIView):
+    serializer_class = ChatMessageSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        room_id = self.request.query_params.get("room_id")
+        keyword = self.request.query_params.get("q", "").strip()
+
+        if not room_id or not keyword:
+            return ChatMessage.objects.none()
+
+        try:
+            room = ChatRoom.objects.only(
+                "sender_id",
+                "traveler_id",
+            ).get(id=room_id)
+        except ChatRoom.DoesNotExist:
+            return ChatMessage.objects.none()
+
+        if user.id not in (
+            room.sender_id,
+            room.traveler_id,
+        ):
+            return ChatMessage.objects.none()
+
+        return (
+            ChatMessage.objects.filter(
+                room_id=room_id,
+                is_deleted=False,
+                message__icontains=keyword,
+            )
+            .select_related(
+                "sender",
+                "receiver",
+                "reply_to",
+            )
+            .order_by("-created_at")
         )

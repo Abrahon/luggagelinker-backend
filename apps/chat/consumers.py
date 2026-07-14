@@ -111,6 +111,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             msg_type = data.get("message_type", ChatMessage.MessageType.TEXT)
             attachment_url = data.get("attachment", None)
             reply_to = data.get("reply_to")
+            audio_duration = data.get("audio_duration", 0)
 
             if not message and not attachment_url:
                 return
@@ -119,7 +120,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 message=message,
                 msg_type=msg_type,
                 attachment_url=attachment_url,
-                reply_to=reply_to
+                reply_to=reply_to,
+                audio_duration=audio_duration
             )
 
 
@@ -152,12 +154,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 if msg.attachment
                                 else None
                             ),
+                            "audio_duration": msg.audio_duration,
+                            
                             "reply_to": (
                                 {
                                     "id": str(msg.reply_to.id),
                                     "message": msg.reply_to.message,
                                     "sender_id": str(msg.reply_to.sender_id),
                                     "message_type": msg.reply_to.message_type,
+                                    "audio_duration": msg.audio_duration,
                                 }
                                 if msg.reply_to
                                 else None
@@ -412,8 +417,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except ChatRoom.DoesNotExist:
             return False
 
+
     @database_sync_to_async
-    def save_chat_message(self, message, msg_type, attachment_url=None,reply_to=None):
+    def save_chat_message(self, message, msg_type, attachment_url=None,reply_to=None,audio_duration=0,):
 
             if self.user.id == self.room_sender_id:
                 receiver_id = self.room_traveler_id
@@ -441,6 +447,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 message_type=msg_type,
                 attachment=attachment_url,
                 reply_to=reply_message,
+                audio_duration=audio_duration,
+
             )
 
             return msg, receiver_id
@@ -644,4 +652,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         ).delete()
 
         return deleted > 0
+
+
+# voice message
+
     
