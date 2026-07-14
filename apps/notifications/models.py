@@ -53,6 +53,24 @@ class Notification(models.Model):
         choices=NotificationType.choices,
         default=NotificationType.SYSTEM,
     )
+    # chat
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sent_notifications",
+        null=True,
+        blank=True,
+        )
+
+    room_id = models.UUIDField(
+        null=True,
+        blank=True,
+    )
+
+    message_id = models.UUIDField(
+        null=True,
+        blank=True,
+    )
 
     # ==========================================================
     # OPTIONAL LINKING

@@ -11,6 +11,8 @@ from django.utils import timezone
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .models import ChatRoom, ChatMessage,PinnedMessage
+from apps.notifications.services import create_notification
+from apps.notifications.models import NotificationType
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -449,6 +451,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 reply_to=reply_message,
                 audio_duration=audio_duration,
 
+            )
+            create_notification(
+                user_id=receiver_id,
+                sender=self.user,
+                title="New Message",
+                message=msg.message or "Sent an attachment",
+                notification_type=NotificationType.CHAT,
+                object_id=msg.id,
+                action_url=f"/chat/{self.room_id}",
             )
 
             return msg, receiver_id

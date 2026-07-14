@@ -1,325 +1,4 @@
-# """
-# ==========================================================
-# NOTIFICATION SERVICES
-# ==========================================================
 
-# Centralized notification creation.
-
-# Every module should use this service.
-
-# Example:
-#     - Matching Engine
-#     - Booking
-#     - Payment
-#     - Wallet
-#     - Delivery
-#     - Review
-# """
-
-# import logging
-
-# from django.db import transaction
-
-# from .models import Notification
-
-
-# logger = logging.getLogger(__name__)
-
-
-# # ==========================================================
-# # CREATE SINGLE NOTIFICATION
-# # ==========================================================
-
-# @transaction.atomic
-# def create_notification(
-#     *,
-#     user,
-#     title,
-#     message,
-#     notification_type,
-#     object_id=None,
-#     action_url=None,
-# ):
-#     """
-#     Create a notification.
-
-#     Returns:
-#         Notification
-#     """
-
-#     notification = Notification.objects.create(
-#         user=user,
-#         title=title,
-#         message=message,
-#         notification_type=notification_type,
-#         object_id=object_id,
-#         action_url=action_url,
-#     )
-
-#     logger.info(
-#         f"Notification created | "
-#         f"User={user.id} "
-#         f"Notification={notification.id}"
-#     )
-
-#     return notification
-
-
-# # ==========================================================
-# # CREATE BULK NOTIFICATIONS
-# # ==========================================================
-
-# @transaction.atomic
-# def create_bulk_notifications(
-#     *,
-#     users,
-#     title,
-#     message,
-#     notification_type,
-#     object_id=None,
-#     action_url=None,
-# ):
-#     """
-#     Create notifications for multiple users.
-
-#     Returns:
-#         list[Notification]
-#     """
-
-#     notifications = [
-
-#         Notification(
-#             user=user,
-#             title=title,
-#             message=message,
-#             notification_type=notification_type,
-#             object_id=object_id,
-#             action_url=action_url,
-#         )
-
-#         for user in users
-
-#     ]
-
-#     Notification.objects.bulk_create(
-#         notifications
-#     )
-
-#     logger.info(
-#         f"{len(notifications)} notifications created."
-#     )
-
-#     return notifications
-
-
-
-
-# # ==========================================================
-# # MARK AS READ
-# # ==========================================================
-
-# @transaction.atomic
-# def mark_notification_as_read(notification):
-
-#     """
-#     Mark a notification as read.
-#     """
-
-#     if notification.is_read:
-#         return notification
-
-#     notification.is_read = True
-
-#     notification.save(
-#         update_fields=[
-#             "is_read",
-#             "updated_at",
-#         ]
-#     )
-
-#     logger.info(
-#         f"Notification marked as read | "
-#         f"{notification.id}"
-#     )
-
-#     return notification
-
-
-# # ==========================================================
-# # MARK ALL AS READ
-# # ==========================================================
-
-# @transaction.atomic
-# def mark_all_notifications_as_read(user):
-
-#     """
-#     Mark all notifications as read.
-
-#     Returns:
-#         int
-#     """
-
-#     updated = (
-#         Notification.objects.filter(
-#             user=user,
-#             is_active=True,
-#             is_read=False,
-#         )
-#         .update(
-#             is_read=True,
-#         )
-#     )
-
-#     logger.info(
-#         f"All notifications marked as read | "
-#         f"User={user.id}"
-#     )
-
-#     return updated
-
-
-# from apps.notifications.models import NotificationType
-# # Assuming create_notification is imported here from your utilities
-# # from .utils import create_notification
-
-
-# # ==========================================================
-# # WALLET CREDITED
-# # ==========================================================
-
-# def notify_wallet_credited(
-#     *,
-#     user,
-#     booking,
-#     amount,
-# ):
-#     return create_notification(
-#         user=user,
-#         title="Wallet Credited",
-#         message=(
-#             f"${amount} has been credited to your wallet "
-#             f"for booking #{booking.tracking_number}."
-#         ),
-#         notification_type=NotificationType.WALLET,
-#         object_id=booking.id,
-#         action_url="/wallet/",
-#     )
-
-
-# # ==========================================================
-# # WITHDRAWAL REQUESTED
-# # ==========================================================
-
-# def notify_withdrawal_requested(
-#     *,
-#     user,
-#     withdrawal,
-# ):
-#     return create_notification(
-#         user=user,
-#         title="Withdrawal Requested",
-#         message=(
-#             f"Your withdrawal request of "
-#             f"${withdrawal.amount} has been submitted."
-#         ),
-#         notification_type=NotificationType.WALLET,
-#         object_id=withdrawal.id,
-#         action_url="/wallet/withdrawals/",
-#     )
-
-
-# # ==========================================================
-# # WITHDRAWAL APPROVED
-# # ==========================================================
-
-# def notify_withdrawal_approved(
-#     *,
-#     user,
-#     withdrawal,
-# ):
-#     return create_notification(
-#         user=user,
-#         title="Withdrawal Approved",
-#         message=(
-#             f"Your withdrawal request of "
-#             f"${withdrawal.amount} has been approved."
-#         ),
-#         notification_type=NotificationType.WALLET,
-#         object_id=withdrawal.id,
-#         action_url="/wallet/withdrawals/",
-#     )
-
-
-# # ==========================================================
-# # WITHDRAWAL REJECTED
-# # ==========================================================
-
-# def notify_withdrawal_rejected(
-#     *,
-#     user,
-#     withdrawal,
-# ):
-#     return create_notification(
-#         user=user,
-#         title="Withdrawal Rejected",
-#         message=(
-#             f"Your withdrawal request of "
-#             f"${withdrawal.amount} has been rejected."
-#         ),
-#         notification_type=NotificationType.WALLET,
-#         object_id=withdrawal.id,
-#         action_url="/wallet/withdrawals/",
-#     )
-
-
-# # ==========================================================
-# # REFUND COMPLETED
-# # ==========================================================
-
-# def notify_refund_completed(
-#     *,
-#     user,
-#     booking,
-#     amount,
-# ):
-#     return create_notification(
-#         user=user,
-#         title="Refund Completed",
-#         message=(
-#             f"${amount} has been refunded "
-#             f"for booking #{booking.tracking_number}."
-#         ),
-#         notification_type=NotificationType.PAYMENT,
-#         object_id=booking.id,
-#         action_url=f"/bookings/{booking.id}/",
-#     )
-
-
-# # ==========================================================
-# # REVIEW RECEIVED
-# # ==========================================================
-
-# @transaction.atomic
-# def notify_review_received(
-#     *,
-#     user,
-#     review,
-# ):
-#     """
-#     Notify traveler that a new review has been received.
-#     """
-
-#     return create_notification(
-#         user=user,
-#         title="New Review Received ⭐",
-#         message=(
-#             f"You received a {review.rating}★ review "
-#             f"from {review.sender.name}."
-#         ),
-#         notification_type=Notification.NotificationType.REVIEW,
-#         object_id=str(review.id),
-#         action_url=f"/reviews/{review.id}/",
-#     )
 """
 ==========================================================
 NOTIFICATION SERVICES
@@ -332,9 +11,41 @@ Every module uses this service to ensure uniform message distribution.
 import logging
 from django.db import transaction
 from .models import Notification, NotificationType
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 
 logger = logging.getLogger(__name__)
 
+
+
+# live notification using  websocket
+def send_notification_ws(notification):
+    """
+    Sends notification to the user's websocket.
+    """
+
+    channel_layer = get_channel_layer()
+
+    async_to_sync(channel_layer.group_send)(
+        f"notification_{notification.user_id}",
+        {
+            "type": "notification_event",
+            "notification": {
+                "id": str(notification.id),
+                "title": notification.title,
+                "message": notification.message,
+                "notification_type": notification.notification_type,
+                "object_id": (
+                    str(notification.object_id)
+                    if notification.object_id
+                    else None
+                ),
+                "action_url": notification.action_url,
+                "is_read": notification.is_read,
+                "created_at": notification.created_at.isoformat(),
+            },
+        },
+    )
 
 # ==========================================================
 # CREATE SINGLE NOTIFICATION
@@ -349,6 +60,7 @@ def create_notification(
     object_id=None,
     action_url=None,
 ):
+    send_notification_ws(notification)
     """
     Create a database-backed notification entry.
     """
@@ -368,6 +80,7 @@ def create_notification(
 # ==========================================================
 # CREATE BULK NOTIFICATIONS
 # ==========================================================
+
 @transaction.atomic
 def create_bulk_notifications(
     *,
@@ -379,8 +92,9 @@ def create_bulk_notifications(
     action_url=None,
 ):
     """
-    Create notifications optimized for multiple users simultaneously using bulk_create.
+    Create notifications optimized for multiple users simultaneously.
     """
+
     notifications = [
         Notification(
             user=user,
@@ -394,8 +108,31 @@ def create_bulk_notifications(
     ]
 
     Notification.objects.bulk_create(notifications)
-    logger.info("%d notifications created via bulk pipeline.", len(notifications))
+
+    # Refresh objects so they contain generated IDs (recommended)
+    notifications = list(
+        Notification.objects.filter(
+            user__in=users,
+            title=title,
+            notification_type=notification_type,
+        ).order_by("-created_at")[: len(notifications)]
+    )
+
+    for notification in notifications:
+        send_notification_ws(notification)
+
+    logger.info(
+        "%d notifications created via bulk pipeline.",
+        len(notifications),
+    )
+
     return notifications
+
+
+# ==========================================================
+# CREATE Chat NOTIFICATIONS
+# ==========================================================
+
 
 
 # ==========================================================
@@ -590,3 +327,5 @@ def notify_review_received(*, user, review):
         object_id=str(review.id),
         action_url=f"/reviews/{review.id}/",
     )
+
+

@@ -19,6 +19,9 @@ class NotificationSerializer(serializers.ModelSerializer):
 
             "object_id",
             "action_url",
+            "sender  "      # sender
+            "room_id"
+            "message_id"
 
             "is_read",
             "is_active",
