@@ -153,3 +153,25 @@ class ChatMessage(models.Model):
                 last_message=self.room.last_message,
                 last_message_at=self.room.last_message_at
             )
+
+
+class ChatReaction(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    message = models.ForeignKey(
+        ChatMessage,
+        related_name="reactions",
+        on_delete=models.CASCADE,
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+    )
+
+    emoji = models.CharField(max_length=20)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("message", "user")
