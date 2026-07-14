@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
 from django.core.cache import cache
 from .models import ChatRoom, ChatMessage
-
+from .models import PinnedMessage
 import os
 from rest_framework import serializers
 
@@ -235,3 +235,35 @@ class ChatFileUploadSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+
+
+# pin serializers
+
+class PinnedMessageSerializer(serializers.ModelSerializer):
+    message_id = serializers.UUIDField(source="message.id", read_only=True)
+    room_id = serializers.UUIDField(source="room.id", read_only=True)
+    pinned_by = serializers.UUIDField(source="pinned_by.id", read_only=True)
+
+    message = serializers.CharField(source="message.message", read_only=True)
+    message_type = serializers.CharField(source="message.message_type", read_only=True)
+
+    attachment = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PinnedMessage
+        fields = (
+            "id",
+            "room_id",
+            "message_id",
+            "message",
+            "message_type",
+            "attachment",
+            "pinned_by",
+            "pinned_at",
+        )
+
+    def get_attachment(self, obj):
+        if obj.message.attachment:
+            return obj.message.attachment.url
+        return None
