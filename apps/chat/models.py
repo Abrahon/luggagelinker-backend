@@ -175,3 +175,47 @@ class ChatReaction(models.Model):
 
     class Meta:
         unique_together = ("message", "user")
+
+
+
+# message pin
+
+class PinnedMessage(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    room = models.ForeignKey(
+        ChatRoom,
+        on_delete=models.CASCADE,
+        related_name="pinned_messages",
+    )
+
+    message = models.ForeignKey(
+        ChatMessage,
+        on_delete=models.CASCADE,
+        related_name="pins",
+    )
+
+    pinned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="pinned_messages",
+    )
+
+    pinned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-pinned_at"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["room", "message"],
+                name="unique_pinned_message_per_room",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.room_id} -> {self.message_id}"

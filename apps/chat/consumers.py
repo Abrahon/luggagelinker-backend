@@ -245,6 +245,32 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         "type": "delivered_event",
                         "message_id": message_id,
                     },
+            
+                )
+
+
+        #react message   
+        elif event == "reaction":
+
+            message_id = data.get("message_id")
+            emoji = data.get("emoji")
+
+            reaction = await self.add_reaction(
+                message_id,
+                emoji,
+            )
+
+            if reaction:
+
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "broadcast_wrapper",
+                        "payload": {
+                            "event": "reaction",
+                            "data": reaction,
+                        },
+                    },
                 )
 
 
@@ -471,4 +497,39 @@ class ChatConsumer(AsyncWebsocketConsumer):
             receiver_id=user_id,
             is_read=False,
         ).count()
+
+
+
+    # react message 
+    @database_sync_to_async
+    def add_reaction(
+        self,
+        message_id,
+        emoji,
+    ):
+        from .models import ChatReaction
+
+        try:
+
+            message = ChatMessage.objects.get(
+                id=message_id,
+                room_id=self.room_id,
+            )
+
+            reaction, created = ChatReaction.objects.update_or_create(
+                message=message,
+                user=self.user,
+                defaults={
+                    "emoji": emoji,
+                },
+            )
+
+            return {
+                "message_id": str(message.id),
+                "user_id": str(self.user.id),
+                "emoji": emoji,
+            }
+
+        except ChatMessage.DoesNotExist:
+            return None
     
