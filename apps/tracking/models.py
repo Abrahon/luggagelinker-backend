@@ -100,3 +100,54 @@ class ActiveTracker(models.Model):
     def __str__(self):
 
         return f"{self.room_id}"
+    
+
+
+class LocationHistory(models.Model):
+
+    tracker = models.ForeignKey(
+        ActiveTracker,
+        on_delete=models.CASCADE,
+        related_name="history",
+    )
+
+    latitude = models.FloatField()
+
+    longitude = models.FloatField()
+
+    speed = models.FloatField(
+        default=0,
+    )
+
+    heading = models.FloatField(
+        default=0,
+    )
+
+    accuracy = models.FloatField(
+        null=True,
+        blank=True,
+    )
+
+    altitude = models.FloatField(
+        null=True,
+        blank=True,
+    )
+
+    recorded_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+
+        ordering = [
+            "recorded_at",
+        ]
+
+        indexes = [
+            models.Index(
+                fields=[
+                    "tracker",
+                    "recorded_at",
+                ]
+            ),
+        ]
