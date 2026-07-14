@@ -10,7 +10,7 @@ import json
 from django.utils import timezone
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .models import ChatRoom, ChatMessage
+from .models import ChatRoom, ChatMessage,PinnedMessage
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -273,6 +273,39 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     },
                 )
 
+        # pin message 
+        elif event == "pin_message":
+
+            message_id = data.get("message_id")
+
+            pin = await self.pin_message(message_id)
+
+            if pin:
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "pin_message_event",
+                        "pin": pin,
+                    },
+                )
+
+        # unpin message
+
+        elif event == "unpin_message":
+
+            message_id = data.get("message_id")
+
+            success = await self.unpin_message(message_id)
+
+            if success:
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "unpin_message_event",
+                        "message_id": message_id,
+                    },
+                )
+
 
     async def broadcast_wrapper(self, event):
         await self.send(text_data=json.dumps(event["payload"]))
@@ -341,6 +374,33 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     },
                 })
             )
+    
+
+    # pin messaeg 
+    async def pin_message_event(self, event):
+
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "event": "pin_message",
+                    "data": event["pin"],
+                }
+            )
+        )
+
+    # unpin message
+    async def unpin_message_event(self, event):
+
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "event": "unpin_message",
+                    "data": {
+                        "message_id": event["message_id"],
+                    },
+                }
+            )
+        )
 
     @database_sync_to_async
     def verify_room_membership(self):
@@ -532,4 +592,56 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         except ChatMessage.DoesNotExist:
             return None
+
+
+# pin messaeg 
+    @database_sync_to_async
+    def pin_message(self, message_id):
+
+        try:
+
+            message = ChatMessage.objects.get(
+                id=message_id,
+                room_id=self.room_id,
+            )
+
+        except ChatMessage.DoesNotExist:
+            return None
+
+        PinnedMessage.objects.filter(
+            room_id=self.room_id,
+        ).delete()
+
+        pin = PinnedMessage.objects.create(
+            room_id=self.room_id,
+            message=message,
+            pinned_by=self.user,
+        )
+
+        return {
+            "id": str(pin.id),
+            "message_id": str(message.id),
+            "message": message.message,
+            "sender_id": str(message.sender_id),
+            "message_type": message.message_type,
+            "attachment": (
+                message.attachment.url
+                if message.attachment
+                else None
+            ),
+            "pinned_by": str(self.user.id),
+            "pinned_at": pin.pinned_at.isoformat(),
+        }
+
+
+    # unpin message 
+    @database_sync_to_async
+    def unpin_message(self, message_id):
+
+        deleted, _ = PinnedMessage.objects.filter(
+            room_id=self.room_id,
+            message_id=message_id,
+        ).delete()
+
+        return deleted > 0
     
