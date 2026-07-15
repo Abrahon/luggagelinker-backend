@@ -5,7 +5,26 @@ import logging
 from decimal import Decimal
 
 
+import logging
+from decimal import Decimal
+from django.contrib.auth import get_user_model
+from rest_framework import serializers
+from .models import (
+    Wallet, 
+    WalletTransaction, 
+    WithdrawalRequest, 
+    WithdrawalMethod
+)
+
+logger = logging.getLogger(__name__)
+User = get_user_model()
+
+
 class WalletSerializer(serializers.ModelSerializer):
+    """
+    Serializer providing read-only insights into a user's liquid, pending, 
+    and total financial performance metrics.
+    """
     username = serializers.CharField(source="user.username", read_only=True)
 
     class Meta:
@@ -24,6 +43,10 @@ class WalletSerializer(serializers.ModelSerializer):
 
 
 class WalletTransactionSerializer(serializers.ModelSerializer):
+    """
+    Serializer capturing audit trails for ledger transactions, detailing 
+    balance shifts and reference triggers.
+    """
     class Meta:
         model = WalletTransaction
         fields = [
@@ -42,101 +65,252 @@ class WalletTransactionSerializer(serializers.ModelSerializer):
 
 
 
-class WithdrawalRequestSerializer(serializers.ModelSerializer):
+class WithdrawalMethodSerializer(serializers.ModelSerializer):
+    """
+    Manages CRUD configurations for saved payout channels (Bank accounts, Mobile Wallets, etc.).
+    Protects sensitive routing logic with structured structural validations.
+    """
+    type_display = serializers.CharField(source="get_type_display", read_only=True)
+
     class Meta:
-        model = WithdrawalRequest
+        model = WithdrawalMethod
         fields = [
             "id",
-            "amount",
-            "status",
-            "method",
+            "type",
+            "type_display",
             "account_name",
             "account_number",
             "bank_name",
             "branch_name",
             "routing_number",
-            "stripe_transfer_id",    # 🔗 Added
-            "stripe_payout_id",      # 🔗 Added
-            "rejection_reason",
+            "stripe_account_id",
+            "is_default",
+            "is_verified",
+            "is_active",
             "created_at",
             "updated_at",
-            "completed_at",          # 🔗 Added
         ]
-        read_only_fields = [
-            "id", 
-            "status", 
-            "stripe_transfer_id",    # 🔒 Ensure safe from client tampering
-            "stripe_payout_id",      # 🔒 Ensure safe from client tampering
-            "rejection_reason", 
-            "created_at", 
+        read_only_fields = ["id", "is_verified", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        method_type = attrs.get("type")
+
+        # 1. Bank Payout Validations
+        if method_type == WithdrawalMethod.MethodType.BANK:
+            missing_fields = {}
+            for field in ["account_name", "account_number", "bank_name", "branch_name", "routing_number"]:
+                if not attrs.get(field):
+                    missing_fields[field] = f"This field is required for {method_type} accounts."
+            if missing_fields:
+                raise serializers.ValidationError(missing_fields)
+
+        # 2. Mobile Financial Services (bKash, Nagad, Rocket)
+        elif method_type in [
+            WithdrawalMethod.MethodType.BKASH,
+            WithdrawalMethod.MethodType.NAGAD,
+            WithdrawalMethod.MethodType.ROCKET
+        ]:
+            if not attrs.get("account_number"):
+                raise serializers.ValidationError({
+                    "account_number": f"Mobile account number is required for {method_type} disbursements."
+                })
+            # Clear bank-specific attributes if present to keep data structured
+            attrs["bank_name"] = ""
+            attrs["branch_name"] = ""
+            attrs["routing_number"] = ""
+            attrs["stripe_account_id"] = ""
+
+        # 3. Stripe Direct Connect Payouts
+        elif method_type == WithdrawalMethod.MethodType.STRIPE:
+            if not attrs.get("stripe_account_id"):
+                raise serializers.ValidationError({
+                    "stripe_account_id": "Stripe Connected Account ID is required for card payouts."
+                })
+            attrs["bank_name"] = ""
+            attrs["branch_name"] = ""
+            attrs["routing_number"] = ""
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        if request and request.user:
+            validated_data["user"] = request.user
+        
+        # Enforce unique default active withdrawal method per user
+        is_default = validated_data.get("is_default", False)
+        if is_default and request and request.user:
+            WithdrawalMethod.objects.filter(user=request.user, is_default=True).update(is_default=False)
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        is_default = validated_data.get("is_default", False)
+        
+        # Re-enforce default constraints on updates
+        if is_default and request and request.user:
+            WithdrawalMethod.objects.filter(user=request.user, is_default=True).exclude(pk=instance.pk).update(is_default=False)
+
+        return super().update(instance, validated_data)
+
+
+
+class WithdrawalRequestSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating and retrieving withdrawal requests.
+    Uses a saved WithdrawalMethod instead of duplicating payout details.
+    """
+
+    withdrawal_method = serializers.PrimaryKeyRelatedField(
+        queryset=WithdrawalMethod.objects.all()
+    )
+
+    withdrawal_method_details = WithdrawalMethodSerializer(
+        source="withdrawal_method",
+        read_only=True,
+    )
+
+    class Meta:
+        model = WithdrawalRequest
+        fields = [
+            "id",
+            "withdrawal_method",
+            "withdrawal_method_details",
+            "amount",
+            "status",
+            "stripe_transfer_id",
+            "stripe_payout_id",
+            "rejection_reason",
+            "processed_by",
+            "processed_at",
+            "admin_note",
+            "completed_at",
+            "created_at",
             "updated_at",
-            "completed_at",          # 🔒 Ensure safe from client tampering
+        ]
+
+        read_only_fields = [
+            "id",
+            "status",
+            "stripe_transfer_id",
+            "stripe_payout_id",
+            "rejection_reason",
+            "processed_by",
+            "processed_at",
+            "admin_note",
+            "completed_at",
+            "created_at",
+            "updated_at",
         ]
 
     def validate_amount(self, value):
         if value <= Decimal("0.00"):
-            raise serializers.ValidationError("Withdrawal amount must be greater than zero.")
+            raise serializers.ValidationError(
+                "Withdrawal amount must be greater than zero."
+            )
+
         if value < Decimal("10.00"):
-            raise serializers.ValidationError("The minimum allowable payout request is $10.00.")
+            raise serializers.ValidationError(
+                "Minimum withdrawal amount is $10."
+            )
+
         return value
 
     def validate(self, attrs):
-        request = self.context.get("request")
-        if not request or not request.user:
-            raise serializers.ValidationError("Authentication context missing.")
 
+        request = self.context["request"]
         user = request.user
-        amount = attrs.get("amount")
-        method = attrs.get("method")
 
-        # 1. Check Wallet Balance
-        try:
-            wallet = Wallet.objects.get(user=user)
-        except Wallet.DoesNotExist:
-            raise serializers.ValidationError("Active financial wallet profile not found.")
+        withdrawal_method = attrs["withdrawal_method"]
+        amount = attrs["amount"]
 
-        if wallet.available_balance < amount:
+        # ---------------------------------------------
+        # Ensure withdrawal method belongs to the user
+        # ---------------------------------------------
+        if withdrawal_method.user != user:
             raise serializers.ValidationError({
-                "amount": f"Insufficient available funds. Liquid balance: ${wallet.available_balance}."
+                "withdrawal_method":
+                    "This withdrawal method does not belong to you."
             })
 
-        # 2. Conditional Method Routing Validations
-        if method == WithdrawalRequest.WithdrawalMethod.STRIPE:
-            # Check if user has an active onboarding account profile and payouts are enabled
-            try:
-                stripe_account = user.stripe_account
-                if not stripe_account.payouts_enabled:
-                    raise serializers.ValidationError(
-                        "Complete your Stripe onboarding setup before making a withdrawal."
-                    )
-            except Exception:
-                raise serializers.ValidationError(
-                    "No Stripe Connected Account linked. Please complete setup integration first."
-                )
+        # ---------------------------------------------
+        # Active check
+        # ---------------------------------------------
+        if not withdrawal_method.is_active:
+            raise serializers.ValidationError({
+                "withdrawal_method":
+                    "This withdrawal method has been disabled."
+            })
 
-        elif method == WithdrawalRequest.WithdrawalMethod.BANK:
-            # Bank accounts require all routing and structural details
-            missing_fields = {}
-            for field in ["account_name", "account_number", "bank_name", "branch_name", "routing_number"]:
-                if not attrs.get(field):
-                    missing_fields[field] = f"This field is required for {method} withdrawals."
-            if missing_fields:
-                raise serializers.ValidationError(missing_fields)
-                
-        elif method in [
-            WithdrawalRequest.WithdrawalMethod.BKASH,
-            WithdrawalRequest.WithdrawalMethod.NAGAD,
-            WithdrawalRequest.WithdrawalMethod.ROCKET
-        ]:
-            # Mobile financial services only strictly need the account number (wallet phone number)
-            if not attrs.get("account_number"):
+        # ---------------------------------------------
+        # Verification check
+        # ---------------------------------------------
+        if not withdrawal_method.is_verified:
+            raise serializers.ValidationError({
+                "withdrawal_method":
+                    "This withdrawal method is not verified."
+            })
+
+        # ---------------------------------------------
+        # Wallet existence
+        # ---------------------------------------------
+        try:
+            wallet = Wallet.objects.get(user=user)
+
+        except Wallet.DoesNotExist:
+            raise serializers.ValidationError(
+                "Wallet not found."
+            )
+
+        # ---------------------------------------------
+        # Balance check
+        # ---------------------------------------------
+        if wallet.available_balance < amount:
+            raise serializers.ValidationError({
+                "amount":
+                    f"Available balance is only ${wallet.available_balance}."
+            })
+
+        # ---------------------------------------------
+        # Stripe payout validation
+        # ---------------------------------------------
+        if withdrawal_method.type == WithdrawalMethod.MethodType.STRIPE:
+
+            try:
+                stripe = user.stripe_account
+
+                if not stripe.payouts_enabled:
+                    raise serializers.ValidationError({
+                        "withdrawal_method":
+                            "Stripe payouts are not enabled."
+                    })
+
+            except Exception:
                 raise serializers.ValidationError({
-                    "account_number": f"Account number (mobile number) is required for {method} payouts."
+                    "withdrawal_method":
+                        "No Stripe Connect account found."
                 })
 
         return attrs
 
+    def create(self, validated_data):
+
+        request = self.context["request"]
+
+        wallet = Wallet.objects.get(user=request.user)
+
+        return WithdrawalRequest.objects.create(
+            wallet=wallet,
+            withdrawal_method=validated_data["withdrawal_method"],
+            amount=validated_data["amount"],
+        )
+
 class EscrowHoldSerializer(serializers.Serializer):
+    """
+    Validates booking identity and balance sufficiency for locks placed 
+    under safe escrow holds.
+    """
     booking_id = serializers.UUIDField(required=True)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=True)
 
@@ -147,10 +321,12 @@ class EscrowHoldSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         request = self.context.get("request")
+        if not request or not request.user:
+            raise serializers.ValidationError("Authentication context missing.")
+
         user = request.user
         amount = attrs.get("amount")
 
-        # ✅ Clean read-only retrieval during validation step
         try:
             wallet = Wallet.objects.get(user=user)
         except Wallet.DoesNotExist:
@@ -164,9 +340,6 @@ class EscrowHoldSerializer(serializers.Serializer):
         return attrs
 
 
-
-from rest_framework import serializers
-
 class StripeConnectSerializer(serializers.Serializer):
     """
     Handles authentication verification context for setting up Stripe onboarding links.
@@ -176,5 +349,3 @@ class StripeConnectSerializer(serializers.Serializer):
         if not request or not request.user:
             raise serializers.ValidationError("Authentication context missing.")
         return attrs
-
-

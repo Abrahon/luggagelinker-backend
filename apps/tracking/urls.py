@@ -8,19 +8,19 @@ from .views import (
 
 urlpatterns = [
     path(
-        "start/",
+        "start/tracking",
         ActiveTrackerCreateView.as_view(),
         name="tracking-start",
     ),
 
     path(
-        "<uuid:room_id>/",
+        "tracking/<uuid:room_id>/",
         ActiveTrackerRetrieveView.as_view(),
         name="tracking-detail",
     ),
 
     path(
-        "<uuid:tracker_id>/history/",
+        "tracking/<uuid:tracker_id>/history/",
         LocationHistoryListView.as_view(),
         name="tracking-history",
     ),

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.accounts.models import Profile
+from apps.profiles.models import Profile
 from .models import ActiveTracker, LocationHistory
 
 

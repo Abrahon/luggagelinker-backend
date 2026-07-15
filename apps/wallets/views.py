@@ -1,55 +1,70 @@
+import logging
+import traceback
+from decimal import Decimal
+from django.db import transaction
 from django.shortcuts import render
-
-# Create your views here.
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import viewsets, status, generics
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.utils.decorators import method_decorator
-from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.filters import OrderingFilter
-from decimal import Decimal
-import logging
-from rest_framework import generics, status
-from rest_framework.response import Response
-from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter
+import stripe  
 
-from apps.wallets.models import WithdrawalRequest
-from apps.wallets.serializers import WithdrawalRequestSerializer
-from core.permissions import IsPlatformAdmin
-from apps.wallets.services import AdminWithdrawalService
-from django.core.exceptions import ValidationError
-from .models import Wallet, WalletTransaction, WithdrawalRequest
+# Import local wallet entities
+from .models import Wallet, WalletTransaction, WithdrawalRequest, WithdrawalMethod, StripeConnectedAccount
 from .serializers import (
     WalletSerializer, 
     WalletTransactionSerializer, 
-    WithdrawalRequestSerializer
+    WithdrawalRequestSerializer,
+    WithdrawalMethodSerializer,
+    StripeConnectSerializer
 )
-from .services import WalletService
-from django.db import transaction
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-
-from apps.wallets.models import StripeConnectedAccount
-from apps.wallets.serializers import StripeConnectSerializer
+from .services import WalletService, AdminWithdrawalService
+from core.permissions import IsPlatformAdmin
 from apps.payment.providers.stripe_connect import StripeConnectProvider
-import stripe  
-
 
 logger = logging.getLogger(__name__)
 
 
-
+def format_validation_error(exc):
+    """
+    Utility helper to extract messages from DRF validation exceptions, 
+    Django validations, or database model level validation issues.
+    Unpacks dictionaries, nested lists, and outputs a simple list of flat string errors.
+    """
+    error_messages = []
+    if hasattr(exc, 'message_dict'):
+        for field, errors in exc.message_dict.items():
+            if isinstance(errors, list):
+                error_messages.extend([f"{field}: {e}" for e in errors])
+            else:
+                error_messages.append(f"{field}: {errors}")
+    elif hasattr(exc, 'messages'):
+        error_messages = exc.messages
+    elif hasattr(exc, 'detail'):
+        if isinstance(exc.detail, dict):
+            for field, details in exc.detail.items():
+                if isinstance(details, list):
+                    error_messages.extend([f"{field}: {str(d)}" for d in details])
+                else:
+                    error_messages.append(f"{field}: {str(details)}")
+        elif isinstance(exc.detail, list):
+            error_messages = [str(d) for d in exc.detail]
+        else:
+            error_messages = [str(exc.detail)]
+    else:
+        error_messages = [str(exc)]
+    return error_messages
 
 
 class WalletViewSet(viewsets.ReadOnlyModelViewSet):
     """
     API endpoint that allows users to view their wallet details and transaction ledger.
+    GET /wallets/
     """
     permission_classes = [IsAuthenticated]
     serializer_class = WalletSerializer
@@ -74,6 +89,7 @@ class WalletViewSet(viewsets.ReadOnlyModelViewSet):
 class WalletTransactionListView(generics.ListAPIView):
     """
     High-performance history feed optimized with index hits, filtering capabilities, and pagination boundaries.
+    GET /wallets/transactions/
     """
     permission_classes = [IsAuthenticated]
     serializer_class = WalletTransactionSerializer
@@ -88,90 +104,284 @@ class WalletTransactionListView(generics.ListAPIView):
         ).select_related("booking")
 
 
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from .models import WithdrawalMethod
+from .serializers import WithdrawalMethodSerializer
 
 
-# Inside apps/wallets/views.py - ensure it looks exactly like this:
+class WithdrawalMethodListCreateView(generics.ListCreateAPIView):
+    serializer_class = WithdrawalMethodSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            WithdrawalMethod.objects.filter(
+                user=self.request.user,
+                is_active=True,
+            )
+            .order_by("-is_default", "-created_at")
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Withdrawal methods retrieved successfully.",
+                "count": queryset.count(),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation failed.",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer.save(user=request.user)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Withdrawal method created successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
-# ✅ Clean concrete class replacement: handling both GET and POST natively
+class WithdrawalMethodRetrieveUpdateDestroyView(
+    generics.RetrieveUpdateDestroyAPIView
+):
+    serializer_class = WithdrawalMethodSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return WithdrawalMethod.objects.filter(
+            user=self.request.user
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Withdrawal method retrieved successfully.",
+                "data": self.get_serializer(instance).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+
+        instance = self.get_object()
+
+        serializer = self.get_serializer(
+            instance,
+            data=request.data,
+            partial=partial,
+        )
+
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation failed.",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Withdrawal method updated successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Withdrawal method deleted successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class WithdrawalRequestView(generics.ListCreateAPIView):
     """
-    Handles initialization of payout pipelines (POST) and provides 
-    historical processing visibility (GET).
+    GET  /wallets/withdrawals/
+    POST /wallets/withdraw/
     """
+
     permission_classes = [IsAuthenticated]
     serializer_class = WithdrawalRequestSerializer
+
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = ["status"]
     ordering = ["-created_at"]
 
     def get_queryset(self):
-        return WithdrawalRequest.objects.filter(wallet__user=self.request.user)
+        return (
+            WithdrawalRequest.objects.filter(
+                wallet__user=self.request.user
+            )
+            .select_related(
+                "wallet",
+                "wallet__user",
+                "withdrawal_method",
+            )
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Withdrawal requests retrieved successfully.",
+                "count": queryset.count(),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     def create(self, request, *args, **kwargs):
-            """Overrides the POST creation hooks to inject business service layer rules."""
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            
-            amount = Decimal(str(serializer.validated_data["amount"]))
-            withdrawal_type = str(serializer.validated_data.get("method", "")).upper()
 
-            # Safely retrieve bank_account_info using .get() to prevent KeyErrors
-            bank_account_info = serializer.validated_data.get("bank_account_info", None)
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request},
+        )
 
-            # Fallback: If bank fields are sent flat at the root level, capture them dynamically
-            # Fallback: If bank fields are sent flat at the root level, capture them dynamically
-            if not bank_account_info:
-                bank_account_info = {
-                    "method": withdrawal_type,
-                    "account_name": serializer.validated_data.get("account_name"),
-                    "account_number": serializer.validated_data.get("account_number"),
-                    "bank_name": serializer.validated_data.get("bank_name"),
-                    "branch_name": serializer.validated_data.get("branch_name"),
-                    "routing_number": serializer.validated_data.get("routing_number"),
-                }
-            
-            # 🟢 FIX: Ensure bank_account_info is an empty dict if None, preventing JSONField database issues
-            if bank_account_info is None:
-                bank_account_info = {}
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation failed.",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-            try:
-                # 🟢 FIX: Routed successfully to WalletService.withdraw matching your exact schema signature
-                withdrawal = WalletService.withdraw(
-                    user=request.user,
-                    amount=amount,
-                    bank_account_info=bank_account_info
-                )
-                response_serializer = self.get_serializer(withdrawal)
-                return Response(response_serializer.data, status=status.HTTP_201_CREATED)
-                
-            except (ValueError, ValidationError) as exc:
-                # Cleanly catch both standard and Django ValidationErrors to pass up messaging strings
-                return Response(
-                    {"non_field_errors": [str(exc.message if hasattr(exc, 'message') else exc)]}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            except Exception as e:
-                import traceback
-                logger.error("Withdrawal failure trace: %s", traceback.format_exc())
-                return Response(
-                    {
-                        "detail": "An error occurred while routing payment systems processing.",
-                        "debug_error": str(e)
-                    },
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+        amount = serializer.validated_data["amount"]
 
+        withdrawal_method = serializer.validated_data["withdrawal_method"]
 
+        try:
 
+            withdrawal = WalletService.withdraw(
+                user=request.user,
+                amount=amount,
+                withdrawal_method=withdrawal_method,
+            )
 
-# admin service class for handling withdrawal approvals, rejections, and marking as paid
+            response_serializer = self.get_serializer(withdrawal)
 
+            return Response(
+                {
+                    "success": True,
+                    "message": "Withdrawal request submitted successfully.",
+                    "data": response_serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except (
+            ValueError,
+            DjangoValidationError,
+            DRFValidationError,
+        ) as exc:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Withdrawal request failed.",
+                    "errors": format_validation_error(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        except Exception:
+
+            logger.exception("Withdrawal creation failed.")
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Internal server error.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+class SetDefaultWithdrawalMethodView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+
+        try:
+            method = WithdrawalMethod.objects.get(
+                pk=pk,
+                user=request.user,
+                is_active=True,
+            )
+        except WithdrawalMethod.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Withdrawal method not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        WithdrawalMethod.objects.filter(
+            user=request.user,
+            is_default=True,
+        ).update(is_default=False)
+
+        method.is_default = True
+        method.save(update_fields=["is_default"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Default withdrawal method updated successfully.",
+                "data": WithdrawalMethodSerializer(method).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class AdminWithdrawalListView(generics.ListAPIView):
     """
-    GET /api/admin/withdrawals/
-    Provides platform administrators audit oversight logs over user cashouts.
+    Oversight monitor feed for admin managers to query platform-wide cashout queues.
+    GET /admin/withdrawals/
     """
     permission_classes = [IsPlatformAdmin]
     serializer_class = WithdrawalRequestSerializer
@@ -183,8 +393,8 @@ class AdminWithdrawalListView(generics.ListAPIView):
 
 class AdminWithdrawalDetailView(generics.RetrieveAPIView):
     """
-    GET /api/admin/withdrawals/{id}/
-    Granular isolated inspection hook for a specific withdrawal request.
+    Granular information profile for reviewing a specific checkout queue request.
+    GET /admin/withdrawals/{id}/
     """
     permission_classes = [IsPlatformAdmin]
     serializer_class = WithdrawalRequestSerializer
@@ -193,8 +403,8 @@ class AdminWithdrawalDetailView(generics.RetrieveAPIView):
 
 class AdminWithdrawalActionBaseView(generics.GenericAPIView):
     """
-    Base structural generic view providing uniform validation parsing, log capture,
-    and standardized API error responses.
+    Base generic utility structure mapping errors from services 
+    and returning dynamic responses.
     """
     permission_classes = [IsPlatformAdmin]
     serializer_class = WithdrawalRequestSerializer
@@ -202,56 +412,37 @@ class AdminWithdrawalActionBaseView(generics.GenericAPIView):
 
     def handle_action_execution(self, service_method, status_label, *args, **kwargs):
         try:
-            # Route execution down to the atomic database service transaction layer
+            # Route processing to administrative service layer
             withdrawal = service_method(*args, **kwargs)
             
             return Response(
                 {
                     "success": True,
-                    "message": f"Withdrawal pipeline successfully updated to state: {status_label}.",
+                    "message": f"Withdrawal request status updated to: {status_label}.",
                     "data": self.get_serializer(withdrawal).data
                 },
                 status=status.HTTP_200_OK
             )
             
         except (DjangoValidationError, DRFValidationError) as exc:
-            # 🟢 Cleanly unpack and flatten complex validation messages into a clean array
-            error_messages = []
-            if hasattr(exc, 'message_dict'):
-                for field, errors in exc.message_dict.items():
-                    error_messages.extend(errors)
-            elif hasattr(exc, 'messages'):
-                error_messages = exc.messages
-            elif hasattr(exc, 'detail'):
-                if isinstance(exc.detail, dict):
-                    for field, details in exc.detail.items():
-                        error_messages.extend([str(d) for d in details])
-                elif isinstance(exc.detail, list):
-                    error_messages = [str(d) for d in exc.detail]
-                else:
-                    error_messages = [str(exc.detail)]
-            else:
-                error_messages = [str(exc)]
-
             return Response(
                 {
                     "success": False,
                     "message": "Action validation failed.",
-                    "errors": error_messages
+                    "errors": format_validation_error(exc)
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
-            
         except Exception as e:
             logger.error(
-                f"Critical framework crash processing admin operation on "
+                f"Framework failure tracking operational logic on "
                 f"Withdrawal ID {kwargs.get('withdrawal_id')}: {str(e)}", 
                 exc_info=True
             )
             return Response(
                 {
                     "success": False,
-                    "message": "An internal processing system error occurred.",
+                    "message": "An internal error occurred during request settlement.",
                     "errors": [str(e)]
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -260,8 +451,8 @@ class AdminWithdrawalActionBaseView(generics.GenericAPIView):
 
 class AdminWithdrawalApproveView(AdminWithdrawalActionBaseView):
     """
-    POST /api/admin/withdrawals/{id}/approve/
-    Approves the withdrawal request without duplicating ledger deductions.
+    Approve withdrawal requests after reviewing matching documentation.
+    POST /admin/withdrawals/{id}/approve/
     """
     def post(self, request, pk, *args, **kwargs):
         return self.handle_action_execution(
@@ -274,19 +465,18 @@ class AdminWithdrawalApproveView(AdminWithdrawalActionBaseView):
 
 class AdminWithdrawalRejectView(AdminWithdrawalActionBaseView):
     """
-    POST /api/admin/withdrawals/{id}/reject/
-    Rejects the request and automatically issues a refund to the traveler's liquid balance.
+    Rejects the request and immediately processes systemic refunds back to the target wallet.
+    POST /admin/withdrawals/{id}/reject/
     """
     def post(self, request, pk, *args, **kwargs):
         reason = request.data.get("rejection_reason", "").strip()
         
-        # Immediate validation for missing request parameters before calling core service layers
         if not reason:
             return Response(
                 {
                     "success": False,
                     "message": "Action validation failed.",
-                    "errors": ["A valid 'rejection_reason' string value is required to reject a request."]
+                    "errors": ["A clear rejection reason is required for administrative tracking purposes."]
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
@@ -302,8 +492,8 @@ class AdminWithdrawalRejectView(AdminWithdrawalActionBaseView):
 
 class AdminWithdrawalMarkPaidView(AdminWithdrawalActionBaseView):
     """
-    POST /api/admin/withdrawals/{id}/mark-paid/
-    Marks an approved administrative checkout request as completely settled via banking rails.
+    Signals that an approved cashout request has successfully processed via wire or localized rails.
+    POST /admin/withdrawals/{id}/mark-paid/
     """
     def post(self, request, pk, *args, **kwargs):
         return self.handle_action_execution(
@@ -314,39 +504,51 @@ class AdminWithdrawalMarkPaidView(AdminWithdrawalActionBaseView):
         )
 
 
-
-
-
 class UserCancelWithdrawalView(generics.GenericAPIView):
     """
-    POST /api/wallets/withdrawals/{id}/cancel/
-    Allows a traveler to cancel their own PENDING withdrawal request before an admin approves it.
+    Enables user cancellations for requests in PENDING status.
+    POST /wallets/withdrawals/{id}/cancel/
     """
     permission_classes = [IsAuthenticated]
     serializer_class = WithdrawalRequestSerializer
 
     def post(self, request, pk, *args, **kwargs):
         try:
-            # Execute safe user cancellation and auto-refund via unified service layer
             withdrawal = WalletService.cancel_withdrawal(withdrawal_id=pk, user=request.user)
             
             return Response(
                 {
                     "success": True,
-                    "message": "Withdrawal request cancelled successfully. Funds have been restored to your available balance.",
+                    "message": "Withdrawal request cancelled successfully. Funds have been returned to your wallet.",
                     "data": self.get_serializer(withdrawal).data
                 },
                 status=status.HTTP_200_OK
             )
         except (DjangoValidationError, DRFValidationError) as exc:
-            msg = exc.messages if hasattr(exc, 'messages') else str(exc)
-            return Response({"success": False, "errors": msg}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "success": False, 
+                    "errors": format_validation_error(exc)
+                }, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Error canceling user withdrawal: {str(e)}")
+            return Response(
+                {
+                    "success": False,
+                    "errors": [str(e)]
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class AdminAdjustBalanceView(generics.GenericAPIView):
     """
-    POST /api/admin/wallets/{wallet_id}/adjust/
-    Administrative correction ledger tool. Allows support admins to correct balances manual way.
+    Administrative manual configuration tool to fix error layouts, manually settle issues, 
+    or run updates with proper logging.
+    
+    POST /admin/wallets/{wallet_id}/adjust/
     """
     permission_classes = [IsPlatformAdmin]
 
@@ -354,16 +556,14 @@ class AdminAdjustBalanceView(generics.GenericAPIView):
         delta_amount = request.data.get("delta_amount")
         reason = request.data.get("reason", "").strip()
 
-        # Input Payload Validations
         if not delta_amount:
-            return Response({"success": False, "errors": ["'delta_amount' is a required decimal value."]}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": False, "errors": ["'delta_amount' must be a valid, non-zero decimal string."]}, status=status.HTTP_400_BAD_REQUEST)
         if not reason:
-            return Response({"success": False, "errors": ["A written explanation 'reason' is required for admin auditing."]}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": False, "errors": ["A clear auditable tracking reason is required for balance adjustment history logs."]}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             delta_decimal = Decimal(str(delta_amount))
             
-            # Execute adjustment and cut ledger row record
             WalletService.adjust_balance(
                 wallet_id=wallet_id,
                 delta_amount=delta_decimal,
@@ -374,33 +574,42 @@ class AdminAdjustBalanceView(generics.GenericAPIView):
             return Response(
                 {
                     "success": True,
-                    "message": f"Wallet balance successfully adjusted by ${delta_decimal}."
+                    "message": f"User wallet updated successfully by amount change delta of ${delta_decimal}."
                 },
                 status=status.HTTP_200_OK
             )
         except (DjangoValidationError, DRFValidationError) as exc:
-            msg = exc.messages if hasattr(exc, 'messages') else str(exc)
-            return Response({"success": False, "errors": msg}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "success": False, 
+                    "errors": format_validation_error(exc)
+                }, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
-            return Response({"success": False, "errors": [str(e)]}, status=status.HTTP_400_BAD_REQUEST)
-    
-
-
-
-
+            return Response(
+                {
+                    "success": False, 
+                    "errors": [str(e)]
+                }, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class CreateStripeConnectAccount(APIView):
+    """
+    Initializes Stripe express connected registration endpoints to tie accounts onto payout infrastructure.
+    POST /wallet/connect/
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         user = request.user
 
-        # 1. Validate request context execution
+        # Run serializers validation
         serializer = StripeConnectSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
-        # 2. Safely read ledger state to check for existing connection maps
         stripe_account_id = None
         try:
             existing_account = StripeConnectedAccount.objects.get(user=user)
@@ -408,44 +617,41 @@ class CreateStripeConnectAccount(APIView):
         except StripeConnectedAccount.DoesNotExist:
             existing_account = None
 
-        # 3. Handle external API creation outside of any transaction block locks
+        # Build Stripe mapping outside database lock threads to avoid connection pool exhaustion
         if not stripe_account_id:
             try:
                 stripe_account = StripeConnectProvider.create_connected_account(user.email)
                 stripe_account_id = stripe_account.id
                 
-                # Double-check safety right before writing record block
                 with transaction.atomic():
                     existing_account, created = StripeConnectedAccount.objects.get_or_create(
                         user=user,
                         defaults={"stripe_account_id": stripe_account_id}
                     )
-                    # If someone squeezed in an account concurrently, prioritize it
                     if not created:
                         stripe_account_id = existing_account.stripe_account_id
                         
             except stripe.error.StripeError as e:
                 return Response(
-                    {"success": False, "error": e.user_message or "Stripe system processing error."},
+                    {"success": False, "error": e.user_message or "External payment partner connection failure."},
                     status=status.HTTP_424_FAILED_DEPENDENCY
                 )
             except Exception as e:
-                logger.error(f"Unexpected error creating internal database mapping model: {str(e)}")
+                logger.error(f"Unexpected error linking database properties to Stripe configuration: {str(e)}")
                 return Response(
-                    {"success": False, "error": "Internal ledger configuration failure."},
+                    {"success": False, "error": "Internal ledger sync failure."},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
-        # 4. Generate the onboarding session URL
+        # Retrieve connection links
         try:
             onboarding_url = StripeConnectProvider.create_account_link(stripe_account_id)
         except stripe.error.StripeError as e:
             return Response(
-                {"success": False, "error": e.user_message or "Could not initialize link pipeline."},
+                {"success": False, "error": e.user_message or "Failed to secure onboarding linked sessions from provider."},
                 status=status.HTTP_424_FAILED_DEPENDENCY
             )
 
-        # 5. Return success structure response matching requirements
         return Response(
             {
                 "success": True, 
@@ -455,17 +661,17 @@ class CreateStripeConnectAccount(APIView):
         )
 
 
-# apps/wallets/views.py
-
-
 class StripeConnectStatusView(APIView):
+    """
+    Checks realtime connected status attributes from the Stripe Connect network API and syncs details locally.
+    GET /wallets/connect/status/
+    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
 
         try:
-            # 1. Fetch local database record
             stripe_account = StripeConnectedAccount.objects.get(user=user)
         except StripeConnectedAccount.DoesNotExist:
             return Response({
@@ -476,12 +682,12 @@ class StripeConnectStatusView(APIView):
             }, status=status.HTTP_200_OK)
 
         try:
-            # 2. Query real-time status from Stripe Network API (outside db lock)
+            # Query status
             live_account_data = StripeConnectProvider.retrieve_account_status(
                 stripe_account.stripe_account_id
             )
 
-            # 3. Synchronize state inside a protected transaction block
+            # Settle details atomically inside database transaction
             with transaction.atomic():
                 stripe_account = StripeConnectedAccount.objects.select_for_update().get(id=stripe_account.id)
                 stripe_account.payouts_enabled = live_account_data.payouts_enabled
@@ -490,11 +696,10 @@ class StripeConnectStatusView(APIView):
                 stripe_account.save()
 
         except stripe.error.StripeError as e:
-            logger.error(f"Stripe sync breakdown for User {user.id}: {str(e)}")
-            # Fall back safely to last saved database values if network fails
+            logger.error(f"Stripe sync failed safely for User {user.id}: {str(e)}")
+            # Fail silently to retain prior cached values if stripe partner APIs timing out
             pass
 
-        # 4. Return clean production payload structure
         return Response({
             "connected": True,
             "charges_enabled": stripe_account.charges_enabled,

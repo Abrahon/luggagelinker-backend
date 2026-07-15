@@ -2,6 +2,16 @@ import uuid
 from django.db import models
 from django.conf import settings
 from decimal import Decimal
+import uuid
+from django.db import models
+from django.conf import settings
+import uuid
+import logging
+from django.db import models
+
+import uuid
+from django.db import models
+from django.conf import settings
 
 class Wallet(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -98,130 +108,189 @@ class WalletTransaction(models.Model):
 
 
 
-import uuid
-import logging
-from django.db import models
-from apps.wallets.models import Wallet  # Adjust import path if needed
+class WithdrawalMethod(models.Model):
+
+    class MethodType(models.TextChoices):
+        BANK = "BANK", "Bank"
+        BKASH = "BKASH", "bKash"
+        NAGAD = "NAGAD", "Nagad"
+        ROCKET = "ROCKET", "Rocket"
+        STRIPE = "STRIPE", "Stripe"
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="withdrawal_methods",
+    )
+
+    type = models.CharField(
+        max_length=20,
+        choices=MethodType.choices,
+    )
+
+    account_name = models.CharField(
+        max_length=150,
+    )
+
+    account_number = models.CharField(
+        max_length=100,
+    )
+
+    bank_name = models.CharField(
+        max_length=120,
+        blank=True,
+    )
+
+    branch_name = models.CharField(
+        max_length=120,
+        blank=True,
+    )
+
+    routing_number = models.CharField(
+        max_length=80,
+        blank=True,
+    )
+
+    stripe_account_id = models.CharField(
+        max_length=120,
+        blank=True,
+    )
+
+    is_default = models.BooleanField(default=False)
+
+    is_verified = models.BooleanField(default=False)
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-is_default", "-created_at"]
+
+    def __str__(self):
+        return f"{self.user} - {self.type}"
+
+
 
 class WithdrawalRequest(models.Model):
 
     class WithdrawalStatus(models.TextChoices):
         PENDING = "PENDING", "Pending Approval"
-        APPROVED = "APPROVED", "Approved & Processing"
+        APPROVED = "APPROVED", "Approved"
+        PROCESSING = "PROCESSING", "Processing"
         COMPLETED = "COMPLETED", "Completed"
         REJECTED = "REJECTED", "Rejected"
-        FAILED = "FAILED", "Failed"  #
+        FAILED = "FAILED", "Failed"
+        CANCELLED = "CANCELLED", "Cancelled"
 
-    class WithdrawalMethod(models.TextChoices):
-        STRIPE = "STRIPE", "Stripe Bank Payout"
-        BANK = "BANK", "Bank Account"
-        BKASH = "BKASH", "bKash"
-        NAGAD = "NAGAD", "Nagad"
-        ROCKET = "ROCKET", "Rocket"
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
 
     wallet = models.ForeignKey(
         Wallet,
         on_delete=models.CASCADE,
-        related_name="withdrawals"
+        related_name="withdrawals",
+    )
+
+    withdrawal_method = models.ForeignKey(
+        WithdrawalMethod,
+        on_delete=models.PROTECT,
+        related_name="withdrawal_requests",
+        null=True,
+        blank=True,
     )
 
     amount = models.DecimalField(
         max_digits=12,
-        decimal_places=2
+        decimal_places=2,
     )
 
     status = models.CharField(
-        max_length=15,
-        choices=WithdrawalStatus.choices,
-        default=WithdrawalStatus.PENDING
-    )
-
-    # -----------------------------
-    # Withdrawal Method (Kept the required, non-nullable one)
-    # -----------------------------
-    method = models.CharField(
         max_length=20,
-        choices=WithdrawalMethod.choices
+        choices=WithdrawalStatus.choices,
+        default=WithdrawalStatus.PENDING,
     )
 
-    # -----------------------------
-    # Common Information
-    # -----------------------------
-    account_name = models.CharField(
-        max_length=150,
-        blank=True,
-        null=True
-    )
-
-    account_number = models.CharField(
-        max_length=50, 
-        blank=True, 
-        null=True
-    )
-
-    # -----------------------------
-    # Only for BANK
-    # -----------------------------
-    bank_name = models.CharField(
-        max_length=100,
-        blank=True
-    )
-
-    branch_name = models.CharField(
-        max_length=100,
-        blank=True
-    )
-
-    routing_number = models.CharField(
-        max_length=50,
-        blank=True
-    )
-
-    # -----------------------------
-    # Admin
-    # -----------------------------
     rejection_reason = models.TextField(
         blank=True,
-        null=True
+        null=True,
     )
-    
+
+    # Stripe tracking (only used when method == STRIPE)
     stripe_transfer_id = models.CharField(
         max_length=100,
         blank=True,
         null=True,
-        help_text="Stripe platform transfer tracking reference (tr_...)"
     )
+
     stripe_payout_id = models.CharField(
         max_length=100,
         blank=True,
         null=True,
-        help_text="Stripe express destination payout tracking reference (po_...)"
     )
+
+    # Admin/operator who processed the request
+    processed_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="processed_withdrawals",
+    )
+
+    processed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
     completed_at = models.DateTimeField(
         null=True,
         blank=True,
-        help_text="Timestamp confirming absolute banking clearance settlement."
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    admin_note = models.TextField(
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
 
     class Meta:
+        ordering = [
+            "-created_at",
+        ]
+
         indexes = [
             models.Index(fields=["wallet", "-created_at"]),
             models.Index(fields=["status"]),
-            models.Index(fields=["method"]),
+            models.Index(fields=["withdrawal_method"]),
+            models.Index(fields=["created_at"]),
         ]
 
+    def __str__(self):
+        return (
+            f"{self.wallet.user} - "
+            f"{self.amount} - "
+            f"{self.get_status_display()}"
+        )
 
-
-
-
-import uuid
-from django.db import models
-from django.conf import settings
 
 
 class StripeConnectedAccount(models.Model):
