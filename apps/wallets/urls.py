@@ -6,6 +6,7 @@ from .views import (
 
     WithdrawalRequestView,
     UserCancelWithdrawalView,
+    WalletRecentActivityView,
 
     WithdrawalMethodListCreateView,
     WithdrawalMethodRetrieveUpdateDestroyView,
@@ -40,6 +41,11 @@ urlpatterns = [
         WalletTransactionListView.as_view(),
         name="wallet-transactions",
     ),
+    path(
+      "wallets/recent-activities/",
+       WalletRecentActivityView.as_view(),
+       name="wallet-recent-activities",
+),
 
     # =====================================================
     # Withdrawal Methods

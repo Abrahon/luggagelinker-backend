@@ -20,24 +20,22 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+from rest_framework import serializers
+from .models import Wallet
+
+
 class WalletSerializer(serializers.ModelSerializer):
     """
-    Serializer providing read-only insights into a user's liquid, pending, 
-    and total financial performance metrics.
+    Returns only the user's wallet balances.
     """
-    username = serializers.CharField(source="user.username", read_only=True)
 
     class Meta:
         model = Wallet
         fields = [
-            "id",
-            "username",
             "available_balance",
             "pending_balance",
             "total_earned",
             "total_withdrawn",
-            "created_at",
-            "updated_at",
         ]
         read_only_fields = fields
 
@@ -349,3 +347,162 @@ class StripeConnectSerializer(serializers.Serializer):
         if not request or not request.user:
             raise serializers.ValidationError("Authentication context missing.")
         return attrs
+
+
+
+from rest_framework import serializers
+from .models import WalletTransaction
+
+
+class WalletRecentActivitySerializer(serializers.ModelSerializer):
+    title = serializers.SerializerMethodField()
+    subtitle = serializers.SerializerMethodField()
+    category = serializers.SerializerMethodField()
+    icon = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    booking_id = serializers.SerializerMethodField()
+    tracking_number = serializers.SerializerMethodField()
+    amount = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WalletTransaction
+        fields = [
+            "id",
+            "title",
+            "subtitle",
+            "category",
+            "icon",
+            "status",
+            "amount",
+            "booking_id",
+            "tracking_number",
+            "created_at",
+        ]
+
+    def get_amount(self, obj):
+        return str(obj.amount)
+
+    def get_booking_id(self, obj):
+        return str(obj.booking.id) if obj.booking else None
+
+    def get_tracking_number(self, obj):
+        return obj.booking.tracking_number if obj.booking else None
+
+    def get_status(self, obj):
+        return obj.status.lower()
+
+    def get_category(self, obj):
+
+        if obj.type in [
+            WalletTransaction.TransactionType.ESCROW_HOLD,
+            WalletTransaction.TransactionType.ESCROW_RELEASE,
+        ]:
+            return "earning"
+
+        if obj.type in [
+            WalletTransaction.TransactionType.WITHDRAWAL,
+            WalletTransaction.TransactionType.WITHDRAWAL_CANCEL,
+        ]:
+            return "withdrawal"
+
+        if obj.type == WalletTransaction.TransactionType.REFUND:
+            return "refund"
+
+        if obj.type == WalletTransaction.TransactionType.ADJUSTMENT:
+            return "adjustment"
+
+        return "other"
+
+    def get_icon(self, obj):
+
+        if obj.type == WalletTransaction.TransactionType.ESCROW_HOLD:
+            return "clock"
+
+        if obj.type == WalletTransaction.TransactionType.ESCROW_RELEASE:
+            return "wallet"
+
+        if obj.type == WalletTransaction.TransactionType.WITHDRAWAL:
+            return "arrow_up"
+
+        if obj.type == WalletTransaction.TransactionType.WITHDRAWAL_CANCEL:
+            return "rotate_ccw"
+
+        if obj.type == WalletTransaction.TransactionType.REFUND:
+            return "rotate_ccw"
+
+        if obj.type == WalletTransaction.TransactionType.ADJUSTMENT:
+            return "settings"
+
+        return "wallet"
+
+    def get_title(self, obj):
+
+        booking = obj.booking
+
+        if obj.type == WalletTransaction.TransactionType.ESCROW_HOLD:
+
+            if booking:
+                if booking.status == "PAYMENT_PENDING":
+                    return "Payment Authorized"
+
+                if booking.status == "CONFIRMED":
+                    return "Payment Held in Escrow"
+
+                if booking.status in [
+                    "PICKED_UP",
+                    "IN_TRANSIT",
+                ]:
+                    return "Earnings Pending"
+
+            return "Escrow Hold"
+
+        if obj.type == WalletTransaction.TransactionType.ESCROW_RELEASE:
+
+            if booking:
+                if booking.status == "COMPLETED":
+                    return "Earnings Received"
+
+                if booking.status == "DELIVERED":
+                    return "Payment Released"
+
+            return "Escrow Released"
+
+        if obj.type == WalletTransaction.TransactionType.WITHDRAWAL:
+            return "Withdrawal Request"
+
+        if obj.type == WalletTransaction.TransactionType.WITHDRAWAL_CANCEL:
+            return "Withdrawal Cancelled"
+
+        if obj.type == WalletTransaction.TransactionType.REFUND:
+            return "Booking Refunded"
+
+        if obj.type == WalletTransaction.TransactionType.ADJUSTMENT:
+            return "Balance Adjustment"
+
+        return obj.get_type_display()
+
+    def get_subtitle(self, obj):
+
+        booking = obj.booking
+
+        if booking:
+
+            if obj.type == WalletTransaction.TransactionType.ESCROW_HOLD:
+                return (
+                    f"Booking {booking.tracking_number} • "
+                    f"{booking.get_status_display()}"
+                )
+
+            if obj.type == WalletTransaction.TransactionType.ESCROW_RELEASE:
+                return (
+                    f"Booking {booking.tracking_number} • "
+                    f"{booking.get_status_display()}"
+                )
+
+            if obj.type == WalletTransaction.TransactionType.REFUND:
+                return f"Refund for Booking {booking.tracking_number}"
+
+        if obj.description:
+            return obj.description
+
+        return ""

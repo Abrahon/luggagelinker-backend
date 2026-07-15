@@ -1,31 +1,38 @@
 import logging
 import traceback
 from decimal import Decimal
-from django.db import transaction
-from django.shortcuts import render
-from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework import viewsets, status, generics
-from rest_framework.views import APIView
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import ValidationError as DRFValidationError
-from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.filters import OrderingFilter
-import stripe  
 
-# Import local wallet entities
-from .models import Wallet, WalletTransaction, WithdrawalRequest, WithdrawalMethod, StripeConnectedAccount
-from .serializers import (
-    WalletSerializer, 
-    WalletTransactionSerializer, 
-    WithdrawalRequestSerializer,
-    WithdrawalMethodSerializer,
-    StripeConnectSerializer
-)
-from .services import WalletService, AdminWithdrawalService
-from core.permissions import IsPlatformAdmin
+import stripe
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import generics, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.filters import OrderingFilter
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from apps.payment.providers.stripe_connect import StripeConnectProvider
+from core.permissions import IsPlatformAdmin
+
+from .models import (
+    StripeConnectedAccount,
+    Wallet,
+    WalletTransaction,
+    WithdrawalMethod,
+    WithdrawalRequest,
+)
+from .serializers import (
+    StripeConnectSerializer,
+    WalletRecentActivitySerializer,
+    WalletSerializer,
+    WalletTransactionSerializer,
+    WithdrawalMethodSerializer,
+    WithdrawalRequestSerializer,
+)
+from .services import AdminWithdrawalService, WalletService
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +111,6 @@ class WalletTransactionListView(generics.ListAPIView):
         ).select_related("booking")
 
 
-from rest_framework import generics, status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-
-from .models import WithdrawalMethod
-from .serializers import WithdrawalMethodSerializer
 
 
 class WithdrawalMethodListCreateView(generics.ListCreateAPIView):
@@ -706,3 +707,51 @@ class StripeConnectStatusView(APIView):
             "payouts_enabled": stripe_account.payouts_enabled,
             "details_submitted": stripe_account.details_submitted
         }, status=status.HTTP_200_OK)
+
+
+
+
+
+
+
+
+
+class WalletRecentActivityView(generics.ListAPIView):
+    serializer_class = WalletRecentActivitySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            WalletTransaction.objects.filter(
+                wallet__user=self.request.user
+            )
+            .select_related("booking")
+            .order_by("-created_at")[:10]
+        )
+
+    def list(self, request, *args, **kwargs):
+        try:
+            queryset = self.get_queryset()
+            serializer = self.get_serializer(queryset, many=True)
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Recent wallet activities fetched successfully.",
+                    "count": len(serializer.data),
+                    "data": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            logger.exception("Failed to fetch wallet activities.")
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Failed to fetch wallet activities.",
+                    "errors": [str(e)],
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
