@@ -7,7 +7,7 @@ from django.db import models
 
 
 class MatchStatus(models.TextChoices):
-    PENDING = "PENDING", "Pending"
+    AVAILABLE = "AVAILABLE", "Available"
     REQUESTED = "REQUESTED", "Requested"
     ACCEPTED = "ACCEPTED", "Accepted"
     REJECTED = "REJECTED", "Rejected"
@@ -54,7 +54,7 @@ class Match(models.Model):
     status = models.CharField(
         max_length=20,
         choices=MatchStatus.choices,
-        default=MatchStatus.PENDING,
+        default=MatchStatus.AVAILABLE,
     )
 
     # ==========================================================

@@ -21,7 +21,7 @@ class ProfileSerializer(serializers.ModelSerializer):
             "id",
             "first_name",
             "last_name",
-            "gender",  # Added missing field
+            "gender",  
             "phone",
             "country",
             "city",

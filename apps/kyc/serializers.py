@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.kyc.models import KYC, IDType, KYCStatus
-
+from apps.kyc.models import KYC, KYCStatus
 
 class KYCSerializer(serializers.ModelSerializer):
 
@@ -218,8 +218,7 @@ class KYCSerializer(serializers.ModelSerializer):
 
 
 
-# admin management from rest_framework import serializers
-from apps.kyc.models import KYC, KYCStatus
+
 
 
 class AdminUserSerializer(serializers.Serializer):
