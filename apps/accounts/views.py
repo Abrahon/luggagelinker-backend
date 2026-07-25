@@ -488,15 +488,49 @@ class ResetPasswordView(APIView):
 
 
 
+from rest_framework import generics, permissions
+from django.db.models import Q
+from django.contrib.auth import get_user_model
+
+from .serializers import AdminUserListSerializer
+
+User = get_user_model()
+
+
 class AdminUserListView(generics.ListAPIView):
     """
-    API View to list all users for Admin.
-    Supports filtering by search or active status if needed.
+    API View to list all users for Admin with manual filtering logic.
     """
-    queryset = User.objects.select_related("profile").all().order_by("-date_joined")
+
     serializer_class = AdminUserListSerializer
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
+    def get_queryset(self):
+        queryset = User.objects.select_related("profile").all().order_by("-date_joined")
+
+        # 1. Role Filter (?role=TRAVELER or ?role=SENDER)
+        role = self.request.query_params.get("role")
+        if role:
+            queryset = queryset.filter(role__iexact=role)
+
+        # 2. Status Filter (?is_active=true or ?is_active=false)
+        is_active = self.request.query_params.get("is_active")
+        if is_active is not None:
+            if is_active.lower() == "true":
+                queryset = queryset.filter(is_active=True)
+            elif is_active.lower() == "false":
+                queryset = queryset.filter(is_active=False)
+
+        # 3. Search Filter (?search=john)
+        search = self.request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(email__icontains=search)
+                | Q(profile__first_name__icontains=search)
+                | Q(profile__last_name__icontains=search)
+            )
+
+        return queryset
 
 
 class AdminUserStatusToggleView(APIView):
