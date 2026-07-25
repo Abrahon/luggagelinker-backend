@@ -155,7 +155,7 @@ def send_otp_email(to_email, otp_code, name="User", sender_name=None):
 
     plain_text = strip_tags(html_content)
 
-    from_email = f"{sender_name or 'User'} <{settings.EMAIL_HOST_USER}>"
+    from_email = f"{sender_name or 'Luggage linker'} <{settings.EMAIL_HOST_USER}>"
 
     try:
         msg = EmailMultiAlternatives(

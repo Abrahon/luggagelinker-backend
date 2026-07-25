@@ -17,6 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 from decouple import config
 import os
 from dotenv import load_dotenv
+from datetime import timedelta
 
 load_dotenv()
 import cloudinary
@@ -45,6 +46,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "cloudinary",
     "cloudinary_storage",
@@ -118,6 +120,8 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 10
 }
+
+
 # Database
 # ==============================================================================
 # STRIPE CONNECT ONBOARDING REDIRECT CONFIGURATIONS
@@ -126,6 +130,25 @@ REST_FRAMEWORK = {
 STRIPE_CONNECT_REFRESH_URL = "http://localhost:8000/api/connect/refresh/"
 STRIPE_CONNECT_RETURN_URL = "http://localhost:8000/api/connect/success/"
 
+
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=360),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+
+    "UPDATE_LAST_LOGIN": True,
+
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "AUTH_TOKEN_CLASSES": (
+        "rest_framework_simplejwt.tokens.AccessToken",
+    ),
+}
 
 DATABASES = {
     "default": {
