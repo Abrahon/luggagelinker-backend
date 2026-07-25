@@ -331,3 +331,13 @@ class UserStatusUpdateSerializer(serializers.Serializer):
 
     is_active = serializers.BooleanField(read_only=True)
     message = serializers.CharField(read_only=True)
+
+
+
+class MonthlyUserGrowthSerializer(serializers.Serializer):
+    """Serializer for monthly user growth data across all time."""
+    year = serializers.IntegerField()
+    month = serializers.IntegerField()
+    month_name = serializers.CharField()
+    total_users = serializers.IntegerField()
+    active_users = serializers.IntegerField()

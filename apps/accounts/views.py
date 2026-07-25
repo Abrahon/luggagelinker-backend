@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
-
+from .serializers import MonthlyUserGrowthSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework import generics, status
 from apps.accounts.models import User, OTP
@@ -33,6 +33,9 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework import generics, permissions
+from django.db.models import Q
+from django.contrib.auth import get_user_model
 
 from .models import User
 from .serializers import AdminUserListSerializer
@@ -40,6 +43,8 @@ from .serializers import AdminUserListSerializer
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+
 
 
 class SignupView(generics.GenericAPIView):
@@ -308,7 +313,7 @@ class LoginView(generics.GenericAPIView):
             )
 
 
-# resend views
+
 # resend otp
 class ResendOTPView(generics.GenericAPIView):
     permission_classes = [AllowAny]
@@ -488,13 +493,6 @@ class ResetPasswordView(APIView):
 
 
 
-from rest_framework import generics, permissions
-from django.db.models import Q
-from django.contrib.auth import get_user_model
-
-from .serializers import AdminUserListSerializer
-
-User = get_user_model()
 
 
 class AdminUserListView(generics.ListAPIView):
@@ -610,3 +608,67 @@ class AdminUserStatusToggleView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+
+
+
+
+from django.contrib.auth import get_user_model
+from django.db.models import Count, Q
+from django.db.models.functions import TruncMonth
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+class AdminUserGrowthView(APIView):
+    """
+    API View to retrieve historical monthly user growth stats.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+    def get(self, request):
+        MONTH_NAMES = [
+            "",
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+        ]
+
+        # Group registrations by month across all time
+        growth_query = (
+            User.objects.annotate(month=TruncMonth("date_joined"))
+            .values("month")
+            .annotate(
+                total_users=Count("id"),
+                active_users=Count("id", filter=Q(is_active=True)),
+            )
+            .order_by("month")
+        )
+
+        formatted_data = []
+        for item in growth_query:
+            if item["month"]:
+                date_val = item["month"]
+                formatted_data.append(
+                    {
+                        "year": date_val.year,
+                        "month": date_val.month,
+                        "month_name": MONTH_NAMES[date_val.month],
+                        "total_users": item["total_users"],
+                        "active_users": item["active_users"],
+                    }
+                )
+
+        serializer = MonthlyUserGrowthSerializer(formatted_data, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
