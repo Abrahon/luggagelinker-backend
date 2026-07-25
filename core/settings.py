@@ -19,6 +19,8 @@ import os
 from dotenv import load_dotenv
 from datetime import timedelta
 
+from corsheaders.defaults import default_headers  # Add this import
+
 load_dotenv()
 import cloudinary
 
@@ -32,7 +34,7 @@ SECRET_KEY = 'django-insecure-*3@05gy5s^&^xc*^@c)_=^8y5kfh23kjd4y^r7u89a%p5#6&8d
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']  
 
 
 # Application definition
@@ -87,12 +89,21 @@ ROOT_URLCONF = 'core.urls'
 AUTH_USER_MODEL = "accounts.User"
 
 
+
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3600",
     "http://127.0.0.1:5173",
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Add this setting to allow the Dev Tunnel header during CORS preflight:
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-tunnel-skip-antiphishing-page",
+]
+
+
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -132,23 +143,6 @@ STRIPE_CONNECT_RETURN_URL = "http://localhost:8000/api/connect/success/"
 
 
 
-SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=360),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-
-    "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": True,
-
-    "UPDATE_LAST_LOGIN": True,
-
-    "ALGORITHM": "HS256",
-    "SIGNING_KEY": SECRET_KEY,
-
-    "AUTH_HEADER_TYPES": ("Bearer",),
-    "AUTH_TOKEN_CLASSES": (
-        "rest_framework_simplejwt.tokens.AccessToken",
-    ),
-}
 
 DATABASES = {
     "default": {
@@ -175,6 +169,24 @@ SIMPLE_JWT = {
     "UPDATE_LAST_LOGIN": True,
 }
 
+
+# SIMPLE_JWT = {
+#     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=360),
+#     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+
+#     "ROTATE_REFRESH_TOKENS": True,
+#     "BLACKLIST_AFTER_ROTATION": True,
+
+#     "UPDATE_LAST_LOGIN": True,
+
+#     "ALGORITHM": "HS256",
+#     "SIGNING_KEY": SECRET_KEY,
+
+#     "AUTH_HEADER_TYPES": ("Bearer",),
+#     "AUTH_TOKEN_CLASSES": (
+#         "rest_framework_simplejwt.tokens.AccessToken",
+#     ),
+# }
 
 cloudinary.config(
     cloud_name=config("CLOUDINARY_CLOUD_NAME"),

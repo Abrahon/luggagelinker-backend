@@ -6,6 +6,7 @@ from apps.profiles.models import Profile, GenderChoices
 
 class ProfileSerializer(serializers.ModelSerializer):
     # Read-only statistical fields to protect integrity against user tampering
+    email = serializers.EmailField(source="user.email", read_only=True)
     average_rating = serializers.DecimalField(read_only=True, max_digits=3, decimal_places=2)
     total_reviews = serializers.IntegerField(read_only=True)
     
@@ -23,6 +24,7 @@ class ProfileSerializer(serializers.ModelSerializer):
             "last_name",
             "gender",  
             "phone",
+            "email",   
             "country",
             "city",
             "address",
@@ -40,6 +42,7 @@ class ProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = (
             "id",
+            "email",   
             "created_at",
             "updated_at",
         )
@@ -68,6 +71,7 @@ class ProfileSerializer(serializers.ModelSerializer):
                     "blank": "Phone number cannot be empty.",
                 },
             },
+
             "country": {
                 "required": True,
                 "allow_blank": False,
