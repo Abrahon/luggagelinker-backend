@@ -9,9 +9,6 @@ class ProfileSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(source="user.email", read_only=True)
     average_rating = serializers.DecimalField(read_only=True, max_digits=3, decimal_places=2)
     total_reviews = serializers.IntegerField(read_only=True)
-    
-    # Optional fields missing from your model snippet but referenced in your serializer (e.g. if updated asynchronously via signals)
-    # If these exist on your real model, keep them here. If they don't, remove them from fields.
     completed_deliveries = serializers.IntegerField(read_only=True, required=False)
     cancelled_deliveries = serializers.IntegerField(read_only=True, required=False)
     total_earnings = serializers.DecimalField(read_only=True, required=False, max_digits=10, decimal_places=2)

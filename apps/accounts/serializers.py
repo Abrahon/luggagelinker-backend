@@ -286,3 +286,48 @@ class ChangePasswordSerializer(serializers.Serializer):
         user.set_password(self.validated_data["new_password"])
         user.save(update_fields=["password"])
         return user
+
+
+
+
+from rest_framework import serializers
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
+
+class AdminUserListSerializer(serializers.ModelSerializer):
+    """Serializer for listing users in the admin panel."""
+
+    name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "role",
+            "is_active",
+            "is_online",
+            "last_seen",
+            "is_staff",
+            "is_verified",
+            "date_joined",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_name(self, obj):
+        # Uses the `full_name` property from your Profile model directly
+        if hasattr(obj, "profile") and obj.profile:
+            return obj.profile.full_name
+        return ""
+
+class UserStatusUpdateSerializer(serializers.Serializer):
+    """
+    Optional serializer to validate responses or reason when updating status.
+    """
+
+    is_active = serializers.BooleanField(read_only=True)
+    message = serializers.CharField(read_only=True)

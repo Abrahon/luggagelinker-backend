@@ -22,6 +22,23 @@ import uuid
 from django.core.signing import BadSignature, SignatureExpired
 from .serializers import LoginSerializer
 
+from rest_framework import status, generics, permissions
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.contrib.auth import get_user_model
+from django.shortcuts import get_object_or_404
+
+from django.shortcuts import get_object_or_404
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.response import Response
+from rest_framework import status
+
+from .models import User
+from .serializers import AdminUserListSerializer
+
+User = get_user_model()
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,20 +103,6 @@ class SignupView(generics.GenericAPIView):
                 email=email,
                 code=otp_code,
             )
-
-        # WhatsApp preference
-        # if user.phone:
-        #     try:
-        #         UserWhatsAppPreference.objects.get_or_create(
-        #             user=user,
-        #             defaults={
-        #                 "phone": normalize_whatsapp_number(user.phone),
-        #                 "is_verified": False,
-        #                 "is_enabled": False,
-        #             },
-        #         )
-        #     except Exception as exc:
-        #         print("WhatsApp preference create failed:", str(exc))
 
         # send OTP async
         threading.Thread(
@@ -485,3 +488,91 @@ class ResetPasswordView(APIView):
 
 
 
+class AdminUserListView(generics.ListAPIView):
+    """
+    API View to list all users for Admin.
+    Supports filtering by search or active status if needed.
+    """
+    queryset = User.objects.select_related("profile").all().order_by("-date_joined")
+    serializer_class = AdminUserListSerializer
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+
+
+class AdminUserStatusToggleView(APIView):
+    """
+    PATCH:
+    /admin/users/<uuid:user_id>/ban/
+    /admin/users/<uuid:user_id>/unban/
+    """
+
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def patch(self, request, user_id, action):
+
+        action = action.lower()
+
+        if action not in ["ban", "unban"]:
+            return Response(
+                {
+                    "message": "Invalid action.",
+                    "errors": {
+                        "action": "Action must be either 'ban' or 'unban'."
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = get_object_or_404(User, id=user_id)
+
+        # Prevent admin from banning themselves
+        if request.user.id == user.id and action == "ban":
+            return Response(
+                {
+                    "message": "Operation failed.",
+                    "errors": {
+                        "user": "You cannot ban your own account."
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if action == "ban":
+
+            if not user.is_active:
+                return Response(
+                    {
+                        "message": "User is already banned."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            user.is_active = False
+            success_message = "User banned successfully."
+
+        else:
+
+            if user.is_active:
+                return Response(
+                    {
+                        "message": "User is already active."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            user.is_active = True
+            success_message = "User unbanned successfully."
+
+        user.save(update_fields=["is_active", "updated_at"])
+
+        return Response(
+            {
+                "message": success_message,
+                "data": {
+                    "id": str(user.id),
+                    "email": user.email,
+                    "is_active": user.is_active,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
