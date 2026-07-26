@@ -351,3 +351,17 @@ class UserRoleDistributionSerializer(serializers.Serializer):
     roles = serializers.DictField(
         child=serializers.DictField(child=serializers.FloatField())
     )
+
+
+
+
+class MonthlyRevenueItemSerializer(serializers.Serializer):
+    """Serializer for monthly revenue aggregation data."""
+
+    year = serializers.IntegerField()
+    month = serializers.IntegerField()
+    month_name = serializers.CharField()
+    total_revenue = serializers.FloatField()
+    platform_fee_revenue = serializers.FloatField()
+    transaction_count = serializers.IntegerField()
+    paying_users = serializers.IntegerField()

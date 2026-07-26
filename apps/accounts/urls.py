@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import SignupView,AdminUserRoleDistributionView,VerifyOTPView,AdminUserGrowthView,AdminUserListView,AdminUserStatusToggleView,LoginView,ResendOTPView,ForgotPasswordOTPView,VerifyForgotOTPView,ResetPasswordView
+from .views import SignupView,AdminMonthlyRevenueView,AdminUserRoleDistributionView,VerifyOTPView,AdminUserGrowthView,AdminUserListView,AdminUserStatusToggleView,LoginView,ResendOTPView,ForgotPasswordOTPView,VerifyForgotOTPView,ResetPasswordView
 
 urlpatterns = [
     path("signup/", SignupView.as_view(), name="signup"),
@@ -27,6 +27,11 @@ urlpatterns = [
         "admin/users/role-distribution/",
         AdminUserRoleDistributionView.as_view(),
         name="admin-user-role-distribution",
+    ),
+    path(
+        "admin/revenue/monthly/",
+        AdminMonthlyRevenueView.as_view(),
+        name="admin-monthly-revenue",
     ),
 
 ]

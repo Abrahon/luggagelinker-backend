@@ -28,8 +28,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
-
-from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
@@ -40,6 +38,24 @@ from django.db.models.functions import TruncMonth
 from .serializers import UserRoleDistributionSerializer
 from .models import User
 from .serializers import AdminUserListSerializer
+import datetime
+from django.db.models import Count, DecimalField, Sum, Q
+from django.db.models.functions import Coalesce, ExtractMonth, ExtractYear
+from django.utils import timezone
+from rest_framework.views import APIView
+from dateutil.relativedelta import relativedelta
+
+from django.db.models import Count, DecimalField, Sum
+from django.utils import timezone
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from apps.payment.models import BookingPayment, BookingPaymentStatus
+from .serializers import MonthlyRevenueItemSerializer
+
+# Replace with your actual Payment/Transaction model
+from apps.payment.models import BookingPayment
+from .serializers import MonthlyRevenueItemSerializer
 
 User = get_user_model()
 
@@ -708,4 +724,94 @@ class AdminUserRoleDistributionView(APIView):
         }
 
         serializer = UserRoleDistributionSerializer(data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+
+
+
+
+
+
+
+
+class AdminMonthlyRevenueView(APIView):
+    """
+    API View to retrieve monthly revenue data for the past 12 months.
+    Aggregates successfully captured/authorized escrow payments from BookingPayment.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+    def get(self, request):
+        now = timezone.now()
+
+        # Calculate start date 11 months ago (1st day of that month)
+        start_date = (now.replace(day=1) - relativedelta(months=11)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+        # Successful payment statuses in your model
+        successful_statuses = [
+            BookingPaymentStatus.CAPTURED,   # "CAPTURED"
+            BookingPaymentStatus.AUTHORIZED, # "AUTHORIZED"
+        ]
+
+        raw_monthly_data = (
+            BookingPayment.objects.filter(
+                created_at__gte=start_date,
+                status__in=successful_statuses,
+            )
+            .annotate(
+                year=ExtractYear("created_at"),
+                month=ExtractMonth("created_at"),
+            )
+            .values("year", "month")
+            .annotate(
+                total_revenue=Coalesce(
+                    Sum("amount"),
+                    0.0,
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
+                platform_fee_revenue=Coalesce(
+                    Sum("platform_fee"),
+                    0.0,
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
+                transaction_count=Count("id"),
+                paying_users=Count("payer_id", distinct=True),
+            )
+            .order_by("year", "month")
+        )
+
+        # Quick lookup map: (year, month) -> aggregated record
+        data_lookup = {
+            (item["year"], item["month"]): item for item in raw_monthly_data
+        }
+
+        # Build 12-month consecutive timeline
+        formatted_data = []
+        for i in range(11, -1, -1):
+            target_date = now.replace(day=1) - relativedelta(months=i)
+            yr = target_date.year
+            mth = target_date.month
+
+            item = data_lookup.get((yr, mth))
+
+            raw_total = item["total_revenue"] if item else 0.00
+            raw_fee = item["platform_fee_revenue"] if item else 0.00
+
+            formatted_data.append(
+                {
+                    "year": yr,
+                    "month": mth,
+                    "month_name": target_date.strftime("%B"),
+                    "total_revenue": float(raw_total),
+                    "platform_fee_revenue": float(raw_fee),
+                    "transaction_count": item["transaction_count"] if item else 0,
+                    "paying_users": item["paying_users"] if item else 0,
+                }
+            )
+
+        serializer = MonthlyRevenueItemSerializer(formatted_data, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
