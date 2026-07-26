@@ -336,3 +336,42 @@ class StripeEventLog(models.Model):
     class Meta:
         verbose_name = "Stripe Event Log"
         verbose_name_plural = "Stripe Event Logs"
+
+
+from decimal import Decimal
+
+
+
+class PlatformSetting(models.Model):
+    """
+    Global platform configuration.
+
+    Only ONE record should exist.
+    """
+
+    platform_fee_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("2.00"),
+        help_text="Platform commission percentage deducted from traveler payout.",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        db_table = "platform_settings"
+        verbose_name = "Platform Setting"
+        verbose_name_plural = "Platform Settings"
+
+    def __str__(self):
+        return f"Platform Fee: {self.platform_fee_percentage}%"
