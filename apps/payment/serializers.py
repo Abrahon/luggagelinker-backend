@@ -305,3 +305,37 @@ class BookingPaymentHistorySerializer(serializers.ModelSerializer):
     def get_currency(self, obj):
         """Ensures consistent upper-casing for ISO currency symbols."""
         return obj.currency.upper() if obj.currency else "USD"
+
+
+
+from rest_framework import serializers
+
+
+class AdminPaymentStatsSerializer(serializers.Serializer):
+
+    total_transactions = serializers.IntegerField()
+
+    escrow_balance = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
+
+    pending_escrow = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
+
+    released_escrow = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
+
+    refund_amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
+
+    platform_revenue = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )

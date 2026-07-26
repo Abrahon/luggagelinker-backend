@@ -37,6 +37,13 @@ from rest_framework.permissions import IsAdminUser
 from .models import BookingPayment, BookingPaymentLog
 from .services import BookingPaymentService
 import stripe
+from decimal import Decimal
+
+from django.db.models import Sum
+from django.db.models.functions import Coalesce
+
+
+from .serializers import AdminPaymentStatsSerializer
 from django.conf import settings
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -553,7 +560,95 @@ class BookingPaymentHistoryListView(generics.ListAPIView):
 
 
 
+from decimal import Decimal
 
+from django.db.models import Count, Sum
+from django.db.models.functions import Coalesce
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAdminUser
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.payment.models import (
+    BookingPayment,
+    BookingPaymentStatus,
+)
+from .serializers import AdminPaymentStatsSerializer
+
+
+class AdminPaymentDashboardStatsView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+
+        total_transactions = BookingPayment.objects.count()
+
+        escrow_balance = (
+            BookingPayment.objects.filter(
+                status=BookingPaymentStatus.AUTHORIZED
+            ).aggregate(
+                total=Coalesce(
+                    Sum("amount"),
+                    Decimal("0.00"),
+                )
+            )["total"]
+        )
+
+        pending_escrow = escrow_balance
+
+        released_escrow = (
+            BookingPayment.objects.filter(
+                status=BookingPaymentStatus.CAPTURED
+            ).aggregate(
+                total=Coalesce(
+                    Sum("amount"),
+                    Decimal("0.00"),
+                )
+            )["total"]
+        )
+
+        refund_amount = (
+            BookingPayment.objects.filter(
+                status=BookingPaymentStatus.REFUNDED
+            ).aggregate(
+                total=Coalesce(
+                    Sum("amount"),
+                    Decimal("0.00"),
+                )
+            )["total"]
+        )
+
+        platform_revenue = (
+            BookingPayment.objects.filter(
+                status=BookingPaymentStatus.CAPTURED
+            ).aggregate(
+                total=Coalesce(
+                    Sum("platform_fee"),
+                    Decimal("0.00"),
+                )
+            )["total"]
+        )
+
+        serializer = AdminPaymentStatsSerializer(
+            {
+                "total_transactions": total_transactions,
+                "escrow_balance": escrow_balance,
+                "pending_escrow": pending_escrow,
+                "released_escrow": released_escrow,
+                "refund_amount": refund_amount,
+                "platform_revenue": platform_revenue,
+            }
+        )
+
+        return Response(
+            {
+                "message": "Payment dashboard statistics fetched successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+    
 
 # adjusting below based on your architecture:
 @api_view(['GET'])                  # 👈 Tells Django this is a DRF-managed GET view
