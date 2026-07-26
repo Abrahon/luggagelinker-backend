@@ -41,7 +41,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from apps.packages.serializers import PackageSerializer,AdminReviewSerializer
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from apps.packages.services import PackageService  # 🧠 Import our service layer
+from apps.packages.services import PackageService  
 from .models import Package, PackageImage
 from .serializers import PackageImageSerializer
 from apps.matching.services.package_matching import run_package_matching
@@ -535,46 +535,160 @@ class DeleteUpdatePackageImageView(generics.RetrieveUpdateDestroyAPIView):
         )
 
 
+from django.db.models import Q
+
+from rest_framework import generics
+from rest_framework.permissions import IsAdminUser
+
+from apps.packages.models import Package
+from .serializers import AdminPackageSerializer
+
+
+class AdminPackageListView(generics.ListAPIView):
+
+    serializer_class = AdminPackageSerializer
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+
+        queryset = Package.objects.select_related(
+            "sender",
+            "sender__profile",
+        ).prefetch_related(
+            "images",
+        )
+
+        status = self.request.query_params.get("status")
+        verification = self.request.query_params.get("verification")
+        category = self.request.query_params.get("category")
+        search = self.request.query_params.get("search")
+
+        if status:
+            queryset = queryset.filter(status=status)
+
+        if verification:
+            queryset = queryset.filter(
+                verification_status=verification
+            )
+
+        if category:
+            queryset = queryset.filter(category=category)
+
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search)
+                | Q(sender__email__icontains=search)
+                | Q(pickup_city__icontains=search)
+                | Q(destination_city__icontains=search)
+            )
+
+        return queryset.order_by("-created_at")
+
+
+
+class AdminPackageDetailView(generics.RetrieveAPIView):
+
+    serializer_class = AdminPackageSerializer
+    permission_classes = [IsAdminUser]
+
+    queryset = Package.objects.select_related(
+        "sender",
+        "sender__profile",
+    ).prefetch_related(
+        "images",
+    )
+
+
+
 # admin 
-class AdminPackageReviewView(generics.UpdateAPIView):
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.response import Response
+from rest_framework import status
+from django.shortcuts import get_object_or_404
+import traceback
+
+class AdminPackageReviewView(APIView):
     """
-    PATCH /package/<uuid:pk>/admin-review/
-    Allows administrative staff to resolve items stuck in MANUAL_REVIEW.
+    PATCH /api/package/<uuid:pk>/admin-review/
+
+    Body:
+    {
+        "approve": true
+    }
+
+    approve=true  -> VERIFIED + PUBLISHED
+    approve=false -> REJECTED + CANCELLED
     """
-    queryset = Package.objects.all()
+
     permission_classes = [IsAuthenticated, IsAdminUser]
-    serializer_class = PackageSerializer
 
-    def patch(self, request, *args, **kwargs):
-        package = self.get_object()
-        
-        # Pull input schema verification directly from the external serializer definition
-        input_serializer = AdminReviewSerializer(data=request.data)
-        if not input_serializer.is_valid():
-            return Response({
-                "success": False,
-                "message": "Validation failed.",
-                "errors": input_serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+    def patch(self, request, pk):
 
-        approve = input_serializer.validated_data["approve"]
+        package = get_object_or_404(Package, pk=pk)
+
+        serializer = AdminReviewSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation failed.",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        approve = serializer.validated_data["approve"]
 
         try:
-            updated_package = PackageService.review_package(package, approve=approve)
-            action_taken = "verified and published" if approve else "rejected and cancelled"
-            
-            return Response({
-                "success": True,
-                "message": f"Package has been successfully {action_taken} by admin management.",
-                "data": PackageSerializer(updated_package).data
-            }, status=status.HTTP_200_OK)
+
+            # DEBUG (remove later)
+            print("Package:", package.id)
+            print("Verification:", package.verification_status)
+            print("Approve:", approve)
+
+            updated_package = PackageService.review_package(
+                package=package,
+                approve=approve,
+            )
+
+            action = (
+                "verified and published"
+                if approve
+                else "rejected and cancelled"
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": f"Package has been {action}.",
+                    "data": PackageSerializer(updated_package).data,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         except ValueError as e:
-            return Response({
-                "success": False,
-                "message": str(e)
-            }, status=status.HTTP_400_BAD_REQUEST)
 
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        except Exception as e:
+
+            traceback.print_exc()
+
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 # class TravelerHandshakeView(generics.UpdateAPIView):
 #     """

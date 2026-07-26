@@ -311,7 +311,54 @@ class TripDetailView(generics.RetrieveAPIView):
 
 
 # manage trip 
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.generics import ListAPIView
+from rest_framework.permissions import IsAdminUser
 
+from apps.trips.models import Trip
+
+from .serializers import AdminTripListSerializer
+from .filters import AdminTripFilter
+
+
+class AdminTripListView(ListAPIView):
+    permission_classes = [IsAdminUser]
+    serializer_class = AdminTripListSerializer
+
+    queryset = (
+        Trip.objects.select_related("traveler")
+        .all()
+        .order_by("-created_at")
+    )
+
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+        OrderingFilter,
+    ]
+
+    filterset_class = AdminTripFilter
+
+    search_fields = [
+        "title",
+        "traveler__email",
+        "from_city",
+        "to_city",
+        "from_country",
+        "to_country",
+    ]
+
+    ordering_fields = [
+        "created_at",
+        "departure_date",
+        "arrival_date",
+        "status",
+    ]
+
+    ordering = [
+        "-created_at",
+    ]
 
 
 class TripManageView(generics.RetrieveUpdateDestroyAPIView):
@@ -506,6 +553,8 @@ class AdminTripDetailView(APIView):
             status=status.HTTP_200_OK,
         )
 
+
+
 class AdminCancelTripView(APIView):
     permission_classes = [IsAdminUser]
 
@@ -513,6 +562,11 @@ class AdminCancelTripView(APIView):
     def patch(self, request, trip_id):
 
         trip = get_object_or_404(Trip, id=trip_id)
+
+        reason = request.data.get(
+            "reason",
+            "Cancelled by administrator."
+        )
 
         if trip.status == TripStatus.CANCELLED:
             return Response(
@@ -537,6 +591,7 @@ class AdminCancelTripView(APIView):
                 BookingStatus.PICKED_UP,
                 BookingStatus.IN_TRANSIT,
                 BookingStatus.DELIVERED,
+                BookingStatus.COMPLETED,
             ],
         ).exists()
 
@@ -548,22 +603,22 @@ class AdminCancelTripView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        pending_bookings = Booking.objects.filter(
+        cancelled_booking_count = Booking.objects.filter(
             trip=trip,
             status__in=[
                 BookingStatus.PENDING,
                 BookingStatus.TRAVELER_ACCEPTED,
                 BookingStatus.PAYMENT_PENDING,
             ],
-        )
-
-        pending_bookings.update(
+        ).exclude(
+            status=BookingStatus.CANCELLED,
+        ).update(
             status=BookingStatus.CANCELLED,
             is_active=False,
-            cancellation_reason="Cancelled by administrator",
+            cancellation_reason=reason,
         )
 
-        Match.objects.filter(
+        deactivated_matches = Match.objects.filter(
             trip=trip,
             is_active=True,
         ).update(
@@ -584,8 +639,10 @@ class AdminCancelTripView(APIView):
             {
                 "message": "Trip cancelled successfully.",
                 "data": {
-                    "trip_id": trip.id,
-                    "status": trip.status,
+                    "trip_id": str(trip.id),
+                    "trip_status": trip.status,
+                    "bookings_cancelled": cancelled_booking_count,
+                    "matches_deactivated": deactivated_matches,
                 },
             },
             status=status.HTTP_200_OK,

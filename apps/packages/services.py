@@ -69,24 +69,45 @@ class PackageService:
     @staticmethod
     def review_package(package: Package, approve: bool) -> Package:
         """
-        Handles human administrative oversight overrides on packages flagged for manual review.
-        Triggers publication if approved; marks listing as cancelled if rejected.
+        Admin review of package verification.
         """
-        if package.verification_status != VerificationStatus.MANUAL_REVIEW:
-            raise ValueError("Package is not awaiting manual review.")
+
+        if package.verification_status not in [
+            VerificationStatus.PENDING,
+            VerificationStatus.MANUAL_REVIEW,
+        ]:
+            raise ValueError(
+                "This package has already been reviewed."
+            )
 
         if approve:
+
             package.verification_status = VerificationStatus.VERIFIED
-            package.save(update_fields=["verification_status"])
-            
-            # Chain the automated publishing execution check down the line
-            PackageService.publish_package(package)
+            package.status = PackageStatus.PUBLISHED
+            package.is_active = True
+
+            package.save(
+                update_fields=[
+                    "verification_status",
+                    "status",
+                    "is_active",
+                    "updated_at",
+                ]
+            )
+
         else:
+
             package.verification_status = VerificationStatus.REJECTED
             package.status = PackageStatus.CANCELLED
-            package.save(update_fields=[
-                "verification_status",
-                "status",
-            ])
+            package.is_active = False
+
+            package.save(
+                update_fields=[
+                    "verification_status",
+                    "status",
+                    "is_active",
+                    "updated_at",
+                ]
+            )
 
         return package

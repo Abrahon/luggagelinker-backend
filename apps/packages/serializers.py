@@ -204,22 +204,7 @@ class AdminReviewSerializer(serializers.Serializer):
     )
 
 
-# class TravelerHandshakeSerializer(serializers.Serializer):
-#     """Handles explicit parameter verification during package pickup handoff."""
-#     traveler_matches_listing = serializers.BooleanField(required=True)
-#     traveler_refusal_reason = serializers.CharField(required=False, allow_blank=True)
 
-#     def validate(self, attrs):
-#         matches_listing = attrs.get("traveler_matches_listing")
-#         refusal_reason = attrs.get("traveler_refusal_reason", "").strip()
-
-#         # Enforce textual feedback constraint natively inside serialization validation rules
-#         if not matches_listing and not refusal_reason:
-#             raise serializers.ValidationError({
-#                 "traveler_refusal_reason": "A detailed explanation is required when rejecting a physical package parcel."
-#             })
-            
-#         return attrs
     
 
 # ==========================================================
@@ -296,3 +281,86 @@ class PackageImageUploadSerializer(serializers.Serializer):
             )
 
         return image
+
+
+
+from rest_framework import serializers
+
+from apps.packages.models import Package, PackageImage
+
+
+class AdminPackageImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PackageImage
+        fields = [
+            "id",
+            "image",
+            "is_primary",
+        ]
+
+
+class AdminPackageSerializer(serializers.ModelSerializer):
+
+    sender_email = serializers.EmailField(
+        source="sender.email",
+        read_only=True,
+    )
+
+    sender_name = serializers.SerializerMethodField()
+
+    images = AdminPackageImageSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = Package
+
+        fields = [
+            "id",
+            "title",
+            "description",
+            "category",
+
+            "weight",
+            "declared_value",
+            "reward_amount",
+            "currency",
+
+            "pickup_country",
+            "pickup_city",
+            "pickup_address",
+
+            "destination_country",
+            "destination_city",
+            "destination_address",
+
+            "pickup_date",
+            "latest_delivery_date",
+
+            "status",
+            "verification_status",
+            "risk_score",
+
+            "declared_as_legal",
+            "terms_accepted",
+
+            "traveler_matches_listing",
+            "traveler_refusal_reason",
+
+            "sender_email",
+            "sender_name",
+
+            "images",
+
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_sender_name(self, obj):
+        profile = getattr(obj.sender, "profile", None)
+
+        if not profile:
+            return ""
+
+        return f"{profile.first_name} {profile.last_name}"

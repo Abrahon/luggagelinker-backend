@@ -282,6 +282,34 @@ class TripSerializer(serializers.ModelSerializer):
 
 
 
+class AdminTripListSerializer(serializers.ModelSerializer):
+    traveler_email = serializers.EmailField(
+        source="traveler.email",
+        read_only=True,
+    )
+
+    class Meta:
+        model = Trip
+        fields = [
+            "id",
+            "title",
+            "traveler_email",
+            "from_country",
+            "from_city",
+            "to_country",
+            "to_city",
+            "departure_date",
+            "arrival_date",
+            "max_weight_kg",
+            "available_weight_kg",
+            "reward_per_kg",
+            "currency",
+            "status",
+            "is_active",
+            "created_at",
+        ]
+
+
 class AdminTripSerializer(serializers.ModelSerializer):
     traveler_email = serializers.EmailField(
         source="traveler.email",
