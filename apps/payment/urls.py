@@ -11,7 +11,8 @@ from .views import (
     stripe_connect_refresh_view,
     stripe_connect_success_view,
     stripe_webhook,
-    AdminPaymentDashboardStatsView
+    AdminPaymentDashboardStatsView,
+    AdminPaymentListView
 )
 
 urlpatterns = [
@@ -65,5 +66,6 @@ urlpatterns = [
     path("wallet/connect/refresh/", stripe_connect_refresh_view, name="stripe-connect-refresh"),
     # admin
     path("admin/payment-dashboard/stats/",AdminPaymentDashboardStatsView.as_view(),name="admin-payment-dashboard-stats"),
+    path("admin/payments/",AdminPaymentListView.as_view(),name="admin-payment-list"),
   
 ]

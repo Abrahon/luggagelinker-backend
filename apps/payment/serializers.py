@@ -189,7 +189,41 @@ class BookingPaymentSerializer(serializers.ModelSerializer):
         ]
 
 
+class AdminPaymentListSerializer(serializers.ModelSerializer):
 
+    booking_id = serializers.UUIDField(
+        source="booking.id",
+        read_only=True,
+    )
+
+    sender = serializers.EmailField(
+        source="payer.email",
+        read_only=True,
+    )
+
+    traveler = serializers.EmailField(
+        source="payee.email",
+        read_only=True,
+    )
+
+    escrow_status = serializers.CharField(
+        source="status",
+        read_only=True,
+    )
+
+    class Meta:
+        model = BookingPayment
+
+        fields = [
+            "id",
+            "booking_id",
+            "sender",
+            "traveler",
+            "amount",
+            "platform_fee",
+            "escrow_status",
+            "created_at",
+        ]
     
 class InitiateBookingPaymentSerializer(serializers.Serializer):
     """

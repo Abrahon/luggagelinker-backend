@@ -27,6 +27,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.core.exceptions import ValidationError as DjangoValidationError
 import json
+from .serializers import AdminPaymentListSerializer
 from django.conf import settings
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -648,7 +649,47 @@ class AdminPaymentDashboardStatsView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-    
+
+
+
+
+
+
+class AdminPaymentListView(generics.ListAPIView):
+
+    permission_classes = [IsAdminUser]
+    serializer_class = AdminPaymentListSerializer
+
+    def get_queryset(self):
+
+        queryset = BookingPayment.objects.select_related(
+            "booking",
+            "payer",
+            "payee",
+        ).order_by("-created_at")
+
+        # Search
+        search = self.request.query_params.get("search")
+
+        if search:
+            queryset = queryset.filter(
+                Q(id__icontains=search)
+                | Q(booking__id__icontains=search)
+                | Q(payer__email__icontains=search)
+                | Q(payee__email__icontains=search)
+                | Q(transaction_id__icontains=search)
+            )
+
+        # Escrow Status Filter
+        escrow_status = self.request.query_params.get("status")
+
+        if escrow_status:
+            queryset = queryset.filter(
+                status=escrow_status
+            )
+
+        return queryset
+     
 
 # adjusting below based on your architecture:
 @api_view(['GET'])                  # 👈 Tells Django this is a DRF-managed GET view
