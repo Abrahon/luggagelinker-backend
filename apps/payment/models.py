@@ -2,7 +2,7 @@ from django.db import models
 
 # Create your models here.
 import uuid
-
+from decimal import Decimal
 from django.conf import settings
 from django.db import models
 
@@ -209,12 +209,18 @@ class BookingPayment(models.Model):
         decimal_places=2,
         help_text=_("Gross transaction amount processed via gateway.")
     )
-    
     platform_fee = models.DecimalField(
-        max_digits=12, 
-        decimal_places=2, 
-        default=0.00,
-        help_text=_("Platform commission fee deducted from traveler payout.")
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Actual platform fee amount deducted from this payment.",
+    )
+
+    platform_fee_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("2.00"),
+        help_text="Platform fee percentage applied when this payment was created.",
     )
     
     currency = models.CharField(
@@ -338,7 +344,7 @@ class StripeEventLog(models.Model):
         verbose_name_plural = "Stripe Event Logs"
 
 
-from decimal import Decimal
+
 
 
 

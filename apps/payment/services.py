@@ -5,7 +5,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
-
+from apps.payment.models import PlatformSetting
 import secrets
 from apps import payment
 from apps.notifications.utils.email import send_pickup_pin_email  
@@ -79,14 +79,19 @@ class BookingPaymentService:
 
             else:
                 # Dynamic Platform Escrow Fee calculation utilizing safe structural decimals
-                fee_percentage = getattr(
-                    settings,
-                    "PLATFORM_FEE_PERCENTAGE",
-                    decimal.Decimal("0.00"),
+
+
+                setting = PlatformSetting.objects.first()
+
+                fee_percentage = (
+                    setting.platform_fee_percentage
+                    if setting
+                    else decimal.Decimal("2.00")
                 )
 
                 calculated_fee = (
-                    (booking_sealed.agreed_reward * fee_percentage)
+                    booking_sealed.agreed_reward
+                    * fee_percentage
                     / decimal.Decimal("100")
                 ).quantize(decimal.Decimal("0.01"))
 
@@ -97,6 +102,7 @@ class BookingPaymentService:
                     payee=booking_sealed.traveler,
                     amount=booking_sealed.agreed_reward,
                     platform_fee=calculated_fee,
+                    platform_fee_percentage=fee_percentage,
                     currency=booking_sealed.currency or "USD",
                     gateway=gateway,
                     status=BookingPaymentStatus.PENDING,
