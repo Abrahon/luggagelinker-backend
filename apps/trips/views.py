@@ -13,6 +13,20 @@ from apps.matching.services.trip_matching import run_trip_matching
 from apps.matching.services.trip_matching import run_trip_matching
 from .models import Trip
 from .serializers import TripSerializer
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+
+from rest_framework import status
+from rest_framework.permissions import IsAdminUser
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.trips.models import Trip, TripStatus
+from apps.bookings.models import Booking, BookingStatus
+from apps.matching.models import Match
+
+from .serializers import AdminTripSerializer
+
 
 logger = logging.getLogger(__name__)
 
@@ -470,3 +484,109 @@ class TripManageView(generics.RetrieveUpdateDestroyAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class AdminTripDetailView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request, trip_id):
+
+        trip = get_object_or_404(
+            Trip.objects.select_related("traveler"),
+            id=trip_id,
+        )
+
+        serializer = AdminTripSerializer(trip)
+
+        return Response(
+            {
+                "message": "Trip fetched successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+class AdminCancelTripView(APIView):
+    permission_classes = [IsAdminUser]
+
+    @transaction.atomic
+    def patch(self, request, trip_id):
+
+        trip = get_object_or_404(Trip, id=trip_id)
+
+        if trip.status == TripStatus.CANCELLED:
+            return Response(
+                {
+                    "message": "Trip is already cancelled."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if trip.status == TripStatus.COMPLETED:
+            return Response(
+                {
+                    "message": "Completed trips cannot be cancelled."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        active_booking_exists = Booking.objects.filter(
+            trip=trip,
+            status__in=[
+                BookingStatus.CONFIRMED,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+                BookingStatus.DELIVERED,
+            ],
+        ).exists()
+
+        if active_booking_exists:
+            return Response(
+                {
+                    "message": "This trip has active bookings. Cancel those bookings first."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pending_bookings = Booking.objects.filter(
+            trip=trip,
+            status__in=[
+                BookingStatus.PENDING,
+                BookingStatus.TRAVELER_ACCEPTED,
+                BookingStatus.PAYMENT_PENDING,
+            ],
+        )
+
+        pending_bookings.update(
+            status=BookingStatus.CANCELLED,
+            is_active=False,
+            cancellation_reason="Cancelled by administrator",
+        )
+
+        Match.objects.filter(
+            trip=trip,
+            is_active=True,
+        ).update(
+            is_active=False,
+        )
+
+        trip.status = TripStatus.CANCELLED
+        trip.is_active = False
+        trip.save(
+            update_fields=[
+                "status",
+                "is_active",
+                "updated_at",
+            ]
+        )
+
+        return Response(
+            {
+                "message": "Trip cancelled successfully.",
+                "data": {
+                    "trip_id": trip.id,
+                    "status": trip.status,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )

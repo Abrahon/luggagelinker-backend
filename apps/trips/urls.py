@@ -5,6 +5,8 @@ from .views import (
     MyTripListView,
     TripDetailView,
     TripManageView,
+    AdminTripDetailView,
+    AdminCancelTripView
 )
 
 urlpatterns = [
@@ -31,5 +33,16 @@ urlpatterns = [
         "trip/<uuid:id>/manage/",
         TripManageView.as_view(),
         name="trip-manage",
+    ),
+    path(
+        "admin/trips/<uuid:trip_id>/",
+        AdminTripDetailView.as_view(),
+        name="admin-trip-detail",
+    ),
+
+    path(
+        "admin/trips/<uuid:trip_id>/cancel/",
+        AdminCancelTripView.as_view(),
+        name="admin-trip-cancel",
     ),
 ]
