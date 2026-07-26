@@ -259,3 +259,87 @@ class AdminRecentActivityView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+from decimal import Decimal
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAdminUser
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.accounts.models import User
+from apps.packages.models import Package
+from apps.bookings.models import Booking, BookingStatus
+from apps.wallets.models import WalletTransaction
+from apps.kyc.models import KYC, KYCStatus
+from apps.disputes.models import Dispute
+from django.db.models import Sum
+
+from .serializers import AdminDashboardStatsSerializer
+
+
+class AdminDashboardStatsView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+
+        total_users = User.objects.count()
+
+        total_packages = Package.objects.count()
+
+        total_bookings = Booking.objects.count()
+
+        active_deliveries = Booking.objects.filter(
+            status__in=[
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+            ]
+        ).count()
+
+        completed_deliveries = Booking.objects.filter(
+            status=BookingStatus.COMPLETED
+        ).count()
+
+        pending_kyc = KYC.objects.filter(
+            status__in=[
+                KYCStatus.PENDING,
+                KYCStatus.UNDER_REVIEW,
+            ]
+        ).count()
+
+        open_disputes = Dispute.objects.exclude(
+            status="RESOLVED"
+        ).count()
+
+
+
+        platform_revenue = (
+            Booking.objects.filter(
+                status=BookingStatus.COMPLETED
+            ).aggregate(
+                total=Sum("agreed_reward")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        data = {
+            "total_users": total_users,
+            "total_packages": total_packages,
+            "total_bookings": total_bookings,
+            "platform_revenue": platform_revenue,
+            "active_deliveries": active_deliveries,
+            "completed_deliveries": completed_deliveries,
+            "pending_kyc": pending_kyc,
+            "open_disputes": open_disputes,
+        }
+
+        serializer = AdminDashboardStatsSerializer(data)
+
+        return Response(
+            {
+                "message": "Dashboard statistics fetched successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )

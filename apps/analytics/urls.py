@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import TopRoutesAPIView,AdminRecentActivityView
+from .views import TopRoutesAPIView,AdminRecentActivityView,AdminDashboardStatsView
 
 urlpatterns = [
     path(
@@ -12,5 +12,10 @@ urlpatterns = [
         "admin/dashboard/recent-activities/",
         AdminRecentActivityView.as_view(),
         name="admin-dashboard-recent-activities",    
-),
+   ),
+    path(
+        "admin/dashboard/stats/",
+        AdminDashboardStatsView.as_view(),
+        name="admin-dashboard-stats",
+    ),
 ]
