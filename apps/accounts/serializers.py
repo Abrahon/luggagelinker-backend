@@ -341,3 +341,13 @@ class MonthlyUserGrowthSerializer(serializers.Serializer):
     month_name = serializers.CharField()
     total_users = serializers.IntegerField()
     active_users = serializers.IntegerField()
+
+
+
+
+class UserRoleDistributionSerializer(serializers.Serializer):
+    """Serializer to represent user counts and percentages by role."""
+    total_users = serializers.IntegerField()
+    roles = serializers.DictField(
+        child=serializers.DictField(child=serializers.FloatField())
+    )

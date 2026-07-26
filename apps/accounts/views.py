@@ -18,6 +18,7 @@ from shared.utils.email import generate_otp, send_otp_email,get_tokens_for_user
 import threading
 import logging
 from django.core import signing
+from django.db.models import Count, Q
 import uuid
 from django.core.signing import BadSignature, SignatureExpired
 from .serializers import LoginSerializer
@@ -35,8 +36,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework import generics, permissions
 from django.db.models import Q
-from django.contrib.auth import get_user_model
-
+from django.db.models.functions import TruncMonth
+from .serializers import UserRoleDistributionSerializer
 from .models import User
 from .serializers import AdminUserListSerializer
 
@@ -614,13 +615,6 @@ class AdminUserStatusToggleView(APIView):
 
 
 
-from django.contrib.auth import get_user_model
-from django.db.models import Count, Q
-from django.db.models.functions import TruncMonth
-from rest_framework import permissions, status
-from rest_framework.response import Response
-from rest_framework.views import APIView
-
 class AdminUserGrowthView(APIView):
     """
     API View to retrieve historical monthly user growth stats.
@@ -671,4 +665,47 @@ class AdminUserGrowthView(APIView):
                 )
 
         serializer = MonthlyUserGrowthSerializer(formatted_data, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+
+
+class AdminUserRoleDistributionView(APIView):
+    """
+    API View to calculate role-wise distribution, count, ratio, and percentage.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+    def get(self, request):
+        # Fetch counts for each role in a single database query
+        stats = User.objects.aggregate(
+            total_users=Count("id"),
+            sender_count=Count("id", filter=Q(role__iexact="SENDER")),
+            traveler_count=Count("id", filter=Q(role__iexact="TRAVELER")),
+        )
+
+        total_users = stats["total_users"] or 0
+        sender_count = stats["sender_count"] or 0
+        traveler_count = stats["traveler_count"] or 0
+
+        # Calculate percentages safely (avoid division by zero)
+        sender_pct = round((sender_count / total_users) * 100, 2) if total_users > 0 else 0.0
+        traveler_pct = round((traveler_count / total_users) * 100, 2) if total_users > 0 else 0.0
+
+        data = {
+            "total_users": total_users,
+            "roles": {
+                "SENDER": {
+                    "count": sender_count,
+                    "percentage": sender_pct,
+                },
+                "TRAVELER": {
+                    "count": traveler_count,
+                    "percentage": traveler_pct,
+                },
+            },
+        }
+
+        serializer = UserRoleDistributionSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
