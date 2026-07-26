@@ -81,14 +81,19 @@ class BookingPaymentService:
                 # Dynamic Platform Escrow Fee calculation utilizing safe structural decimals
 
 
-                setting = PlatformSetting.objects.first()
+                setting = (
+                    PlatformSetting.objects.filter(
+                        is_active=True
+                    )
+                    .order_by("-updated_at")
+                    .first()
+                )
 
                 fee_percentage = (
                     setting.platform_fee_percentage
                     if setting
                     else decimal.Decimal("2.00")
                 )
-
                 calculated_fee = (
                     booking_sealed.agreed_reward
                     * fee_percentage

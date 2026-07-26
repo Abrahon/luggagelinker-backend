@@ -348,6 +348,10 @@ class StripeEventLog(models.Model):
 
 
 
+from django.core.exceptions import ValidationError
+
+
+
 class PlatformSetting(models.Model):
     """
     Global platform configuration.
@@ -378,6 +382,18 @@ class PlatformSetting(models.Model):
         db_table = "platform_settings"
         verbose_name = "Platform Setting"
         verbose_name_plural = "Platform Settings"
+
+    def save(self, *args, **kwargs):
+        # Prevent creating multiple settings
+        if not self.pk and PlatformSetting.objects.exists():
+            raise ValidationError(
+                "Only one Platform Setting is allowed."
+            )
+
+        # Always keep this record active
+        self.is_active = True
+
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Platform Fee: {self.platform_fee_percentage}%"
