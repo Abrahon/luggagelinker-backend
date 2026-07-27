@@ -25,3 +25,17 @@ class MonthlyEarningsChartSerializer(serializers.Serializer):
     year = serializers.IntegerField()
     total_year_earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
     chart_data = MonthlyEarningItemSerializer(many=True)
+
+
+
+
+
+
+class CompactActivitySerializer(serializers.Serializer):
+    type = serializers.CharField()
+    title = serializers.CharField()
+    message = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    time_ago = serializers.CharField(
+        help_text="Human readable real-time string e.g. '5 hours ago', 'Just now'"
+    )
