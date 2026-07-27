@@ -1,5 +1,5 @@
 from django.urls import path
-from apps.invoices.views import InvoiceListView, InvoiceDetailView, InvoiceDownloadView
+from apps.invoices.views import InvoiceListView, InvoiceDetailView, InvoiceDownloadView,AdminPaymentInvoiceDetailView,AdminPaymentInvoiceDownloadView
 
 urlpatterns = [
     path(
@@ -17,4 +17,14 @@ urlpatterns = [
         InvoiceDownloadView.as_view(), 
         name="invoice-download"
     ),
+    path(
+        "admin/payments/<uuid:id>/invoice/",
+        AdminPaymentInvoiceDetailView.as_view(),
+        name="admin-payment-invoice-detail",
+   ),
+   path(
+        "admin/payments/<uuid:id>/invoice/download/",
+        AdminPaymentInvoiceDownloadView.as_view(),
+        name="admin-payment-invoice-download",
+),
 ]
