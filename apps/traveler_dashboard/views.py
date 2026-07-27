@@ -11,6 +11,17 @@ from apps.trips.models import Trip, TripStatus
 from apps.bookings.models import Booking, BookingStatus
 from apps.reviews.models import Review
 from .serializers import TravelerDashboardStatsSerializer
+import calendar
+from decimal import Decimal
+from django.db.models import Sum
+from django.db.models.functions import TruncMonth
+from django.utils import timezone
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, permissions
+
+from apps.bookings.models import Booking, BookingStatus
+from .serializers import MonthlyEarningsChartSerializer
 
 
 
@@ -110,6 +121,83 @@ class TravelerDashboardStatsView(APIView):
             {
                 "success": True,
                 "message": "Traveler dashboard metrics calculated successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+class TravelerMonthlyEarningsChartView(APIView):
+    """
+    Returns monthly aggregated earnings for a traveler for a specific year
+    to render bar charts.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Get year from query params, default to current year
+        current_year = timezone.now().year
+        try:
+            target_year = int(request.query_params.get("year", current_year))
+        except ValueError:
+            target_year = current_year
+
+        # 1. Query completed bookings for the specified year
+        # Uses completed_at timestamp (or updated_at if completed_at is null)
+        monthly_query = (
+            Booking.objects.filter(
+                traveler=user,
+                status=BookingStatus.COMPLETED,
+                completed_at__year=target_year,
+            )
+            .annotate(month=TruncMonth("completed_at"))
+            .values("month")
+            .annotate(total_earnings=Sum("agreed_reward"))
+            .order_by("month")
+        )
+
+        # 2. Map database results to a dictionary {month_number: earnings}
+        earnings_by_month = {}
+        for entry in monthly_query:
+            if entry["month"]:
+                month_num = entry["month"].month
+                earnings_by_month[month_num] = entry["total_earnings"] or Decimal("0.00")
+
+        # 3. Build a complete 12-month array (Jan to Dec) for front-end charts
+        chart_data = []
+        total_year_earnings = Decimal("0.00")
+
+        for m in range(1, 13):
+            month_earnings = earnings_by_month.get(m, Decimal("0.00"))
+            total_year_earnings += month_earnings
+
+            chart_data.append(
+                {
+                    "month": calendar.month_abbr[m],  # 'Jan', 'Feb', etc.
+                    "month_number": m,
+                    "year": target_year,
+                    "earnings": month_earnings,
+                }
+            )
+
+        payload = {
+            "year": target_year,
+            "total_year_earnings": total_year_earnings,
+            "chart_data": chart_data,
+        }
+
+        serializer = MonthlyEarningsChartSerializer(payload)
+
+        return Response(
+            {
+                "success": True,
+                "message": f"Monthly earnings for {target_year} retrieved successfully.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,

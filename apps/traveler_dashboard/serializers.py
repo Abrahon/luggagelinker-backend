@@ -10,3 +10,18 @@ class TravelerDashboardStatsSerializer(serializers.Serializer):
     completed_deliveries = serializers.IntegerField()
     pending_earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
     lifetime_earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+
+
+class MonthlyEarningItemSerializer(serializers.Serializer):
+    month = serializers.CharField(help_text="Month abbreviation, e.g. 'Jan'")
+    month_number = serializers.IntegerField(help_text="Month number from 1 to 12")
+    year = serializers.IntegerField()
+    earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class MonthlyEarningsChartSerializer(serializers.Serializer):
+    year = serializers.IntegerField()
+    total_year_earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
+    chart_data = MonthlyEarningItemSerializer(many=True)
