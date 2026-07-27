@@ -60,10 +60,10 @@ def create_notification(
     object_id=None,
     action_url=None,
 ):
-    send_notification_ws(notification)
     """
     Create a database-backed notification entry.
     """
+
     notification = Notification.objects.create(
         user=user,
         title=title,
@@ -73,9 +73,15 @@ def create_notification(
         action_url=action_url,
     )
 
-    logger.info("Notification created | User=%s Notification=%s", user.id, notification.id)
-    return notification
+    send_notification_ws(notification)
 
+    logger.info(
+        "Notification created | User=%s Notification=%s",
+        user.id,
+        notification.id,
+    )
+
+    return notification
 
 # ==========================================================
 # CREATE BULK NOTIFICATIONS

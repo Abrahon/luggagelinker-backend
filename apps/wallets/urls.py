@@ -20,6 +20,7 @@ from .views import (
     AdminWithdrawalApproveView,
     AdminWithdrawalRejectView,
     AdminWithdrawalMarkPaidView,
+    AdminWithdrawalStatsView,
 
     AdminAdjustBalanceView,
 )
@@ -139,6 +140,14 @@ urlpatterns = [
         "admin/withdrawals/<uuid:pk>/mark-paid/",
         AdminWithdrawalMarkPaidView.as_view(),
         name="admin-withdrawal-mark-paid",
+    ),
+
+    # urls.py
+
+    path(
+        "admin/withdrawals/stats/",
+        AdminWithdrawalStatsView.as_view(),
+        name="admin-withdrawal-stats",
     ),
 
     # =====================================================

@@ -31,6 +31,9 @@ from .serializers import (
     WalletTransactionSerializer,
     WithdrawalMethodSerializer,
     WithdrawalRequestSerializer,
+    AdminWithdrawalListSerializer,
+    WithdrawalHistorySerializer,
+    AdminWithdrawalStatsSerializer
 )
 from .services import AdminWithdrawalService, WalletService
 
@@ -263,7 +266,11 @@ class WithdrawalRequestView(generics.ListCreateAPIView):
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
 
-        serializer = self.get_serializer(queryset, many=True)
+        serializer = WithdrawalHistorySerializer(
+            queryset,
+            many=True,
+            context={"request": request},
+        )
 
         return Response(
             {
@@ -342,6 +349,8 @@ class WithdrawalRequestView(generics.ListCreateAPIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+
+
 class SetDefaultWithdrawalMethodView(generics.GenericAPIView):
     permission_classes = [IsAuthenticated]
 
@@ -380,16 +389,21 @@ class SetDefaultWithdrawalMethodView(generics.GenericAPIView):
         )
 
 class AdminWithdrawalListView(generics.ListAPIView):
-    """
-    Oversight monitor feed for admin managers to query platform-wide cashout queues.
-    GET /admin/withdrawals/
-    """
     permission_classes = [IsPlatformAdmin]
-    serializer_class = WithdrawalRequestSerializer
-    queryset = WithdrawalRequest.objects.all().select_related('wallet__user')
+    serializer_class = AdminWithdrawalListSerializer
+
+    queryset = (
+        WithdrawalRequest.objects.select_related(
+            "wallet__user",
+            "wallet__user__profile",
+            "withdrawal_method",
+            "processed_by",
+        )
+        .order_by("-created_at")
+    )
+
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = ["status"]
-    ordering = ["-created_at"]
 
 
 class AdminWithdrawalDetailView(generics.RetrieveAPIView):
@@ -755,3 +769,57 @@ class WalletRecentActivityView(generics.ListAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+# apps/wallets/views.py
+from decimal import Decimal
+
+from django.db.models import Sum
+
+
+# apps/wallets/views.py
+
+class AdminWithdrawalStatsView(APIView):
+    permission_classes = [IsPlatformAdmin]
+
+    def get(self, request):
+        # Count unique wallets (or unique users via "wallet__user") that made withdrawal requests
+        total_travelers_requested = (
+            WithdrawalRequest.objects.values("wallet")
+            .distinct()
+            .count()
+        )
+
+        total_pending = (
+            WithdrawalRequest.objects.filter(
+                status="PENDING"
+            ).aggregate(
+                total=Sum("amount")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        pending_requests = WithdrawalRequest.objects.filter(
+            status="PENDING"
+        ).count()
+
+        completed_requests = WithdrawalRequest.objects.filter(
+            status="COMPLETED"
+        ).count()
+
+        serializer = AdminWithdrawalStatsSerializer(
+            {
+                "total_travelers_requested": total_travelers_requested,
+                "total_pending_balance": total_pending,
+                "pending_requests": pending_requests,
+                "completed_requests": completed_requests,
+            }
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Withdrawal statistics retrieved successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )

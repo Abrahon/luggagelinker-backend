@@ -154,10 +154,24 @@ class WithdrawalMethodSerializer(serializers.ModelSerializer):
 
 
 
+from decimal import Decimal
+
+from rest_framework import serializers
+
+from apps.wallets.models import (
+    Wallet,
+    WithdrawalMethod,
+    WithdrawalRequest,
+)
+from apps.wallets.serializers import WithdrawalMethodSerializer
+
+
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
     """
-    Serializer for creating and retrieving withdrawal requests.
-    Uses a saved WithdrawalMethod instead of duplicating payout details.
+    Create and retrieve withdrawal requests.
+
+    The traveler selects one of their saved withdrawal methods.
+    The admin reviews and approves/rejects the request later.
     """
 
     withdrawal_method = serializers.PrimaryKeyRelatedField(
@@ -210,49 +224,39 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
 
         if value < Decimal("10.00"):
             raise serializers.ValidationError(
-                "Minimum withdrawal amount is $10."
+                "Minimum withdrawal amount is $10.00."
             )
 
         return value
 
     def validate(self, attrs):
-
         request = self.context["request"]
         user = request.user
 
         withdrawal_method = attrs["withdrawal_method"]
         amount = attrs["amount"]
 
-        # ---------------------------------------------
-        # Ensure withdrawal method belongs to the user
-        # ---------------------------------------------
+        # -----------------------------------------
+        # Method must belong to current user
+        # -----------------------------------------
         if withdrawal_method.user != user:
             raise serializers.ValidationError({
                 "withdrawal_method":
                     "This withdrawal method does not belong to you."
             })
 
-        # ---------------------------------------------
-        # Active check
-        # ---------------------------------------------
+        # -----------------------------------------
+        # Method must be active
+        # -----------------------------------------
         if not withdrawal_method.is_active:
             raise serializers.ValidationError({
                 "withdrawal_method":
                     "This withdrawal method has been disabled."
             })
 
-        # ---------------------------------------------
-        # Verification check
-        # ---------------------------------------------
-        if not withdrawal_method.is_verified:
-            raise serializers.ValidationError({
-                "withdrawal_method":
-                    "This withdrawal method is not verified."
-            })
-
-        # ---------------------------------------------
-        # Wallet existence
-        # ---------------------------------------------
+        # -----------------------------------------
+        # Wallet must exist
+        # -----------------------------------------
         try:
             wallet = Wallet.objects.get(user=user)
 
@@ -261,20 +265,34 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
                 "Wallet not found."
             )
 
-        # ---------------------------------------------
-        # Balance check
-        # ---------------------------------------------
+        # -----------------------------------------
+        # Enough available balance
+        # -----------------------------------------
         if wallet.available_balance < amount:
             raise serializers.ValidationError({
                 "amount":
                     f"Available balance is only ${wallet.available_balance}."
             })
 
-        # ---------------------------------------------
-        # Stripe payout validation
-        # ---------------------------------------------
-        if withdrawal_method.type == WithdrawalMethod.MethodType.STRIPE:
+        # -----------------------------------------
+        # Prevent multiple pending withdrawals
+        # -----------------------------------------
+        if WithdrawalRequest.objects.filter(
+            wallet=wallet,
+            status__in=[
+                WithdrawalRequest.WithdrawalStatus.PENDING,
+                WithdrawalRequest.WithdrawalStatus.APPROVED,
+                WithdrawalRequest.WithdrawalStatus.PROCESSING,
+            ],
+        ).exists():
+            raise serializers.ValidationError(
+                "You already have an active withdrawal request processing."
+            )
 
+        # -----------------------------------------
+        # Stripe validation (only for Stripe)
+        # -----------------------------------------
+        if withdrawal_method.type == WithdrawalMethod.MethodType.STRIPE:
             try:
                 stripe = user.stripe_account
 
@@ -293,10 +311,9 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-
-        request = self.context["request"]
-
-        wallet = Wallet.objects.get(user=request.user)
+        wallet = Wallet.objects.get(
+            user=self.context["request"].user
+        )
 
         return WithdrawalRequest.objects.create(
             wallet=wallet,
@@ -304,6 +321,157 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
             amount=validated_data["amount"],
         )
 
+class WithdrawalHistorySerializer(serializers.ModelSerializer):
+    withdrawal_method = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WithdrawalRequest
+        fields = [
+            "id",
+            "amount",
+            "status",
+            "created_at",
+            "processed_at",
+            "completed_at",
+            "withdrawal_method",
+        ]
+
+    def get_withdrawal_method(self, obj):
+        if not obj.withdrawal_method:
+            return None
+
+        method = obj.withdrawal_method
+
+        return {
+            "type": method.type,
+            "type_display": method.get_type_display(),
+            "account_name": method.account_name,
+            "account_number": f"****{method.account_number[-4:]}",
+            "bank_name": method.bank_name,
+            "branch_name": method.branch_name,
+        }
+    
+from rest_framework import serializers
+from apps.wallets.models import WithdrawalRequest
+
+
+# class AdminWithdrawalListSerializer(serializers.ModelSerializer):
+#     traveler_name = serializers.SerializerMethodField()
+#     traveler_email = serializers.EmailField(
+#         source="wallet.user.email",
+#         read_only=True,
+#     )
+
+#     withdrawal_method_details = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = WithdrawalRequest
+#         fields = (
+#             "id",
+#             "traveler_name",
+#             "traveler_email",
+#             "withdrawal_method",
+#             "withdrawal_method_details",
+#             "amount",
+#             "status",
+#             "processed_by",
+#             "processed_at",
+#             "completed_at",
+#             "created_at",
+#         )
+
+#     def get_traveler_name(self, obj):
+#         user = obj.wallet.user
+
+#         if hasattr(user, "profile"):
+#             first = getattr(user.profile, "first_name", "")
+#             last = getattr(user.profile, "last_name", "")
+#             full_name = f"{first} {last}".strip()
+#             if full_name:
+#                 return full_name
+
+#         return user.email
+
+#     def get_withdrawal_method_details(self, obj):
+#         method = obj.withdrawal_method
+
+#         if not method:
+#             return None
+
+#         return {
+#             "type": method.get_type_display(),
+#             "account_name": method.account_name,
+#             "account_number": method.account_number,
+#             "bank_name": method.bank_name,
+#             "branch_name": method.branch_name,
+#             "is_verified": method.is_verified,
+#         }
+
+
+class AdminWithdrawalListSerializer(serializers.ModelSerializer):
+    traveler_name = serializers.SerializerMethodField()
+    traveler_email = serializers.EmailField(
+        source="wallet.user.email",
+        read_only=True,
+    )
+
+    # Returns: BANK / BKASH / NAGAD / ROCKET / STRIPE
+    withdrawal_method = serializers.SerializerMethodField()
+
+    withdrawal_method_details = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WithdrawalRequest
+        fields = [
+            "id",
+            "traveler_name",
+            "traveler_email",
+            "withdrawal_method",
+            "withdrawal_method_details",
+            "amount",
+            "status",
+            "processed_by",
+            "processed_at",
+            "completed_at",
+            "created_at",
+        ]
+
+    def get_traveler_name(self, obj):
+        user = obj.wallet.user
+
+        if hasattr(user, "profile"):
+            first = getattr(user.profile, "first_name", "")
+            last = getattr(user.profile, "last_name", "")
+            full_name = f"{first} {last}".strip()
+            if full_name:
+                return full_name
+
+        return user.email
+
+    def get_withdrawal_method(self, obj):
+        if not obj.withdrawal_method:
+            return None
+
+        # Returns: BANK / BKASH / NAGAD / ROCKET / STRIPE
+        return obj.withdrawal_method.type
+
+    def get_withdrawal_method_details(self, obj):
+        if not obj.withdrawal_method:
+            return None
+
+        method = obj.withdrawal_method
+
+        return {
+            "type": method.get_type_display(),   
+            "account_name": method.account_name,
+            "account_number": method.account_number,
+            "bank_name": method.bank_name,
+            "branch_name": method.branch_name,
+            "routing_number": method.routing_number,
+            "is_verified": method.is_verified,
+        }
+
+    
 class EscrowHoldSerializer(serializers.Serializer):
     """
     Validates booking identity and balance sufficiency for locks placed 
@@ -506,3 +674,21 @@ class WalletRecentActivitySerializer(serializers.ModelSerializer):
             return obj.description
 
         return ""
+
+
+# apps/wallets/serializers.py
+
+from rest_framework import serializers
+
+
+class AdminWithdrawalStatsSerializer(serializers.Serializer):
+    total_travelers_requested = serializers.IntegerField()
+
+    total_pending_balance = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
+
+    pending_requests = serializers.IntegerField()
+
+    completed_requests = serializers.IntegerField()
