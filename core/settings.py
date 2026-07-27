@@ -69,6 +69,7 @@ INSTALLED_APPS = [
     "apps.analytics",
     "apps.chat",
     'apps.tracking',
+    "apps.traveler_dashboard",
 
 
 ]

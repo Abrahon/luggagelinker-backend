@@ -36,6 +36,7 @@ urlpatterns = [
     path("api/", include("apps.analytics.urls")),
     path("api/", include("apps.chat.urls")),
     path("api/", include("apps.tracking.urls")),
+    path("api/", include("apps.traveler_dashboard.urls")),
 
 
 ]
