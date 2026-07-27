@@ -14,27 +14,55 @@ class InvoiceUserSerializer(serializers.Serializer):
         if hasattr(obj, 'profile'):
             first = getattr(obj.profile, 'first_name', '')
             last = getattr(obj.profile, 'last_name', '')
-            return f"{first} {last}".strip() or obj.email.split('@')[0]
-        return obj.email.split('@')[0]
+            full = f"{first} {last}".strip()
+            if full:
+                return full
+        return obj.email.split('@')[0] if obj.email else "User"
+
+
+class PackageDetailSerializer(serializers.Serializer):
+    """
+    Nested serializer for comprehensive package delivery details.
+    """
+    id = serializers.UUIDField(read_only=True)
+    title = serializers.CharField(read_only=True)
+    category = serializers.CharField(source="category.name", default="General Goods", read_only=True)
+    weight = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
+    description = serializers.CharField(read_only=True)
+
+
+class TripDetailSerializer(serializers.Serializer):
+    """
+    Nested serializer for route and transit details.
+    """
+    id = serializers.UUIDField(read_only=True)
+    departure_city = serializers.CharField(read_only=True)
+    arrival_city = serializers.CharField(read_only=True)
+    departure_date = serializers.DateTimeField(read_only=True)
+    arrival_date = serializers.DateTimeField(read_only=True)
+    transport_type = serializers.CharField(read_only=True)
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
-    # Nested user objects
+    # Nested participant objects
     sender = InvoiceUserSerializer(read_only=True)
     traveler = InvoiceUserSerializer(read_only=True)
     
-    # Direct model string references
+    # Complete Package & Trip Objects
+    package_details = PackageDetailSerializer(source="package", read_only=True)
+    trip_details = TripDetailSerializer(source="trip", read_only=True)
+    
+    # Booking Reference
     booking_number = serializers.CharField(source="booking.booking_number", read_only=True)
-    package_title = serializers.CharField(source="package.title", read_only=True)
     
-    # Payment status mappings straight from the BookingPayment source of truth
-    payment_status = serializers.CharField(source="payment.status", read_only=True)
+    # Payment status mapping from BookingPayment source of truth
+    payment_status = serializers.CharField(source="payment.escrow_status", read_only=True)
     
-    # Human-readable displays for choices strings
+    # Human-readable choice labels
     invoice_lifecycle_status = serializers.CharField(source="get_status_display", read_only=True)
     payment_gateway_display = serializers.CharField(source="get_payment_method_display", read_only=True)
     
-    # Cloudinary/S3 storage URL resolution helper
+    # Storage download URL
     pdf_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -45,7 +73,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "booking_number",
             "sender",
             "traveler",
-            "package_title",
+            "package_details",
+            "trip_details",
             "reward",
             "platform_fee",
             "total_paid",
@@ -61,7 +90,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "invoice_date",
             "updated_at",
         )
-        read_only_fields = "__all__"
+        read_only_fields = fields
 
     def get_pdf_url(self, obj):
         """Returns full absolute download path if the asset cache exists."""

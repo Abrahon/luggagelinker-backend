@@ -654,7 +654,6 @@ class AdminPaymentDashboardStatsView(APIView):
 
 
 
-
 class AdminPaymentListView(generics.ListAPIView):
 
     permission_classes = [IsAdminUser]
@@ -662,13 +661,18 @@ class AdminPaymentListView(generics.ListAPIView):
 
     def get_queryset(self):
 
-        queryset = BookingPayment.objects.select_related(
-            "booking",
-            "payer",
-            "payee",
-        ).order_by("-created_at")
+        queryset = (
+            BookingPayment.objects.select_related(
+                "booking",
+                "payer",
+                "payee",
+            )
+            .order_by("-created_at")
+        )
 
+        # ----------------------------
         # Search
+        # ----------------------------
         search = self.request.query_params.get("search")
 
         if search:
@@ -680,16 +684,25 @@ class AdminPaymentListView(generics.ListAPIView):
                 | Q(transaction_id__icontains=search)
             )
 
-        # Escrow Status Filter
-        escrow_status = self.request.query_params.get("status")
+        # ----------------------------
+        # Payment Status Filter
+        # ----------------------------
+        status_filter = self.request.query_params.get("status")
 
-        if escrow_status:
-            queryset = queryset.filter(
-                status=escrow_status
-            )
+        if status_filter:
+            status_filter = status_filter.upper()
+
+            valid_statuses = [
+                choice[0]
+                for choice in BookingPaymentStatus.choices
+            ]
+
+            if status_filter in valid_statuses:
+                queryset = queryset.filter(
+                    status=status_filter
+                )
 
         return queryset
-     
 
 # adjusting below based on your architecture:
 @api_view(['GET'])                  # 👈 Tells Django this is a DRF-managed GET view
