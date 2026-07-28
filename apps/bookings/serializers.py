@@ -7,13 +7,106 @@ from django.utils.translation import gettext_lazy as _
 from apps.bookings.models import Booking, BookingStatus
 
 
+# class BookingSerializer(serializers.ModelSerializer):
+#     tracking_number = serializers.CharField(read_only=True)
+#     package_title = serializers.CharField(source="package.title", read_only=True)
+#     trip_title = serializers.CharField(source="trip.title", read_only=True)
+#     sender_email = serializers.CharField(source="sender.email", read_only=True)
+#     traveler_email = serializers.CharField(source="traveler.email", read_only=True)
+    
+#     match_id = serializers.UUIDField(write_only=True)
+
+#     class Meta:
+#         model = Booking
+#         fields = [
+#             "id",
+#             "match_id",
+#             "tracking_number",
+#             "package_title",
+#             "trip_title",
+#             "sender_email",
+#             "traveler_email",
+#             "status",
+#             "payment_status",
+#             "agreed_reward",
+#             "currency",
+#             "agreed_weight_kg",
+#             "expires_at",
+#             "created_at",
+#             "updated_at",
+#         ]
+#         read_only_fields = [
+#             "id",
+#             "status",
+#             "payment_status",
+#             "agreed_reward",
+#             "currency",
+#             "agreed_weight_kg",
+#             "expires_at",
+#             "created_at",
+#             "updated_at",
+#         ]
+
+
+
+
+#     def validate_match_id(self, value):
+#         if not Match.objects.filter(id=value).exists():
+#             raise serializers.ValidationError(
+#                 "The provided match instance does not exist."
+#             )
+
+#         return value
+    
+
+#     def create(self, validated_data):
+#             """
+#             Bridges the operation to the service layer, catching only expected clean exceptions.
+#             """
+#             match_id = validated_data["match_id"]
+#             initiated_by = self.context["request"].user
+
+#             try:
+#                 return BookingService.create_booking_request(
+#                     match_id=match_id, 
+#                     initiated_by=initiated_by
+#                 )
+#             except DjangoValidationError as e:
+#                 # 🟢 PRODUCTION FIX: Pass messages directly without manual dict nesting to prevent 500 crashes
+#                 if hasattr(e, "message_dict"):
+#                     raise serializers.ValidationError(e.message_dict)
+#                 if hasattr(e, "messages"):
+#                     # If there's only one message, extract it as a clean string error message
+#                     raise serializers.ValidationError(e.messages[0] if len(e.messages) == 1 else e.messages)
+#                 raise serializers.ValidationError(str(e))
+
+from rest_framework import serializers
+from django.core.exceptions import ValidationError as DjangoValidationError
+from .models import Booking
+from apps.matching.models import Match
+
+from rest_framework import serializers
+from django.core.exceptions import ValidationError as DjangoValidationError
+from .models import Booking
+from apps.matching.models import Match
+from .services import BookingService  # Adjust import based on your project structure
+
+
 class BookingSerializer(serializers.ModelSerializer):
     tracking_number = serializers.CharField(read_only=True)
     package_title = serializers.CharField(source="package.title", read_only=True)
     trip_title = serializers.CharField(source="trip.title", read_only=True)
+    
+    # 🟢 Sender Profile & Contact Details
+    sender_name = serializers.SerializerMethodField()
     sender_email = serializers.CharField(source="sender.email", read_only=True)
+    sender_profile_picture = serializers.SerializerMethodField()
     traveler_email = serializers.CharField(source="traveler.email", read_only=True)
     
+    # 🟢 Route and Package Image details
+    route = serializers.SerializerMethodField()
+    package_image = serializers.SerializerMethodField()
+
     match_id = serializers.UUIDField(write_only=True)
 
     class Meta:
@@ -24,8 +117,12 @@ class BookingSerializer(serializers.ModelSerializer):
             "tracking_number",
             "package_title",
             "trip_title",
+            "sender_name",
             "sender_email",
+            "sender_profile_picture",
             "traveler_email",
+            "route",
+            "package_image",
             "status",
             "payment_status",
             "agreed_reward",
@@ -47,122 +144,91 @@ class BookingSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    # def validate_match_id(self, value):
-    #     """
-    #     Validates match status, inventory availability, and initiator authority.
-    #     """
-    #     try:
-    #         match = Match.objects.select_related("package", "trip").get(id=value)
-    #     except Match.DoesNotExist:
-    #         raise serializers.ValidationError("The provided match instance does not exist.")
+    def get_sender_name(self, obj) -> str:
+        """Pulls the sender's name from their related Profile instance using the full_name property."""
+        if not obj.sender:
+            return ""
 
-    #     if not match.is_active:
-    #         raise serializers.ValidationError("This match profile is currently inactive.")
+        if hasattr(obj.sender, "profile") and obj.sender.profile:
+            name = obj.sender.profile.full_name
+            if name:
+                return name
 
-    #     if Booking.objects.filter(match=match).exists():
-    #         raise serializers.ValidationError("A booking request has already been registered for this match.")
+        return getattr(obj.sender, "username", obj.sender.email)
 
-    #     if match.trip.available_weight_kg < match.package.weight:
-    #         raise serializers.ValidationError(
-    #             f"Sufficient weight capacity is no longer available on this trip. "
-    #             f"Required: {match.package.weight}kg, Available: {match.trip.available_weight_kg}kg"
-    #         )
+    def get_sender_profile_picture(self, obj) -> str | None:
+        """Pulls the sender's profile picture URL from Cloudinary if present."""
+        if not obj.sender or not hasattr(obj.sender, "profile") or not obj.sender.profile:
+            return None
+            
+        profile_picture = obj.sender.profile.profile_picture
+        return profile_picture.url if profile_picture else None
 
-    #     # ✅ FIXED ISSUE 5: Enforced strict business workflow permissions.
-    #     # Only the package owner/sender can select a traveler and initiate a booking.
-    #     request_user = self.context["request"].user
-    #     if request_user != match.package.sender:
-    #         raise serializers.ValidationError(
-    #             "Only the package sender can initiate a booking request from this match."
-    #         )
+    def get_route(self, obj) -> dict:
+        """Extracts route details from the trip or falls back to package details."""
+        trip = obj.trip
+        if trip:
+            return {
+                "from_country": getattr(trip, "from_country", ""),
+                "from_city": getattr(trip, "from_city", ""),
+                "to_country": getattr(trip, "to_country", ""),
+                "to_city": getattr(trip, "to_city", ""),
+            }
 
-    #     return value
+        package = obj.package
+        if package:
+            return {
+                "from_country": getattr(package, "from_country", ""),
+                "from_city": getattr(package, "from_city", ""),
+                "to_country": getattr(package, "to_country", ""),
+                "to_city": getattr(package, "to_city", ""),
+            }
 
+        return {}
+
+    def get_package_image(self, obj) -> str | None:
+        """Fetches the primary or first image associated with the package."""
+        if not obj.package:
+            return None
+        
+        if hasattr(obj.package, "images"):
+            primary_image = obj.package.images.filter(is_primary=True).first()
+            if primary_image:
+                return str(primary_image.image)
+            
+            first_image = obj.package.images.first()
+            if first_image:
+                return str(first_image.image)
+
+        if hasattr(obj.package, "image") and obj.package.image:
+            return str(obj.package.image)
+
+        return None
 
     def validate_match_id(self, value):
         if not Match.objects.filter(id=value).exists():
             raise serializers.ValidationError(
                 "The provided match instance does not exist."
             )
-
         return value
-    
 
     def create(self, validated_data):
-            """
-            Bridges the operation to the service layer, catching only expected clean exceptions.
-            """
-            match_id = validated_data["match_id"]
-            initiated_by = self.context["request"].user
+        match_id = validated_data["match_id"]
+        initiated_by = self.context["request"].user
 
-            try:
-                return BookingService.create_booking_request(
-                    match_id=match_id, 
-                    initiated_by=initiated_by
+        try:
+            return BookingService.create_booking_request(
+                match_id=match_id, 
+                initiated_by=initiated_by
+            )
+        except DjangoValidationError as e:
+            if hasattr(e, "message_dict"):
+                raise serializers.ValidationError(e.message_dict)
+            if hasattr(e, "messages"):
+                raise serializers.ValidationError(
+                    e.messages[0] if len(e.messages) == 1 else e.messages
                 )
-            except DjangoValidationError as e:
-                # 🟢 PRODUCTION FIX: Pass messages directly without manual dict nesting to prevent 500 crashes
-                if hasattr(e, "message_dict"):
-                    raise serializers.ValidationError(e.message_dict)
-                if hasattr(e, "messages"):
-                    # If there's only one message, extract it as a clean string error message
-                    raise serializers.ValidationError(e.messages[0] if len(e.messages) == 1 else e.messages)
-                raise serializers.ValidationError(str(e))
-
-
-
-# 
-
-# class VerifyPickupPinSerializer(serializers.Serializer):
-#     booking_id = serializers.UUIDField(required=True)
-#     pickup_pin = serializers.CharField(max_length=6, min_length=6, required=True)
-
-#     def validate(self, attrs):
-#         booking_id = attrs.get("booking_id")
-#         input_pin = attrs.get("pickup_pin")
-
-#         try:
-#             # Row lock the booking to handle the state alteration sequence cleanly
-#             booking = Booking.objects.get(id=booking_id)
-#         except Booking.DoesNotExist:
-#             raise serializers.ValidationError({"booking_id": _("Target booking contract instance not found.")})
-
-#         # =====================================================================
-#         # 1. State Guard: Support CONFIRMED (or PAID status flows)
-#         # =====================================================================
-#         # Adjust this list if your system considers PAYMENT_PENDING/PAID valid for pickup transitions
-#         valid_pickup_statuses = [BookingStatus.CONFIRMED] 
-        
-#         if booking.status == BookingStatus.PAYMENT_PENDING:
-#             raise serializers.ValidationError(
-#                 {
-#                     "detail": (
-#                         "Payment has not been completed yet. "
-#                         "The sender must complete payment before pickup can be verified."
-#                     )
-#                 }
-#             )
-
-#         if booking.status != BookingStatus.CONFIRMED:
-#             raise serializers.ValidationError(
-#                 {
-#                     "detail": (
-#                         f"Pickup cannot be performed while the booking is '{booking.status}'. "
-#                         "Only confirmed bookings are eligible for pickup verification."
-#                     )
-#                 }
-#             )
-#         # 2. Authentication Check: Only the assigned Traveler can submit the validation PIN
-#         request_user = self.context["request"].user
-#         if booking.traveler != request_user:
-#             raise serializers.ValidationError(_("Access Denied. Only the designated traveler can execute pickup clearances."))
-
-#         # 3. Security Check: Validate matching pin entries
-#         if booking.pickup_verification_pin != input_pin:
-#             raise serializers.ValidationError({"pickup_pin": _("Invalid security verification passcode pin code entry.")})
-
-#         attrs["booking"] = booking
-#         return attrs
+            raise serializers.ValidationError(str(e))
 
 class VerifyPickupPinSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)

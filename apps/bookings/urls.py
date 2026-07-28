@@ -11,6 +11,7 @@ from .views import (
     BookingDetailView,
     BookingRespondView,
     BookingStartTransitView,
+    TravelerPendingBookingsView
     # PaymentWebhookView,
 )
 
@@ -29,6 +30,11 @@ urlpatterns = [
         "bookings/<uuid:id>/", 
         BookingDetailView.as_view(), 
         name="booking-detail"
+    ),
+    path(
+        "bookings/traveler/pending/",
+        TravelerPendingBookingsView.as_view(),
+        name="traveler-pending-bookings",
     ),
 
     # -------------------------------------------------------------------------

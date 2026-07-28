@@ -27,8 +27,12 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError as DRFValidationError
 import logging
+import logging
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.utils import timezone
 
-logger = logging.getLogger(__name__)
 
 
 class BookingCreateView(generics.CreateAPIView):
@@ -89,6 +93,57 @@ class BookingCreateView(generics.CreateAPIView):
             )
 
 
+
+
+class TravelerPendingBookingsView(generics.ListAPIView):
+    """
+    API Endpoint for Travelers to list all active, non-expired pending booking requests.
+    """
+    serializer_class = BookingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            Booking.objects.select_related(
+                "package", 
+                "trip", 
+                "sender", 
+                "sender__profile", 
+                "traveler"
+            )
+            .prefetch_related("package__images")
+            .filter(
+                traveler=self.request.user,
+                status=BookingStatus.PENDING,
+                is_active=True,
+                expires_at__gt=timezone.now(),
+            )
+            .order_by("-created_at")
+        )
+
+    def list(self, request, *args, **kwargs):
+        try:
+            queryset = self.get_queryset()
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(
+                {
+                    "success": True,
+                    "message": "Pending booking requests retrieved successfully.",
+                    "count": queryset.count(),
+                    "data": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to fetch pending booking requests at this time.",
+                    "error_details": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        
 class MyBookingListView(generics.ListAPIView):
     """
     Retrieves all active transactions where the logged-in user acts as Sender or Traveler.

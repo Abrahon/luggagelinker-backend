@@ -16,6 +16,13 @@ from django.db.models import Q #
 from rest_framework.response import Response
 from .models import Match
 from .serializers import MatchSerializer
+import uuid
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+from django.db import models
+from .models import Match
+from .serializers import MatchSerializer
+
 # from .utils import success_response, error_response
 
 
@@ -68,12 +75,6 @@ class MyMatchListView(generics.ListAPIView):
         
 
 
-import uuid
-from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated
-from django.db import models
-from .models import Match
-from .serializers import MatchSerializer
 
 class PackageMatchListView(generics.ListAPIView):
 
@@ -175,8 +176,6 @@ class TripMatchListView(generics.ListAPIView):
                 status_code=500,
                 errors=str(e)
             )
-
-
 
 
 class MatchDetailView(generics.RetrieveAPIView):
