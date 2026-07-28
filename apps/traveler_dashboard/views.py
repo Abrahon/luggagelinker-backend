@@ -267,10 +267,19 @@ class TravelerRecentActivitiesView(APIView):
         # -------------------------------------------------------------
         # 2. BOOKINGS
         # -------------------------------------------------------------
+        # -------------------------------------------------------------
+        # 2. BOOKINGS
+        # -------------------------------------------------------------
+        # Tip: Use select_related if package is a ForeignKey to optimize DB queries
         bookings = Booking.objects.filter(traveler=user).order_by("-updated_at")[:limit]
 
         for b in bookings:
-            pkg_name = b.title or "Package"
+            # Safely extract package name across different possible relation names
+            if hasattr(b, "package") and b.package:
+                pkg_name = getattr(b.package, "title", "Package")
+            else:
+                pkg_name = getattr(b, "package_title", None) or getattr(b, "item_name", None) or "Package"
+
             dt = b.updated_at or b.created_at
 
             if b.status == BookingStatus.PENDING:
@@ -282,7 +291,7 @@ class TravelerRecentActivitiesView(APIView):
                     "time_ago": naturaltime(b.created_at),
                 })
             elif b.status == BookingStatus.TRAVELER_ACCEPTED:
-                sender_name = b.sender.get_full_name() or "a user" if b.sender else "a user"
+                sender_name = b.sender.get_full_name() if (hasattr(b, "sender") and b.sender) else "a user"
                 activities.append({
                     "type": "BOOKING_ACCEPTED",
                     "title": "Booking Accepted",
@@ -294,7 +303,7 @@ class TravelerRecentActivitiesView(APIView):
                 activities.append({
                     "type": "ESCROW_FUNDED",
                     "title": "Escrow Funded",
-                    "message": f"Payment of ${b.agreed_reward} has been secured in escrow.",
+                    "message": f"Payment of ${getattr(b, 'agreed_reward', 0)} has been secured in escrow.",
                     "created_at": dt,
                     "time_ago": naturaltime(dt),
                 })
@@ -302,7 +311,7 @@ class TravelerRecentActivitiesView(APIView):
                 activities.append({
                     "type": "PACKAGE_PICKED_UP",
                     "title": "Package Picked Up",
-                    "message": "Sender confirmed package pickup.",
+                    "message": f"Sender confirmed pickup for {pkg_name}.",
                     "created_at": dt,
                     "time_ago": naturaltime(dt),
                 })
@@ -310,7 +319,7 @@ class TravelerRecentActivitiesView(APIView):
                 activities.append({
                     "type": "DELIVERY_IN_TRANSIT",
                     "title": "Delivery In Transit",
-                    "message": "Your delivery is currently in transit.",
+                    "message": f"Your delivery for {pkg_name} is currently in transit.",
                     "created_at": dt,
                     "time_ago": naturaltime(dt),
                 })
@@ -318,11 +327,10 @@ class TravelerRecentActivitiesView(APIView):
                 activities.append({
                     "type": "PACKAGE_DELIVERED",
                     "title": "Package Delivered",
-                    "message": "Package successfully delivered.",
+                    "message": f"Package {pkg_name} successfully delivered.",
                     "created_at": dt,
                     "time_ago": naturaltime(dt),
                 })
-
         # -------------------------------------------------------------
         # 3. WALLET TRANSACTIONS (Escrow Release / Earnings)
         # -------------------------------------------------------------

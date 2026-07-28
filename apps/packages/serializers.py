@@ -97,6 +97,13 @@ class PackageSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    # ----------------------------
+    # CREATE
+    # ----------------------------
+    def create(self, validated_data):
+        validated_data["sender"] = self.context["request"].user
+        return Package.objects.create(**validated_data)
+    
     # =========================
     # COMPLIANCE VALIDATION
     # =========================

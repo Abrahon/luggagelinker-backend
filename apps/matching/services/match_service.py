@@ -37,7 +37,7 @@ def create_or_update_match(package, trip, score):
         trip=trip,
         defaults={
             "score": score,
-            "status": MatchStatus.PENDING,
+            "status": MatchStatus.AVAILABLE,
             "is_active": True,
         },
     )

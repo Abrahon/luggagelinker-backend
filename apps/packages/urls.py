@@ -11,7 +11,8 @@ from .views import (
     DeleteUpdatePackageImageView,
     AdminPackageReviewView,
     AdminPackageListView,
-    AdminPackageDetailView
+    AdminPackageDetailView,
+    TravelerPackageListView
 )
 
 urlpatterns = [
@@ -30,6 +31,14 @@ urlpatterns = [
         name="my-packages",
     ),
 
+    # =====================================================
+    # Traveler Marketplace
+    # =====================================================
+    path(
+        "package/list/",
+        TravelerPackageListView.as_view(),
+        name="traveler-package-list",
+    ),
     # Public package details
     path(
         "package/<uuid:pk>/",
