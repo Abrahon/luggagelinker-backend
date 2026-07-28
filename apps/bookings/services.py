@@ -2,7 +2,8 @@ import logging
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone  # 👈 FIXED: Added missing import
-
+from datetime import timedelta
+from django.utils import timezone
 from apps.bookings.models import (
     Booking,
     BookingStatus,
@@ -36,7 +37,6 @@ class BookingService:
         """
         Create a booking request from a valid match.
         """
-        # Fetch match with related objects
         try:
             match = Match.objects.select_related(
                 "package",
@@ -44,7 +44,6 @@ class BookingService:
                 "package__sender",
                 "trip__traveler",
             ).get(id=match_id)
-
         except Match.DoesNotExist:
             raise ValidationError("Match does not exist.")
 
@@ -63,9 +62,34 @@ class BookingService:
         if initiated_by != package.sender:
             raise ValidationError("Only the package sender can create a booking request.")
 
-        # Prevent duplicate booking
-        if Booking.objects.filter(match=match).exists():
-            raise ValidationError("A booking already exists for this match.")
+        # Prevent booking own trip
+        if package.sender == trip.traveler:
+            raise ValidationError("You cannot book your own trip.")
+
+        # 🟢 Mark old expired pending bookings for this match as inactive
+        Booking.objects.filter(
+            match=match,
+            status=BookingStatus.PENDING,
+            expires_at__lte=timezone.now()
+        ).update(is_active=False, status=BookingStatus.EXPIRED)
+
+        # 🟢 Check ONLY for active, non-expired, valid bookings
+        active_booking_exists = Booking.objects.filter(
+            match=match,
+            is_active=True,
+            status__in=[
+                BookingStatus.PENDING,
+                BookingStatus.TRAVELER_ACCEPTED,
+                BookingStatus.PAYMENT_PENDING,
+                BookingStatus.CONFIRMED,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+            ],
+            expires_at__gt=timezone.now(),
+        ).exists()
+
+        if active_booking_exists:
+            raise ValidationError("An active booking already exists for this match.")
 
         # Capacity check
         if trip.available_weight_kg < package.weight:
@@ -75,12 +99,8 @@ class BookingService:
                 f"Available: {trip.available_weight_kg}kg."
             )
 
-        # Optional: Prevent booking own trip
-        if package.sender == trip.traveler:
-            raise ValidationError("You cannot book your own trip.")
-
         # --------------------------------------------------
-        # CREATE BOOKING
+        # CREATE BOOKING (NO DELETE REQUIRED!)
         # --------------------------------------------------
         booking = Booking.objects.create(
             match=match,
@@ -89,9 +109,13 @@ class BookingService:
             sender=package.sender,
             traveler=trip.traveler,
             agreed_reward=package.reward_amount,
+            agreed_weight_kg=package.weight,
             currency=package.currency,
             status=BookingStatus.PENDING,
             payment_status=PaymentStatus.UNPAID,
+            is_active=True,
+            # Set a clear expiration window (e.g., 7 days or 30 days)
+            expires_at=timezone.now() + timedelta(days=7),
         )
 
         logger.info(
@@ -100,10 +124,7 @@ class BookingService:
             initiated_by.id,
         )
 
-        # TODO: NotificationService.send_booking_request(booking)
         return booking
-
-
 
 
     @staticmethod
@@ -365,36 +386,113 @@ class BookingLifecycleService:
 
 
     @classmethod
-    def cancel_booking(cls, booking_or_id, initiating_user) -> Booking:
+    def cancel_booking(cls, booking_or_id, initiating_user):
+
         from django.db import transaction
-        from django.utils import timezone
         from rest_framework.exceptions import ValidationError
+
         from apps.wallets.services import WalletService
         from apps.bookings.models import Booking, BookingStatus
+        from apps.matching.models import MatchStatus
 
         with transaction.atomic():
+
+            # -----------------------------
+            # Load Booking
+            # -----------------------------
             if isinstance(booking_or_id, Booking):
-                booking_id = booking_or_id.id
+                booking = Booking.objects.select_for_update().get(
+                    id=booking_or_id.id
+                )
             else:
-                booking_id = booking_or_id
+                booking = Booking.objects.select_for_update().select_related(
+                    "trip",
+                    "match",
+                    "sender",
+                    "traveler",
+                ).get(id=booking_or_id)
 
-            booking = Booking.objects.select_for_update().get(id=booking_id)
+            # -----------------------------
+            # Permission
+            # Sender OR Traveler can cancel
+            # -----------------------------
+            if initiating_user not in [
+                booking.sender,
+                booking.traveler,
+            ]:
+                raise ValidationError(
+                    "You are not authorized to cancel this booking."
+                )
 
-            # 🟢 IDENTITY PROTECTION GUARD: Only the original sender can cancel
-            if booking.sender != initiating_user:
-                raise ValidationError("Unauthorized. Only the sender who funded this escrow can cancel this booking.")
-
-            # Prevent canceling finished workflows
-            if booking.status == BookingStatus.COMPLETED:
-                raise ValidationError("Cannot cancel a booking that has already been successfully completed.")
-            
+            # -----------------------------
+            # Already Finished
+            # -----------------------------
             if booking.status == BookingStatus.CANCELLED:
-                raise ValidationError("This booking has already been cancelled.")
+                raise ValidationError(
+                    "This booking has already been cancelled."
+                )
 
-            # Execute automated financial escrow reversal back to the sender
-            WalletService.refund(booking)
+            if booking.status == BookingStatus.COMPLETED:
+                raise ValidationError(
+                    "Completed bookings cannot be cancelled."
+                )
 
+            # -----------------------------
+            # After Pickup → No Cancellation
+            # -----------------------------
+            if booking.status in [
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+                BookingStatus.DELIVERED,
+            ]:
+                raise ValidationError(
+                    "This booking cannot be cancelled after pickup. Please open a dispute."
+                )
+
+            # =====================================================
+            # CASE 1
+            # PENDING / PAYMENT_PENDING
+            # No escrow exists
+            # =====================================================
+            if booking.status in [
+                BookingStatus.PENDING,
+                BookingStatus.PAYMENT_PENDING,
+            ]:
+
+                booking.trip.restore_capacity(
+                    booking.agreed_weight_kg
+                )
+
+                booking.match.status = MatchStatus.AVAILABLE
+                booking.match.save(update_fields=["status"])
+
+            # =====================================================
+            # CASE 2
+            # CONFIRMED
+            # Escrow already exists
+            # =====================================================
+            elif booking.status == BookingStatus.CONFIRMED:
+
+                WalletService.refund(booking)
+
+                booking.trip.restore_capacity(
+                    booking.agreed_weight_kg
+                )
+
+                booking.match.status = MatchStatus.AVAILABLE
+                booking.match.save(update_fields=["status"])
+
+            # -----------------------------
+            # Finalize Booking
+            # -----------------------------
             booking.status = BookingStatus.CANCELLED
-            booking.save(update_fields=["status"])
+            booking.is_active = False
+
+            booking.save(
+                update_fields=[
+                    "status",
+                    "is_active",
+                ]
+            )
 
             return booking

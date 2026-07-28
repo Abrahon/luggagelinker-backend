@@ -38,7 +38,11 @@ class Booking(models.Model):
     tracking_number = models.CharField(max_length=30, unique=True, editable=False)
 
     # Relations
-    match = models.OneToOneField(Match, on_delete=models.PROTECT, related_name="booking")
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name="bookings",
+    )
     package = models.ForeignKey(Package, on_delete=models.PROTECT, related_name="bookings")
     trip = models.ForeignKey(Trip, on_delete=models.PROTECT, related_name="bookings")
 

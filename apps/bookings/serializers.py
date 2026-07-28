@@ -5,7 +5,7 @@ from .models import Booking
 from .services import BookingService
 from django.utils.translation import gettext_lazy as _
 from apps.bookings.models import Booking, BookingStatus
-
+from django.utils import timezone
 
 # class BookingSerializer(serializers.ModelSerializer):
 #     tracking_number = serializers.CharField(read_only=True)
@@ -205,12 +205,29 @@ class BookingSerializer(serializers.ModelSerializer):
 
         return None
 
-    def validate_match_id(self, value):
-        if not Match.objects.filter(id=value).exists():
-            raise serializers.ValidationError(
-                "The provided match instance does not exist."
-            )
-        return value
+    def validate(self, attrs):
+            match_id = attrs.get("match_id")
+            if match_id:
+                # Check for active non-expired bookings upfront
+                active_exists = Booking.objects.filter(
+                    match_id=match_id,
+                    is_active=True,
+                    status__in=[
+                        BookingStatus.PENDING,
+                        BookingStatus.TRAVELER_ACCEPTED,
+                        BookingStatus.PAYMENT_PENDING,
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.PICKED_UP,
+                        BookingStatus.IN_TRANSIT,
+                    ],
+                    expires_at__gt=timezone.now()
+                ).exists()
+
+                if active_exists:
+                    raise serializers.ValidationError(
+                        "An active booking request already exists for this match."
+                    )
+            return attrs
 
     def create(self, validated_data):
         match_id = validated_data["match_id"]
@@ -229,6 +246,8 @@ class BookingSerializer(serializers.ModelSerializer):
                     e.messages[0] if len(e.messages) == 1 else e.messages
                 )
             raise serializers.ValidationError(str(e))
+
+        
 
 class VerifyPickupPinSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)

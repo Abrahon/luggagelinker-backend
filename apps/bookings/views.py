@@ -143,7 +143,43 @@ class TravelerPendingBookingsView(generics.ListAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        
+
+
+
+from rest_framework import generics, permissions
+
+
+
+
+class ActiveBookingListView(generics.ListAPIView):
+
+    serializer_class = BookingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+
+        return (
+            Booking.objects.filter(
+                traveler=self.request.user,
+                status__in=[
+                    BookingStatus.PAYMENT_PENDING,
+                    BookingStatus.CONFIRMED,
+                    BookingStatus.PICKED_UP,
+                    BookingStatus.IN_TRANSIT,
+                ],
+                is_active=True,
+            )
+            .select_related(
+                "sender",
+                "traveler",
+                "package",
+                "trip",
+                "booking_payment",
+            )
+            .order_by("-updated_at")
+        )
+
+    
 class MyBookingListView(generics.ListAPIView):
     """
     Retrieves all active transactions where the logged-in user acts as Sender or Traveler.

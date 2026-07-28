@@ -11,8 +11,8 @@ from .views import (
     BookingDetailView,
     BookingRespondView,
     BookingStartTransitView,
-    TravelerPendingBookingsView
-    # PaymentWebhookView,
+    TravelerPendingBookingsView,
+    ActiveBookingListView
 )
 
 app_name = "bookings"
@@ -55,7 +55,12 @@ urlpatterns = [
         "bookings/completed/", 
         CompletedBookingListView.as_view(), 
         name="booking-completed-list"
-),
+   ),
+    path(
+        "bookings/active/",
+        ActiveBookingListView.as_view(),
+        name="traveler-active-bookings",
+    ),
 
     path("booking/verify-pickup/", BookingPickupVerificationView.as_view(), name="verify-pickup"),
     path("booking/start-transit/", BookingStartTransitView.as_view(), name="start-transit"),
