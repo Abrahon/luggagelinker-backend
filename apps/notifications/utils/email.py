@@ -35,7 +35,7 @@ def send_pickup_pin_email(user_email, booking, pickup_pin):
     Sends a high-converting, professional transactional HTML email containing 
     the security verification PIN to the booking sender.
     """
-    subject = f"🔒 Delivery Confirmed - Pickup PIN for #{booking.tracking_number}"
+    subject = f"🔒 Booking Confirmed - Pickup PIN for #{booking.tracking_number}"
     from_email = settings.DEFAULT_FROM_EMAIL
     to_emails = [user_email]
 

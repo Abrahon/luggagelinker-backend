@@ -65,14 +65,46 @@ class WalletService:
         tx = WalletTransaction.objects.create(
             wallet=wallet,
             booking=booking,
-            type="ESCROW_HOLD",
+            type=WalletTransaction.TransactionType.ESCROW_HOLD,
             amount=-amount,  
-            status="PENDING",
+            status=WalletTransaction.TransactionStatus.PENDING,
             balance_before=balance_before,
             balance_after=wallet.available_balance,
             description=f"Escrow lock holding for Booking Tracker: {booking.tracking_number}"
         )
         return tx
+
+    
+    @classmethod
+    def get_escrow_status(cls, booking):
+        """
+        Returns the current escrow state for a booking.
+        """
+
+        if WalletTransaction.objects.filter(
+            booking=booking,
+            type=WalletTransaction.TransactionType.ESCROW_RELEASE,
+            wallet__user=booking.traveler,
+            status=WalletTransaction.TransactionStatus.COMPLETED,
+        ).exists():
+            return "RELEASED"
+
+        if WalletTransaction.objects.filter(
+            booking=booking,
+            type=WalletTransaction.TransactionType.REFUND,
+            status=WalletTransaction.TransactionStatus.COMPLETED,
+        ).exists():
+            return "REFUNDED"
+
+        if WalletTransaction.objects.filter(
+            booking=booking,
+            type=WalletTransaction.TransactionType.ESCROW_HOLD,
+            status=WalletTransaction.TransactionStatus.PENDING,
+        ).exists():
+            return "HELD"
+
+        return "NOT_FUNDED"
+    
 
     @classmethod
     @transaction.atomic
@@ -102,16 +134,16 @@ class WalletService:
 
         if WalletTransaction.objects.filter(
             booking=booking,
-            type="ESCROW_RELEASE",
-            status="COMPLETED"
+            type=WalletTransaction.TransactionType.ESCROW_RELEASE,
+            status=WalletTransaction.TransactionStatus.COMPLETED,
         ).exists():
             raise ValidationError("Escrow payouts have already been processed for this booking.")
 
         escrow_hold = WalletTransaction.objects.select_for_update().filter(
             wallet=sender_wallet,
             booking=booking,
-            type="ESCROW_HOLD",
-            status="PENDING"
+            type=WalletTransaction.TransactionType.ESCROW_HOLD,
+            status=WalletTransaction.TransactionStatus.PENDING,
         ).first()
 
         if not escrow_hold:
@@ -140,9 +172,9 @@ class WalletService:
         WalletTransaction.objects.create(
             wallet=sender_wallet,
             booking=booking,
-            type="ESCROW_RELEASE",
+            type=WalletTransaction.TransactionType.ESCROW_RELEASE,
             amount=-amount,
-            status="COMPLETED",
+            status=WalletTransaction.TransactionStatus.COMPLETED,
             balance_before=sender_wallet.available_balance,
             balance_after=sender_wallet.available_balance,
             description=f"Released escrow hold asset block for Booking #{booking.id}"
@@ -151,9 +183,9 @@ class WalletService:
         tx = WalletTransaction.objects.create(
             wallet=traveler_wallet,
             booking=booking,
-            type="ESCROW_RELEASE",
+            type=WalletTransaction.TransactionType.ESCROW_RELEASE,
             amount=amount,
-            status="COMPLETED",
+            status=WalletTransaction.TransactionStatus.COMPLETED,
             balance_before=traveler_before,
             balance_after=traveler_wallet.available_balance,
             description=f"Earnings payout received for delivering Booking #{booking.id}"
@@ -166,6 +198,8 @@ class WalletService:
         ))
 
         return tx
+
+    
 
     @classmethod
     @transaction.atomic

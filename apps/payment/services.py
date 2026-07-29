@@ -13,6 +13,7 @@ from apps.notifications.utils.email import send_pickup_pin_email
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType 
 from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus,Payment,PaymentStatus,StripeEventLog
+from apps.bookings.models import BookingStatus,PaymentStatus
 from datetime import timedelta
 # Replace these import paths with your actual project structure
 from apps.subscriptions.models import (
@@ -238,7 +239,7 @@ class BookingPaymentService:
 
                     # 2. SENDER CONTRACT WORKFLOW STATES: Mark as PAID and CONFIRMED
                     booking.status = BookingStatus.CONFIRMED  
-                    booking.payment_status = PaymentStatus.PAID  # 👈 Added explicit assignment field tag here
+                    booking.payment_status = PaymentStatus.PAID  
 
                     # ---------------------------------------------------------
                     # GENERATE PIN HERE (Only if it doesn't already exist)

@@ -376,12 +376,12 @@ class BookingLifecycleService:
             WalletService.release_escrow(booking)
 
             # 5. Update both delivery and completion timestamps at the same time
-            booking.payment_status = PaymentStatus.PAID
+            # booking.payment_status = PaymentStatus.PAID
             booking.status = BookingStatus.COMPLETED
             booking.delivered_at = timezone.now()  
             booking.completed_at = timezone.now()  
             
-            booking.save(update_fields=["payment_status","status", "delivered_at", "completed_at"])
+            booking.save(update_fields=["status", "delivered_at", "completed_at"])
 
             return booking
 

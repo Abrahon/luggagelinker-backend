@@ -89,21 +89,22 @@ from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import Booking
 from apps.matching.models import Match
-from .services import BookingService  # Adjust import based on your project structure
+from .services import BookingService  
+from apps.wallets.services import WalletService
 
 
 class BookingSerializer(serializers.ModelSerializer):
     tracking_number = serializers.CharField(read_only=True)
     package_title = serializers.CharField(source="package.title", read_only=True)
     trip_title = serializers.CharField(source="trip.title", read_only=True)
+    escrow_status = serializers.SerializerMethodField()
     
-    # 🟢 Sender Profile & Contact Details
     sender_name = serializers.SerializerMethodField()
     sender_email = serializers.CharField(source="sender.email", read_only=True)
     sender_profile_picture = serializers.SerializerMethodField()
     traveler_email = serializers.CharField(source="traveler.email", read_only=True)
     
-    # 🟢 Route and Package Image details
+
     route = serializers.SerializerMethodField()
     package_image = serializers.SerializerMethodField()
 
@@ -125,6 +126,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "package_image",
             "status",
             "payment_status",
+            "escrow_status",
             "agreed_reward",
             "currency",
             "agreed_weight_kg",
@@ -155,6 +157,9 @@ class BookingSerializer(serializers.ModelSerializer):
                 return name
 
         return getattr(obj.sender, "username", obj.sender.email)
+    
+    def get_escrow_status(self, obj):
+        return WalletService.get_escrow_status(obj)
 
     def get_sender_profile_picture(self, obj) -> str | None:
         """Pulls the sender's profile picture URL from Cloudinary if present."""
@@ -248,6 +253,7 @@ class BookingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(str(e))
 
         
+
 
 class VerifyPickupPinSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)
