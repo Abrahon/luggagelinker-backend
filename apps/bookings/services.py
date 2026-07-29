@@ -10,11 +10,11 @@ from apps.bookings.models import (
     PaymentStatus,
 )
 from apps.matching.models import Match
-import logging
+
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType
 from apps.notifications.utils.email import send_delivery_pin_email,send_pickup_pin_email
-import logging
+from apps.bookings.models import BookingStatus, PaymentStatus
 from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -376,11 +376,12 @@ class BookingLifecycleService:
             WalletService.release_escrow(booking)
 
             # 5. Update both delivery and completion timestamps at the same time
+            booking.payment_status = PaymentStatus.PAID
             booking.status = BookingStatus.COMPLETED
-            booking.delivered_at = timezone.now()  # Marks physical drop-off time
-            booking.completed_at = timezone.now()  # Marks wallet settlement time
+            booking.delivered_at = timezone.now()  
+            booking.completed_at = timezone.now()  
             
-            booking.save(update_fields=["status", "delivered_at", "completed_at"])
+            booking.save(update_fields=["payment_status","status", "delivered_at", "completed_at"])
 
             return booking
 

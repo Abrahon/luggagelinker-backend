@@ -26,12 +26,20 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError as DRFValidationError
-import logging
+from rest_framework import generics, permissions
+
+from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.serializers import BookingSerializer
+
 import logging
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
+from apps.bookings.models import Booking
+from apps.bookings.serializers import BookingSerializer
+from apps.bookings.services import BookingLifecycleService
+
 
 
 
@@ -147,9 +155,6 @@ class TravelerPendingBookingsView(generics.ListAPIView):
 
 
 from rest_framework import generics, permissions
-
-
-
 
 class ActiveBookingListView(generics.ListAPIView):
 
@@ -544,50 +549,13 @@ class BookingDeliveryVerificationView(generics.GenericAPIView):
 
 
 
-class BookingCancellationView(generics.GenericAPIView):
+
+
+
+class SenderCompletedDeliveryListView(generics.ListAPIView):
     """
-    POST /api/bookings/{id}/cancel/
-    Enforces atomic state transitions to CANCELLED and triggers the wallet refund engine.
-    """
-    permission_classes = [IsAuthenticated]
-    serializer_class = BookingSerializer
-    queryset = Booking.objects.all()
-
-    def post(self, request, pk, *args, **kwargs):
-        try:
-            # Route execution down to the unified cancellation service handler
-            updated_booking = BookingLifecycleService.cancel_booking(booking_or_id=pk)
-            
-            return Response(
-                {
-                    "success": True,
-                    "message": "Booking cancelled successfully. Escrow hold reversed and fully refunded to sender.",
-                    "current_status": updated_booking.status
-                },
-                status=status.HTTP_200_OK
-            )
-            
-        except (DjangoValidationError, DRFValidationError) as exc:
-            error_messages = exc.messages if hasattr(exc, 'messages') else [str(exc)]
-            return Response(
-                {
-                    "success": False,
-                    "message": "Cancellation validation failed.",
-                    "errors": error_messages
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-
-from rest_framework import generics, permissions
-
-from apps.bookings.models import Booking
-from apps.bookings.serializers import BookingSerializer
-
-
-class CompletedBookingListView(generics.ListAPIView):
-    """
-    Returns completed bookings for the authenticated sender.
+    Sender Dashboard
+    Shows all successfully delivered bookings.
     """
 
     serializer_class = BookingSerializer
@@ -595,35 +563,163 @@ class CompletedBookingListView(generics.ListAPIView):
 
     def get_queryset(self):
 
-        user = self.request.user
-
-        print("=" * 60)
-        print("Authenticated:", user.is_authenticated)
-        print("User Email:", user.email)
-        print("User ID:", user.id)
-
-        queryset = (
+        return (
             Booking.objects.filter(
-                sender_id=user.id,
-                status="COMPLETED",
+                sender=self.request.user,
+                status=BookingStatus.COMPLETED,
             )
             .select_related(
+                "package",
+                "trip",
                 "sender",
                 "traveler",
                 "booking_payment",
             )
-            .order_by("-updated_at")
+            .order_by("-delivered_at")
         )
 
-        print("Completed Booking Count:", queryset.count())
+    def list(self, request, *args, **kwargs):
 
-        for booking in queryset:
-            print(
-                booking.id,
-                booking.sender.email,
-                booking.status,
+        queryset = self.get_queryset()
+
+        serializer = self.get_serializer(
+            queryset,
+            many=True,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Completed deliveries retrieved successfully.",
+                "count": queryset.count(),
+                "data": serializer.data,
+            }
+        )
+
+class BookingCancellationView(generics.GenericAPIView):
+    """
+    POST /api/bookings/<uuid:pk>/cancel/
+
+    Sender:
+        - Can cancel before payment.
+        - Can cancel after payment (escrow refunded).
+
+    Traveler:
+        - Can also cancel before pickup.
+        - If escrow exists, sender is refunded.
+
+    Nobody can cancel after pickup/in-transit/completed.
+    """
+
+    serializer_class = BookingSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Booking.objects.all()
+
+    def post(self, request, pk, *args, **kwargs):
+
+        try:
+
+            booking = BookingLifecycleService.cancel_booking(
+                booking_or_id=pk,
+                initiating_user=request.user,
             )
 
-        print("=" * 60)
+            return Response(
+                {
+                    "success": True,
+                    "message": "Booking cancelled successfully.",
+                    "data": {
+                        "booking_id": booking.id,
+                        "tracking_number": booking.tracking_number,
+                        "status": booking.status,
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
 
-        return queryset
+        except (DjangoValidationError, DRFValidationError) as exc:
+
+            if hasattr(exc, "messages"):
+                errors = exc.messages
+            elif hasattr(exc, "detail"):
+                errors = exc.detail
+            else:
+                errors = [str(exc)]
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Booking cancellation failed.",
+                    "errors": errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        except Booking.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Booking not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except Exception as exc:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to cancel booking.",
+                    "error": str(exc),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+
+
+
+class TravelerCompletedDeliveryListView(generics.ListAPIView):
+    """
+    Traveler Dashboard
+    Shows all completed deliveries.
+    """
+
+    serializer_class = BookingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+
+        return (
+            Booking.objects.filter(
+                traveler=self.request.user,
+                status=BookingStatus.COMPLETED,
+            )
+            .select_related(
+                "package",
+                "trip",
+                "sender",
+                "traveler",
+                "booking_payment",
+            )
+            .order_by("-delivered_at")
+        )
+
+    def list(self, request, *args, **kwargs):
+
+        queryset = self.get_queryset()
+
+        serializer = self.get_serializer(
+            queryset,
+            many=True,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Completed deliveries retrieved successfully.",
+                "count": queryset.count(),
+                "data": serializer.data,
+            }
+        )

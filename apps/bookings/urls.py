@@ -6,13 +6,14 @@ from .views import (
     BookingCreateView,
     BookingDeliveryVerificationView,
     BookingPickupVerificationView,
-    CompletedBookingListView,
     MyBookingListView,
     BookingDetailView,
     BookingRespondView,
     BookingStartTransitView,
     TravelerPendingBookingsView,
-    ActiveBookingListView
+    ActiveBookingListView,
+    SenderCompletedDeliveryListView,
+    TravelerCompletedDeliveryListView
 )
 
 app_name = "bookings"
@@ -52,19 +53,18 @@ urlpatterns = [
     ),
 
     path(
-        "bookings/completed/", 
-        CompletedBookingListView.as_view(), 
-        name="booking-completed-list"
-   ),
-    path(
         "bookings/active/",
         ActiveBookingListView.as_view(),
         name="traveler-active-bookings",
     ),
-
+    path("bookings/<uuid:pk>/cancel/",BookingCancellationView.as_view(), name="booking-cancel"),
     path("booking/verify-pickup/", BookingPickupVerificationView.as_view(), name="verify-pickup"),
     path("booking/start-transit/", BookingStartTransitView.as_view(), name="start-transit"),
-    path("booking/verify-delivery/", BookingDeliveryVerificationView.as_view(), name="verify-delivery"), 
-    path("bookings/<uuid:pk>/cancel/",BookingCancellationView.as_view(), name="booking-cancel"),
+    path("booking/verify-delivery/", BookingDeliveryVerificationView.as_view(), name="verify-delivery"),
+    # Sender Completed Deliveries
+    path("sender/completed-deliveries/",SenderCompletedDeliveryListView.as_view(),name="sender-completed-deliveries",),
+
+    # Traveler Completed Deliveries
+    path("traveler/completed-deliveries/",TravelerCompletedDeliveryListView.as_view(),name="traveler-completed-deliveries",),
 
 ]

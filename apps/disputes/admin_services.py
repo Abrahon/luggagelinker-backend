@@ -98,6 +98,7 @@ class AdminDisputeService:
         logger.info("Dispute %s state changed to WAITING_FOR_USER by admin %s", dispute.id, admin_user.id)
         return dispute
 
+
     @staticmethod
     @transaction.atomic
     def resolve(dispute_id, admin_user, resolution_type, admin_notes="", refund_ratio="1.00") -> Dispute:
