@@ -818,48 +818,39 @@ class WalletRecentActivityView(generics.ListAPIView):
 
 # apps/wallets/views.py
 from decimal import Decimal
+from decimal import Decimal
+from django.db.models import Count, Sum, Q
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+# Adjust imports to match your project structure
+from .models import WithdrawalRequest
+from .serializers import AdminWithdrawalStatsSerializer
 
 from django.db.models import Sum
-
-
-# apps/wallets/views.py
 
 class AdminWithdrawalStatsView(APIView):
     permission_classes = [IsPlatformAdmin]
 
     def get(self, request):
-        # Count unique wallets (or unique users via "wallet__user") that made withdrawal requests
-        total_travelers_requested = (
-            WithdrawalRequest.objects.values("wallet")
-            .distinct()
-            .count()
+        stats = WithdrawalRequest.objects.aggregate(
+            total_travelers_requested=Count("wallet", distinct=True),
+            pending_requests=Count("id", filter=Q(status="PENDING")),
+            completed_requests=Count("id", filter=Q(status="COMPLETED")),
+            total_pending_balance=Sum("amount", filter=Q(status="PENDING")),
         )
 
-        total_pending = (
-            WithdrawalRequest.objects.filter(
-                status="PENDING"
-            ).aggregate(
-                total=Sum("amount")
-            )["total"]
-            or Decimal("0.00")
-        )
+        # Handle null sum fallback when no pending requests exist
+        data = {
+            "total_travelers_requested": stats["total_travelers_requested"] or 0,
+            "total_pending_balance": stats["total_pending_balance"] or Decimal("0.00"),
+            "pending_requests": stats["pending_requests"] or 0,
+            "completed_requests": stats["completed_requests"] or 0,
+        }
 
-        pending_requests = WithdrawalRequest.objects.filter(
-            status="PENDING"
-        ).count()
-
-        completed_requests = WithdrawalRequest.objects.filter(
-            status="COMPLETED"
-        ).count()
-
-        serializer = AdminWithdrawalStatsSerializer(
-            {
-                "total_travelers_requested": total_travelers_requested,
-                "total_pending_balance": total_pending,
-                "pending_requests": pending_requests,
-                "completed_requests": completed_requests,
-            }
-        )
+        serializer = AdminWithdrawalStatsSerializer(data)
 
         return Response(
             {
@@ -869,8 +860,6 @@ class AdminWithdrawalStatsView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-
-
 
 class MonthlyEarningsView(generics.GenericAPIView):
     """
