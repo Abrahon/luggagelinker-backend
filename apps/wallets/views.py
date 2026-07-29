@@ -634,6 +634,14 @@ class AdminAdjustBalanceView(generics.GenericAPIView):
             )
 
 
+# Import your serializers, models, and provider helper
+from .models import StripeConnectedAccount
+from .serializers import StripeConnectSerializer
+
+
+logger = logging.getLogger(__name__)
+
+
 class CreateStripeConnectAccount(APIView):
     """
     Initializes Stripe express connected registration endpoints to tie accounts onto payout infrastructure.
@@ -675,19 +683,35 @@ class CreateStripeConnectAccount(APIView):
                     status=status.HTTP_424_FAILED_DEPENDENCY
                 )
             except Exception as e:
-                logger.error(f"Unexpected error linking database properties to Stripe configuration: {str(e)}")
+                # Use logger.exception to output full traceback in server logs
+                logger.exception("Unexpected error linking database properties to Stripe configuration")
                 return Response(
-                    {"success": False, "error": "Internal ledger sync failure."},
+                    {"success": False, "error": str(e)},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
-        # Retrieve connection links
+        # Retrieve connection links with required `user` argument
         try:
-            onboarding_url = StripeConnectProvider.create_account_link(stripe_account_id)
+            onboarding_url = StripeConnectProvider.create_account_link(
+                stripe_account_id=stripe_account_id,
+                user=user,
+            )
         except stripe.error.StripeError as e:
             return Response(
-                {"success": False, "error": e.user_message or "Failed to secure onboarding linked sessions from provider."},
-                status=status.HTTP_424_FAILED_DEPENDENCY
+                {
+                    "success": False,
+                    "error": e.user_message or "Failed to generate Stripe onboarding link.",
+                },
+                status=status.HTTP_424_FAILED_DEPENDENCY,
+            )
+        except Exception as e:
+            logger.exception("Unexpected error during Stripe account link generation")
+            return Response(
+                {
+                    "success": False,
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         return Response(
@@ -697,8 +721,7 @@ class CreateStripeConnectAccount(APIView):
             }, 
             status=status.HTTP_201_CREATED if not existing_account else status.HTTP_200_OK
         )
-
-
+    
 class StripeConnectStatusView(APIView):
     """
     Checks realtime connected status attributes from the Stripe Connect network API and syncs details locally.

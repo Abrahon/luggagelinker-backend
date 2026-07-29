@@ -9,30 +9,43 @@ logger = logging.getLogger(__name__)
 class StripeConnectProvider:
 
     @staticmethod
-    @classmethod
-    def create_account_link(cls, stripe_account_id, user):  
+    def create_connected_account(email: str):
+        """
+        Creates a new Stripe Express Connected Account for a given user email.
+        """
         try:
-            return_url_with_context = f"{settings.STRIPE_CONNECT_RETURN_URL}?user_id={user.id}"
+            account = stripe.Account.create(
+                type="express",
+                email=email,
+                capabilities={
+                    "card_payments": {"requested": True},
+                    "transfers": {"requested": True},
+                },
+            )
+            return account
+        except stripe.error.StripeError as e:
+            logger.error(f"Failed to create Stripe connected account for {email}: {e}")
+            raise
+
+    @staticmethod
+    def create_account_link(stripe_account_id: str, user):
+        """
+        Generates a Stripe Express onboarding link redirecting back with user_id.
+        """
+        try:
+            return_url = (
+                f"{settings.STRIPE_CONNECT_RETURN_URL}?user_id={user.id}"
+            )
 
             link = stripe.AccountLink.create(
                 account=stripe_account_id,
-                refresh_url=settings.STRIPE_CONNECT_REFRESH_URL,
-                return_url=return_url_with_context,  
+                refresh_url=f"{settings.STRIPE_CONNECT_REFRESH_URL}?user_id={user.id}",
+                return_url=return_url,
                 type="account_onboarding",
             )
+
             return link.url
+
         except stripe.error.StripeError as e:
-            logger.error(f"Failed to create Stripe Account Link for {stripe_account_id}: {str(e)}")
-            raise e
-        
-        
-    @staticmethod
-    def retrieve_account_status(account_id: str) -> stripe.Account:
-        """
-        Fetches live capability flags directly from the Stripe Connect API engine.
-        """
-        try:
-            return stripe.Account.retrieve(account_id)
-        except stripe.error.StripeError as e:
-            logger.error(f"Failed to sync status for Stripe account {account_id}: {str(e)}")
-            raise e
+            logger.error(f"Failed to create account link: {e}")
+            raise

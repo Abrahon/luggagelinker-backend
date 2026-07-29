@@ -704,60 +704,89 @@ class AdminPaymentListView(generics.ListAPIView):
 
         return queryset
 
-# adjusting below based on your architecture:
-@api_view(['GET'])                  # 👈 Tells Django this is a DRF-managed GET view
-@permission_classes([AllowAny])    # 👈 Bypasses global authentication requirements
+    
+
+from apps.wallets.models import StripeConnectedAccount
+
+logger = logging.getLogger(__name__)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def stripe_connect_success_view(request):
     """
     Callback endpoint triggered when a user returns from Stripe onboarding.
     Queries Stripe to sync account verification statuses in real-time.
     """
-    user = request.user
-    
-    # Fallback if testing directly in browser session context without API token auth header
-    if not user or not user.is_authenticated:
-        user_id = request.GET.get("user_id")
-        User = get_user_model()
-        user = User.objects.filter(id=user_id).first() if user_id else None
-        
-    if not user:
+    # 1 & 2. Rely strictly on query params since Stripe redirects drop JWT headers
+    user_id = request.GET.get("user_id")
+    if not user_id:
         return HttpResponse(
-            "<h3>Authentication Context Missing</h3><p>Please include ?user_id=<id> in your testing browser URL to simulate auth context.</p>", 
-            status=401
+            "<h3>Invalid Request</h3><p>User identifier is missing.</p>", 
+            status=400
         )
 
+    User = get_user_model()
     try:
-        # Explicit lookup to safely verify if user has an associated stripe account profile
-        stripe_account_profile = user.stripe_account 
-    except getattr(user.__class__, 'stripe_account').RelatedObjectDoesNotExist:
-        return HttpResponse("<h3>Error</h3><p>No Stripe Account profile linked to this user.</p>", status=400)
-    except Exception as e:
-        return HttpResponse(f"<h3>Profile Error</h3><p>{str(e)}</p>", status=400)
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return HttpResponse(
+            "<h3>User Not Found</h3><p>No account matched the provided user ID.</p>", 
+            status=404
+        )
+
+    # 3. Clean relation lookup using model class exception
+    try:
+        stripe_account_profile = StripeConnectedAccount.objects.get(user=user)
+    except StripeConnectedAccount.DoesNotExist:
+        return HttpResponse(
+            "<h3>No Stripe Account Linked</h3><p>No Stripe Connect record exists for this user profile.</p>", 
+            status=400
+        )
 
     stripe_account_id = stripe_account_profile.stripe_account_id
 
     try:
-        # 1. Retrieve current data directly from Stripe
+        # 1. Retrieve real-time data directly from Stripe
         stripe.api_key = settings.STRIPE_SECRET_KEY
         account = stripe.Account.retrieve(stripe_account_id)
 
-        # 2. Update database flags in an atomic transaction blocks
+        # 5. Strict Stripe status check requiring all three criteria
+        is_fully_verified = (
+            account.details_submitted
+            and account.charges_enabled
+            and account.payouts_enabled
+        )
+
+        # 4. Update ALL fields in an atomic transaction block
         with transaction.atomic():
-            profile = type(stripe_account_profile).objects.select_for_update().get(id=stripe_account_profile.id)
+            profile = StripeConnectedAccount.objects.select_for_update().get(id=stripe_account_profile.id)
+            
             profile.payouts_enabled = account.payouts_enabled
             profile.charges_enabled = account.charges_enabled
             profile.details_submitted = account.details_submitted
-            profile.save(update_fields=["payouts_enabled", "charges_enabled", "details_submitted"])
+            profile.country = account.country
+            profile.default_currency = account.default_currency
+            profile.account_status = "ACTIVE" if is_fully_verified else "PENDING"
+            
+            profile.save(update_fields=[
+                "payouts_enabled",
+                "charges_enabled",
+                "details_submitted",
+                "country",
+                "default_currency",
+                "account_status",
+            ])
 
-        # 3. Dynamic Visual Response based on their actual state
-        if profile.payouts_enabled and profile.details_submitted:
+        # Render response feedback
+        if is_fully_verified:
             status_title = "✓ Connection Successful!"
             status_color = "#00d68f"
             status_desc = "Your Stripe Connected Account is fully verified, active, and configured for secure balance withdrawals."
         else:
             status_title = "⚠ Onboarding Incomplete"
             status_color = "#e67e22"
-            status_desc = "Your account link was registered, but Stripe requires more identification documentation before your payouts can be unlocked."
+            status_desc = "Your account link was registered, but Stripe requires more identification documentation before payouts can be unlocked."
 
         html_content = f"""
         <!DOCTYPE html>
@@ -771,7 +800,7 @@ def stripe_connect_success_view(request):
                 p {{ color: #5f6368; line-height: 1.5; }}
                 .badge-table {{ width: 100%; margin-top: 20px; border-collapse: collapse; }}
                 .badge-table td {{ padding: 8px 12px; font-size: 14px; text-align: left; border-bottom: 1px solid #f0f2f5; }}
-                .status-tag {{ font-weight: bold; float: right; color: {"#00a870" if profile.payouts_enabled else "#e67e22"}; }}
+                .status-tag {{ font-weight: bold; float: right; color: {"#00a870" if is_fully_verified else "#e67e22"}; }}
             </style>
         </head>
         <body>
@@ -782,6 +811,7 @@ def stripe_connect_success_view(request):
                     <tr><td>Details Submitted</td><td><span class="status-tag">{"True" if profile.details_submitted else "False"}</span></td></tr>
                     <tr><td>Charges Enabled</td><td><span class="status-tag">{"True" if profile.charges_enabled else "False"}</span></td></tr>
                     <tr><td>Payouts Enabled</td><td><span class="status-tag">{"True" if profile.payouts_enabled else "False"}</span></td></tr>
+                    <tr><td>Account Status</td><td><span class="status-tag">{profile.account_status}</span></td></tr>
                 </table>
                 <p style="font-size: 13px; color: #70757a; margin-top: 24px;">You can safely close this browser tab or return to your application profile window.</p>
             </div>
@@ -793,29 +823,37 @@ def stripe_connect_success_view(request):
     except Exception as e:
         logger.exception("Failed to verify return state with Stripe Connect.")
         return HttpResponse(f"<h3>Verification Error</h3><p>{str(e)}</p>", status=500)
-    
 
+
+from django.http import HttpResponse
+from django.shortcuts import redirect
+from django.contrib.auth import get_user_model
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
+from apps.wallets.models import StripeConnectedAccount
+from apps.payment.providers.stripe_connect import StripeConnectProvider
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
 def stripe_connect_refresh_view(request):
-    """Fallback expired onboarding renewal page."""
-    html_content = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Session Expired</title>
-        <style>
-            body { font-family: system-ui, sans-serif; text-align: center; background: #f4f6f8; padding: 50px; color: #202124; }
-            .card { max-width: 450px; background: white; padding: 40px; border-radius: 12px; margin: 0 auto; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-            h1 { color: #e67e22; margin-bottom: 8px; }
-            p { color: #5f6368; line-height: 1.5; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Session Timeout</h1>
-            <p>Your secure verification setup link with Stripe has expired or been used already.</p>
-            <p>Please return to your wallet dashboard menu and click <strong>"Connect Bank"</strong> again to generate a new onboarding link.</p>
-        </div>
-    </body>
-    </html>
-    """
-    return HttpResponse(html_content, content_type="text/html")
+    user_id = request.GET.get("user_id")
+
+    if not user_id:
+        return HttpResponse("Missing user_id", status=400)
+
+    User = get_user_model()
+
+    try:
+        user = User.objects.get(id=user_id)
+        stripe_account = StripeConnectedAccount.objects.get(user=user)
+    except (User.DoesNotExist, StripeConnectedAccount.DoesNotExist):
+        return HttpResponse("Invalid user", status=404)
+
+    onboarding_url = StripeConnectProvider.create_account_link(
+        stripe_account.stripe_account_id,
+        user,
+    )
+
+    return redirect(onboarding_url)
