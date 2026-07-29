@@ -692,3 +692,11 @@ class AdminWithdrawalStatsSerializer(serializers.Serializer):
     pending_requests = serializers.IntegerField()
 
     completed_requests = serializers.IntegerField()
+
+
+
+
+class MonthlyEarningsSerializer(serializers.Serializer):
+    month = serializers.CharField()
+    earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
+    deliveries = serializers.IntegerField()

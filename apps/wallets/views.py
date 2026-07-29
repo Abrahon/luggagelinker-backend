@@ -13,6 +13,14 @@ from rest_framework.filters import OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db.models import Sum, Count
+from django.db.models.functions import TruncMonth
+from rest_framework import generics, permissions
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.bookings.models import Booking, BookingStatus
+from .serializers import MonthlyEarningsSerializer
 
 from apps.payment.providers.stripe_connect import StripeConnectProvider
 from core.permissions import IsPlatformAdmin
@@ -119,6 +127,7 @@ class WalletTransactionListView(generics.ListAPIView):
 class WithdrawalMethodListCreateView(generics.ListCreateAPIView):
     serializer_class = WithdrawalMethodSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = None 
 
     def get_queryset(self):
         return (
@@ -819,6 +828,56 @@ class AdminWithdrawalStatsView(APIView):
             {
                 "success": True,
                 "message": "Withdrawal statistics retrieved successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+class MonthlyEarningsView(generics.GenericAPIView):
+    """
+    Returns monthly earnings + completed delivery count
+    for the authenticated traveler.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = MonthlyEarningsSerializer
+
+    def get(self, request):
+
+        queryset = (
+            Booking.objects.filter(
+                traveler=request.user,
+                status=BookingStatus.COMPLETED,
+            )
+            .annotate(
+                month=TruncMonth("completed_at")
+            )
+            .values("month")
+            .annotate(
+                earnings=Sum("agreed_reward"),
+                deliveries=Count("id"),
+            )
+            .order_by("month")
+        )
+
+        data = [
+            {
+                "month": item["month"].strftime("%b %Y"),
+                "earnings": item["earnings"],
+                "deliveries": item["deliveries"],
+            }
+            for item in queryset
+        ]
+
+        serializer = self.get_serializer(data, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Monthly earnings retrieved successfully.",
+                "count": len(serializer.data),
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,

@@ -21,6 +21,7 @@ from .views import (
     AdminWithdrawalRejectView,
     AdminWithdrawalMarkPaidView,
     AdminWithdrawalStatsView,
+    MonthlyEarningsView,
 
     AdminAdjustBalanceView,
 )
@@ -107,6 +108,13 @@ urlpatterns = [
         StripeConnectStatusView.as_view(),
         name="stripe-connect-status",
     ),
+
+    path(
+        "dashboard/monthly-earnings/",
+        MonthlyEarningsView.as_view(),
+        name="monthly-earnings",
+    ),
+
 
     # =====================================================
     # Admin Withdrawals
