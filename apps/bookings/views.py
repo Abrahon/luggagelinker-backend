@@ -723,3 +723,51 @@ class TravelerCompletedDeliveryListView(generics.ListAPIView):
                 "data": serializer.data,
             }
         )
+
+
+
+
+# cancell bookiinglist  for traveler
+class CancelledBookingListView(generics.ListAPIView):
+    """
+    Returns all cancelled bookings for the authenticated user
+    (Sender or Traveler).
+    """
+
+    serializer_class = BookingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        return (
+            Booking.objects.filter(
+                Q(sender=user) | Q(traveler=user),
+                status=BookingStatus.CANCELLED,
+            )
+            .select_related(
+                "match",
+                "package",
+                "trip",
+                "sender",
+                "traveler",
+                "booking_payment",
+            )
+            .order_by("-updated_at")
+        )
+
+    def list(self, request, *args, **kwargs):
+
+        queryset = self.get_queryset()
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Cancelled bookings retrieved successfully.",
+                "count": queryset.count(),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )

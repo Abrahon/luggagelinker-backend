@@ -24,6 +24,8 @@ from apps.payment.models import BookingPayment, BookingPaymentStatus
 from apps.payment.services import BookingPaymentService
 from apps.notifications.models import Notification, NotificationType
 from apps.wallets.models import WalletTransaction
+from apps.notifications.services import create_notification
+
 
 
 logger = logging.getLogger(__name__)
@@ -219,58 +221,76 @@ class BookingLifecycleService:
     @classmethod
     def verify_and_execute_pickup(cls, booking: Booking) -> Booking:
         """
-        Executes atomic business transitions for package handoffs.
-        Updates state, stamps timing, and registers user notifications.
+        Executes atomic business transitions for package pickup.
         """
+
         with transaction.atomic():
-            # Re-fetch with a row lock to guarantee absolute concurrency protection
+
             booking = Booking.objects.select_for_update().get(id=booking.id)
-            
-            # Anti-Double execution check block
+
             if booking.status == BookingStatus.PICKED_UP:
                 return booking
-                
+
             if booking.status != BookingStatus.CONFIRMED:
-                raise DjangoValidationError(f"Cannot execute pickup state mutation from current status: {booking.status}")
-            
-            # 🟢 Set status and the requested timestamp
+                raise DjangoValidationError(
+                    f"Cannot execute pickup from status: {booking.status}"
+                )
+
             booking.status = BookingStatus.PICKED_UP
             booking.picked_up_at = timezone.now()
             booking.save(update_fields=["status", "picked_up_at"])
 
-            # 🟢 Dispatch automated notifications from the service layer
-            Notification.objects.create(
+            create_notification(
                 user=booking.sender,
-                title="Package Handed Over Successfully",
-                message=f"Traveler verified the pickup token for order #{booking.tracking_number}. Status updated to PICKED_UP.",
-                notification_type=NotificationType.DELIVERY,
+                title="Package Picked Up",
+                message=(
+                    f"Traveler successfully picked up your package "
+                    f"({booking.tracking_number}). "
+                    "Delivery is now in progress."
+                ),
+                notification_type=NotificationType.BOOKING,
                 object_id=booking.id,
+                action_url=f"/bookings/{booking.id}/",
             )
-            Notification.objects.create(
+
+            create_notification(
                 user=booking.traveler,
-                title="Handoff Confirmed",
-                message=f"Pickup verified successfully for order #{booking.tracking_number}. You may now begin delivery routing.",
-                notification_type=NotificationType.DELIVERY,
+                title="Pickup Confirmed",
+                message=(
+                    f"You successfully picked up package "
+                    f"{booking.tracking_number}. "
+                    "Please deliver it to the destination."
+                ),
+                notification_type=NotificationType.BOOKING,
                 object_id=booking.id,
+                action_url=f"/bookings/{booking.id}/",
             )
+
             send_delivery_pin_email(
-                user_email=booking.sender.email, 
+                user_email=booking.sender.email,
                 booking=booking,
-                delivery_pin=booking.delivery_verification_pin
+                delivery_pin=booking.delivery_verification_pin,
             )
 
-            logger.info(f"Booking {booking.id} successfully transitioned to PICKED_UP by service orchestration.")
-            return booking
+            logger.info(
+                "Booking %s successfully transitioned to PICKED_UP.",
+                booking.id,
+            )
 
+            return booking
 
     @classmethod
     def refuse_pickup(cls, booking: Booking, reason: str):
+
+        from apps.wallets.services import WalletService
 
         with transaction.atomic():
 
             booking = Booking.objects.select_for_update().select_related(
                 "package",
                 "trip",
+                "sender",
+                "traveler",
             ).get(id=booking.id)
 
             if booking.status != BookingStatus.CONFIRMED:
@@ -295,11 +315,41 @@ class BookingLifecycleService:
             booking.status = BookingStatus.CANCELLED
             booking.save(update_fields=["status"])
 
-            # restore reserved capacity
+            # Restore trip capacity
             booking.trip.available_weight_kg += booking.agreed_weight_kg
             booking.trip.save(update_fields=["available_weight_kg"])
 
-            Notification.objects.create(...)
+            # Refund sender escrow
+            WalletService.refund(booking)
+
+            # Notify sender
+            create_notification(
+                user=booking.sender,
+                title="Pickup Rejected",
+                message=(
+                    f"The traveler rejected package "
+                    f"{booking.tracking_number}.\n\n"
+                    f"Reason: {reason}\n\n"
+                    "The booking has been cancelled and your escrow has been refunded."
+                ),
+                notification_type=NotificationType.BOOKING,
+                object_id=booking.id,
+                action_url=f"/bookings/{booking.id}/",
+            )
+
+            # Notify traveler
+            create_notification(
+                user=booking.traveler,
+                title="Pickup Rejected",
+                message=(
+                    f"You rejected package "
+                    f"{booking.tracking_number}.\n\n"
+                    "The booking has been cancelled."
+                ),
+                notification_type=NotificationType.BOOKING,
+                object_id=booking.id,
+                action_url=f"/bookings/{booking.id}/",
+            )
 
             logger.info(
                 "Booking %s cancelled because traveler refused pickup.",

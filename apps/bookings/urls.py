@@ -13,7 +13,8 @@ from .views import (
     TravelerPendingBookingsView,
     ActiveBookingListView,
     SenderCompletedDeliveryListView,
-    TravelerCompletedDeliveryListView
+    TravelerCompletedDeliveryListView,
+    CancelledBookingListView
 )
 
 app_name = "bookings"
@@ -65,6 +66,8 @@ urlpatterns = [
     path("sender/completed-deliveries/",SenderCompletedDeliveryListView.as_view(),name="sender-completed-deliveries",),
 
     # Traveler Completed Deliveries
-    path("traveler/completed-deliveries/",TravelerCompletedDeliveryListView.as_view(),name="traveler-completed-deliveries",),
+    path("traveler/completed-deliveries/",TravelerCompletedDeliveryListView.as_view(),name="traveler-completed-deliveries"),
+
+    path("bookings/cancelled/",CancelledBookingListView.as_view(),name="cancelled-bookings"),
 
 ]

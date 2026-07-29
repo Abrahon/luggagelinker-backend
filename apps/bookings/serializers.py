@@ -103,6 +103,15 @@ class BookingSerializer(serializers.ModelSerializer):
     sender_email = serializers.CharField(source="sender.email", read_only=True)
     sender_profile_picture = serializers.SerializerMethodField()
     traveler_email = serializers.CharField(source="traveler.email", read_only=True)
+    traveler_matches_listing = serializers.BooleanField(
+    source="package.traveler_matches_listing",
+    read_only=True,
+    )
+
+    traveler_refusal_reason = serializers.CharField(
+        source="package.traveler_refusal_reason",
+        read_only=True,
+    )
     
 
     route = serializers.SerializerMethodField()
@@ -128,6 +137,8 @@ class BookingSerializer(serializers.ModelSerializer):
             "payment_status",
             "escrow_status",
             "agreed_reward",
+            "traveler_matches_listing",
+            "traveler_refusal_reason",
             "currency",
             "agreed_weight_kg",
             "expires_at",
