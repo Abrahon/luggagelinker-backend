@@ -14,7 +14,6 @@ from .views import (
 
     CreateStripeConnectAccount,
     StripeConnectStatusView,
-
     AdminWithdrawalListView,
     AdminWithdrawalDetailView,
     AdminWithdrawalApproveView,

@@ -765,3 +765,13 @@ class WalletLedgerSerializer(serializers.ModelSerializer):
         if obj.booking:
             return obj.booking.id
         return None
+
+
+# widrawl by month
+
+
+
+class MonthlyWithdrawalSerializer(serializers.Serializer):
+    month = serializers.CharField()
+    withdrawn = serializers.DecimalField(max_digits=12, decimal_places=2)
+    withdrawals = serializers.IntegerField()
