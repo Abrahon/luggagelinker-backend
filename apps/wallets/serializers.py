@@ -3,7 +3,7 @@ from decimal import Decimal
 from .models import Wallet, WalletTransaction, WithdrawalRequest
 import logging
 from decimal import Decimal
-
+from apps.bookings.models import Booking
 
 import logging
 from decimal import Decimal
@@ -784,3 +784,29 @@ class TravelerEarningDashboardSerializer(serializers.Serializer):
     available_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
     pending_releases = serializers.DecimalField(max_digits=12, decimal_places=2)
     completed_deliveries = serializers.IntegerField()
+
+
+
+
+
+
+
+class RecentCompletedBookingSerializer(serializers.ModelSerializer):
+    reward = serializers.DecimalField(
+        source="agreed_reward",
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+    )
+
+    delivered_at = serializers.DateTimeField(format="%d %b %Y")
+
+    class Meta:
+        model = Booking
+        fields = [
+            "id",
+            "tracking_number",
+            "reward",
+            "currency",
+            "delivered_at",
+        ]

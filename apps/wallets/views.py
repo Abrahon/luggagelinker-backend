@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from .serializers import MonthlyWithdrawalSerializer
 from apps.bookings.models import Booking, BookingStatus, PaymentStatus
 from apps.wallets.services import WalletService
-
+from .serializers import RecentCompletedBookingSerializer
 from .serializers import TravelerEarningDashboardSerializer
 from .serializers import PendingReleaseSerializer
 from apps.bookings.models import Booking, BookingStatus
@@ -1136,6 +1136,49 @@ class TravelerEarningDashboardView(generics.GenericAPIView):
             {
                 "success": True,
                 "message": "Traveler earnings dashboard retrieved successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+class RecentCompletedBookingView(generics.GenericAPIView):
+    """
+    Returns recent completed deliveries for the logged-in traveler.
+    """
+
+    serializer_class = RecentCompletedBookingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get(self, request):
+
+        queryset = (
+            Booking.objects.filter(
+                traveler=request.user,
+                status=BookingStatus.COMPLETED,
+            )
+            .only(
+                "id",
+                "tracking_number",
+                "agreed_reward",
+                "currency",
+                "delivered_at",
+            )
+            .order_by("-delivered_at")[:5]
+        )
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Recent completed deliveries retrieved successfully.",
+                "count": queryset.count(),
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,

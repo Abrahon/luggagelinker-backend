@@ -25,6 +25,7 @@ from .views import (
     WalletLedgerView,
     MonthlyWithdrawalView,
     TravelerEarningDashboardView,
+    RecentCompletedBookingView,
 
     AdminAdjustBalanceView,
 )
@@ -188,5 +189,11 @@ urlpatterns = [
         "admin/wallets/<uuid:wallet_id>/adjust/",
         AdminAdjustBalanceView.as_view(),
         name="admin-wallet-adjust",
+    ),
+    # recent completd bookings
+    path(
+        "recent-bookings/completed/",
+        RecentCompletedBookingView.as_view(),
+        name="recent-completed-bookings",
     ),
 ]
