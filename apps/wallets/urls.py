@@ -23,6 +23,7 @@ from .views import (
     MonthlyEarningsView,
     PendingReleaseListView,
     WalletLedgerView,
+    MonthlyWithdrawalView,
 
     AdminAdjustBalanceView,
 )
@@ -92,6 +93,11 @@ urlpatterns = [
         "wallets/withdrawals/<uuid:pk>/cancel/",
         UserCancelWithdrawalView.as_view(),
         name="wallet-withdraw-cancel",
+    ),
+    path(
+        "wallet/monthly-withdrawals/",
+        MonthlyWithdrawalView.as_view(),
+        name="wallet-monthly-withdrawals",
     ),
 
     # =====================================================

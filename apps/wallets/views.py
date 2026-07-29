@@ -20,7 +20,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
-
+from .serializers import MonthlyWithdrawalSerializer
 from apps.bookings.models import Booking, BookingStatus, PaymentStatus
 from apps.wallets.services import WalletService
 
@@ -1000,6 +1000,67 @@ class WalletLedgerView(generics.GenericAPIView):
                 "success": True,
                 "message": "Wallet ledger retrieved successfully.",
                 "count": queryset.count(),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+class MonthlyWithdrawalView(generics.GenericAPIView):
+    """
+    Monthly withdrawal summary for dashboard charts.
+    """
+
+    serializer_class = MonthlyWithdrawalSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get(self, request):
+
+        wallet = Wallet.objects.filter(user=request.user).first()
+
+        if not wallet:
+            return Response(
+                {
+                    "success": True,
+                    "message": "No wallet found.",
+                    "data": [],
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        queryset = (
+            WalletTransaction.objects.filter(
+                wallet=wallet,
+                type=WalletTransaction.TransactionType.WITHDRAWAL,
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+            )
+            .annotate(month=TruncMonth("created_at"))
+            .values("month")
+            .annotate(
+                withdrawn=Sum("amount"),
+                withdrawals=Count("id"),
+            )
+            .order_by("month")
+        )
+
+        data = [
+            {
+                "month": row["month"].strftime("%b %Y"),
+                "withdrawn": abs(row["withdrawn"]),
+                "withdrawals": row["withdrawals"],
+            }
+            for row in queryset
+        ]
+
+        serializer = self.get_serializer(data, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Monthly withdrawals retrieved successfully.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,
