@@ -769,9 +769,18 @@ class WalletLedgerSerializer(serializers.ModelSerializer):
 
 # widrawl by month
 
-
-
 class MonthlyWithdrawalSerializer(serializers.Serializer):
     month = serializers.CharField()
     withdrawn = serializers.DecimalField(max_digits=12, decimal_places=2)
     withdrawals = serializers.IntegerField()
+
+
+
+
+
+# traveler earning dashbaord
+class TravelerEarningDashboardSerializer(serializers.Serializer):
+    total_earned = serializers.DecimalField(max_digits=12, decimal_places=2)
+    available_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
+    pending_releases = serializers.DecimalField(max_digits=12, decimal_places=2)
+    completed_deliveries = serializers.IntegerField()

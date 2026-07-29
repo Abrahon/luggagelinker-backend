@@ -24,6 +24,7 @@ from .views import (
     PendingReleaseListView,
     WalletLedgerView,
     MonthlyWithdrawalView,
+    TravelerEarningDashboardView,
 
     AdminAdjustBalanceView,
 )
@@ -49,7 +50,7 @@ urlpatterns = [
       "wallets/recent-activities/",
        WalletRecentActivityView.as_view(),
        name="wallet-recent-activities",
-),
+    ),
 
     # =====================================================
     # Withdrawal Methods
@@ -99,7 +100,11 @@ urlpatterns = [
         MonthlyWithdrawalView.as_view(),
         name="wallet-monthly-withdrawals",
     ),
-
+    path(
+        "wallet/dashboard/",
+        TravelerEarningDashboardView.as_view(),
+        name="traveler-wallet-dashboard",
+    ),
     # =====================================================
     # Stripe Connect
     # =====================================================

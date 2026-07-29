@@ -24,6 +24,7 @@ from .serializers import MonthlyWithdrawalSerializer
 from apps.bookings.models import Booking, BookingStatus, PaymentStatus
 from apps.wallets.services import WalletService
 
+from .serializers import TravelerEarningDashboardSerializer
 from .serializers import PendingReleaseSerializer
 from apps.bookings.models import Booking, BookingStatus
 from .serializers import MonthlyEarningsSerializer
@@ -1061,6 +1062,80 @@ class MonthlyWithdrawalView(generics.GenericAPIView):
             {
                 "success": True,
                 "message": "Monthly withdrawals retrieved successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+class TravelerEarningDashboardView(generics.GenericAPIView):
+    """
+    Dashboard cards for Traveler Earnings page.
+    """
+
+    serializer_class = TravelerEarningDashboardSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get(self, request):
+
+        user = request.user
+
+        wallet, _ = Wallet.objects.get_or_create(user=user)
+
+        # -----------------------------
+        # Total Earned
+        # -----------------------------
+        total_earned = wallet.total_earned or Decimal("0.00")
+
+        # -----------------------------
+        # Available Balance
+        # -----------------------------
+        available_balance = wallet.available_balance or Decimal("0.00")
+
+        # -----------------------------
+        # Pending Releases
+        # Money still locked in escrow
+        # -----------------------------
+        pending_releases = (
+            Booking.objects.filter(
+                traveler=user,
+                status__in=[
+                    BookingStatus.CONFIRMED,
+                    BookingStatus.PICKED_UP,
+                    BookingStatus.IN_TRANSIT,
+                ],
+                payment_status="PAID",
+            ).aggregate(
+                total=Sum("agreed_reward")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        # -----------------------------
+        # Completed Deliveries
+        # -----------------------------
+        completed_deliveries = Booking.objects.filter(
+            traveler=user,
+            status=BookingStatus.COMPLETED,
+        ).count()
+
+        data = {
+            "total_earned": total_earned,
+            "available_balance": available_balance,
+            "pending_releases": pending_releases,
+            "completed_deliveries": completed_deliveries,
+        }
+
+        serializer = self.get_serializer(data)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Traveler earnings dashboard retrieved successfully.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,
