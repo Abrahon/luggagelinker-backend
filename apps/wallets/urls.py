@@ -22,6 +22,7 @@ from .views import (
     AdminWithdrawalMarkPaidView,
     AdminWithdrawalStatsView,
     MonthlyEarningsView,
+    PendingReleaseListView,
 
     AdminAdjustBalanceView,
 )
@@ -113,6 +114,11 @@ urlpatterns = [
         "dashboard/monthly-earnings/",
         MonthlyEarningsView.as_view(),
         name="monthly-earnings",
+    ),
+    path(
+        "wallet/pending-releases/",
+        PendingReleaseListView.as_view(),
+        name="wallet-pending-releases",
     ),
 
 

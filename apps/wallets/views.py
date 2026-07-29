@@ -18,7 +18,13 @@ from django.db.models.functions import TruncMonth
 from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework import generics, permissions, status
+from rest_framework.response import Response
 
+from apps.bookings.models import Booking, BookingStatus, PaymentStatus
+from apps.wallets.services import WalletService
+
+from .serializers import PendingReleaseSerializer
 from apps.bookings.models import Booking, BookingStatus
 from .serializers import MonthlyEarningsSerializer
 
@@ -877,6 +883,67 @@ class MonthlyEarningsView(generics.GenericAPIView):
             {
                 "success": True,
                 "message": "Monthly earnings retrieved successfully.",
+                "count": len(serializer.data),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+class PendingReleaseListView(generics.GenericAPIView):
+
+    serializer_class = PendingReleaseSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+
+        bookings = (
+            Booking.objects.select_related(
+                "package",
+                "trip",
+            )
+            .filter(
+                traveler=request.user,
+                payment_status=PaymentStatus.PAID,
+                status__in=[
+                    BookingStatus.CONFIRMED,
+                    BookingStatus.PICKED_UP,
+                    BookingStatus.IN_TRANSIT,
+                ],
+            )
+            .order_by("-created_at")
+        )
+
+        data = []
+
+        for booking in bookings:
+
+            escrow_status = WalletService.get_escrow_status(booking)
+
+            if escrow_status != "HELD":
+                continue
+
+            data.append(
+                {
+                    "id": booking.id,
+                    "tracking_number": booking.tracking_number,
+                    "package": booking.package.title,
+                    "reward": booking.agreed_reward,
+                    "currency": booking.currency,
+                    "expected_release": booking.trip.arrival_date,
+                    "escrow_status": escrow_status,
+                    "status": booking.status,
+                }
+            )
+
+        serializer = self.get_serializer(data, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Pending releases retrieved successfully.",
                 "count": len(serializer.data),
                 "data": serializer.data,
             },

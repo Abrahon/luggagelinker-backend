@@ -700,3 +700,23 @@ class MonthlyEarningsSerializer(serializers.Serializer):
     month = serializers.CharField()
     earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
     deliveries = serializers.IntegerField()
+
+
+
+# traveler earns escrew held
+class PendingReleaseSerializer(serializers.Serializer):
+    booking_id = serializers.UUIDField(source="id")
+    tracking_number = serializers.CharField()
+    package_title = serializers.CharField(source="package.title")
+    reward = serializers.DecimalField(
+        source="agreed_reward",
+        max_digits=10,
+        decimal_places=2,
+    )
+    currency = serializers.CharField()
+    expected_release = serializers.DateField(
+        source="trip.arrival_date",
+        allow_null=True,
+    )
+    escrow_status = serializers.CharField()
+    booking_status = serializers.CharField(source="status")
