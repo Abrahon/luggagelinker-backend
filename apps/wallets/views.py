@@ -28,6 +28,13 @@ from .serializers import PendingReleaseSerializer
 from apps.bookings.models import Booking, BookingStatus
 from .serializers import MonthlyEarningsSerializer
 
+from rest_framework import generics, permissions, status
+from rest_framework.response import Response
+
+from apps.wallets.models import Wallet, WalletTransaction
+
+from .serializers import WalletLedgerSerializer
+
 from apps.payment.providers.stripe_connect import StripeConnectProvider
 from core.permissions import IsPlatformAdmin
 
@@ -945,6 +952,54 @@ class PendingReleaseListView(generics.GenericAPIView):
                 "success": True,
                 "message": "Pending releases retrieved successfully.",
                 "count": len(serializer.data),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+class WalletLedgerView(generics.GenericAPIView):
+    """
+    Returns wallet transaction history for the authenticated user.
+    """
+
+    serializer_class = WalletLedgerSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+
+        wallet = Wallet.objects.filter(
+            user=request.user
+        ).first()
+
+        if not wallet:
+            return Response(
+                {
+                    "success": True,
+                    "message": "No wallet found.",
+                    "count": 0,
+                    "data": [],
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        queryset = (
+            WalletTransaction.objects.filter(
+                wallet=wallet,
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+            )
+            .select_related("booking")
+            .order_by("-created_at")
+        )
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Wallet ledger retrieved successfully.",
+                "count": queryset.count(),
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,

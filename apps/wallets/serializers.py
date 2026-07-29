@@ -720,3 +720,48 @@ class PendingReleaseSerializer(serializers.Serializer):
     )
     escrow_status = serializers.CharField()
     booking_status = serializers.CharField(source="status")
+
+
+
+
+class WalletLedgerSerializer(serializers.ModelSerializer):
+    reference = serializers.SerializerMethodField()
+    booking_tracking = serializers.SerializerMethodField()
+    booking_id = serializers.SerializerMethodField()
+    transaction_date = serializers.DateTimeField(source="created_at")
+    transaction_type = serializers.CharField(source="get_type_display")
+
+    class Meta:
+        model = WalletTransaction
+        fields = [
+            "reference",
+            "transaction_date",
+            "transaction_type",
+            "amount",
+            "booking_id",
+            "booking_tracking",
+            "status",
+            "description",
+        ]
+
+    def get_transaction_type(self, obj):
+        if (
+            obj.type == WalletTransaction.TransactionType.ESCROW_RELEASE
+            and obj.amount > 0
+        ):
+            return "Earnings"
+
+        return obj.get_type_display()
+    
+    def get_reference(self, obj):
+        return f"TXN-{obj.id.hex[:8].upper()}"
+
+    def get_booking_tracking(self, obj):
+        if obj.booking:
+            return obj.booking.tracking_number
+        return None
+
+    def get_booking_id(self, obj):
+        if obj.booking:
+            return obj.booking.id
+        return None

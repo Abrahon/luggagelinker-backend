@@ -23,6 +23,7 @@ from .views import (
     AdminWithdrawalStatsView,
     MonthlyEarningsView,
     PendingReleaseListView,
+    WalletLedgerView,
 
     AdminAdjustBalanceView,
 )
@@ -119,6 +120,11 @@ urlpatterns = [
         "wallet/pending-releases/",
         PendingReleaseListView.as_view(),
         name="wallet-pending-releases",
+    ),
+    path(
+        "wallet/ledger/",
+        WalletLedgerView.as_view(),
+        name="wallet-ledger",
     ),
 
 
