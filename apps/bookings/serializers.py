@@ -439,3 +439,32 @@ class SenderDashboardStatsSerializer(serializers.Serializer):
         max_digits=12,
         decimal_places=2
     )
+
+
+
+
+
+class SenderPaymentSummarySerializer(serializers.Serializer):
+    total_paid = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+    )
+
+    escrow_held = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+    )
+
+    released = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+    )
+
+    refunded = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+    )

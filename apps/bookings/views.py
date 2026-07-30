@@ -31,6 +31,17 @@ from rest_framework import generics, permissions
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import BookingSerializer
 from decimal import Decimal
+from decimal import Decimal
+
+from django.db.models import Sum
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.bookings.models import Booking, PaymentStatus
+from apps.wallets.models import Wallet, WalletTransaction
+from .serializers import SenderPaymentSummarySerializer
 
 from django.db.models import Sum
 from rest_framework.views import APIView
@@ -863,6 +874,95 @@ class SenderDashboardStatsView(APIView):
             {
                 "success": True,
                 "message": "Sender dashboard statistics retrieved successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+
+
+class SenderPaymentSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sender = request.user
+
+        wallet = Wallet.objects.filter(user=sender).first()
+
+        total_paid = (
+            Booking.objects.filter(
+                sender=sender,
+                payment_status=PaymentStatus.PAID,
+            ).aggregate(
+                total=Sum("agreed_reward")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        escrow_held = Decimal("0.00")
+        released = Decimal("0.00")
+        refunded = Decimal("0.00")
+
+        if wallet:
+
+            # Only bookings that are still actively in escrow
+            escrow_held = (
+                WalletTransaction.objects.filter(
+                    wallet=wallet,
+                    type=WalletTransaction.TransactionType.ESCROW_HOLD,
+                    status=WalletTransaction.TransactionStatus.PENDING,
+                    booking__status__in=[
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.PICKED_UP,
+                        BookingStatus.IN_TRANSIT,
+                    ],
+                    amount__lt=0,
+                ).aggregate(
+                    total=Sum("amount")
+                )["total"]
+                or Decimal("0.00")
+            )
+
+            released = (
+                WalletTransaction.objects.filter(
+                    wallet=wallet,
+                    type=WalletTransaction.TransactionType.ESCROW_RELEASE,
+                    status=WalletTransaction.TransactionStatus.COMPLETED,
+                ).aggregate(
+                    total=Sum("amount")
+                )["total"]
+                or Decimal("0.00")
+            )
+
+            refunded = (
+                WalletTransaction.objects.filter(
+                    wallet=wallet,
+                    type=WalletTransaction.TransactionType.REFUND,
+                    status=WalletTransaction.TransactionStatus.COMPLETED,
+                ).aggregate(
+                    total=Sum("amount")
+                )["total"]
+                or Decimal("0.00")
+            )
+
+        serializer = SenderPaymentSummarySerializer(
+            {
+                "total_paid": total_paid,
+                "escrow_held": abs(escrow_held),
+                "released": abs(released),
+                "refunded": abs(refunded),
+            }
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Sender payment summary retrieved successfully.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,
