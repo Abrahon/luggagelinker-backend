@@ -12,6 +12,7 @@ class ProfileSerializer(serializers.ModelSerializer):
     completed_deliveries = serializers.IntegerField(read_only=True, required=False)
     cancelled_deliveries = serializers.IntegerField(read_only=True, required=False)
     total_earnings = serializers.DecimalField(read_only=True, required=False, max_digits=10, decimal_places=2)
+    profile_picture = serializers.SerializerMethodField()
 
     class Meta:
         model = Profile
@@ -118,6 +119,11 @@ class ProfileSerializer(serializers.ModelSerializer):
     # -----------------------------------
     # Individual Field Validators
     # -----------------------------------
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            return obj.profile_picture.url
+        return None
+        
 
     def validate_first_name(self, value):
         value = value.strip()
