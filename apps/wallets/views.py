@@ -149,7 +149,11 @@ class WithdrawalMethodListCreateView(generics.ListCreateAPIView):
                 user=self.request.user,
                 is_active=True,
             )
-            .order_by("-is_default", "-created_at")
+            .order_by(
+                "account_number",
+                "-created_at",
+            )
+            .distinct("account_number")
         )
 
     def list(self, request, *args, **kwargs):
