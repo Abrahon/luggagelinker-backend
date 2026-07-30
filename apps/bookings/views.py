@@ -30,7 +30,21 @@ from rest_framework import generics, permissions
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import BookingSerializer
+from decimal import Decimal
 
+from django.db.models import Sum
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.bookings.models import Booking
+from apps.bookings.serializers import SenderDashboardStatsSerializer
+from apps.bookings.models import (
+    Booking,
+    BookingStatus,
+    PaymentStatus,
+)
 import logging
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -767,6 +781,88 @@ class CancelledBookingListView(generics.ListAPIView):
                 "success": True,
                 "message": "Cancelled bookings retrieved successfully.",
                 "count": queryset.count(),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# sender dashbaord 
+
+from decimal import Decimal
+
+from django.db.models import Sum
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.bookings.models import (
+    Booking,
+    BookingStatus,
+    PaymentStatus,
+)
+from apps.bookings.serializers import SenderDashboardStatsSerializer
+
+
+class SenderDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sender = request.user
+
+        bookings = Booking.objects.filter(sender=sender)
+
+        # Pending requests
+        pending_bookings = bookings.filter(
+            status__in=[
+                BookingStatus.PENDING,
+                BookingStatus.TRAVELER_ACCEPTED,
+                BookingStatus.PAYMENT_PENDING,
+            ]
+        ).count()
+
+        # Active bookings
+        active_bookings = bookings.filter(
+            payment_status=PaymentStatus.PAID,
+            status__in=[
+                BookingStatus.CONFIRMED,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+            ],
+        ).count()
+
+        # Completed bookings
+        completed_bookings = bookings.filter(
+            status__in=[
+                BookingStatus.DELIVERED,
+                BookingStatus.COMPLETED,
+            ]
+        ).count()
+
+        # Total spent (only successful payments)
+        total_spent = (
+            bookings.filter(
+                payment_status=PaymentStatus.PAID
+            ).aggregate(
+                total=Sum("agreed_reward")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        serializer = SenderDashboardStatsSerializer(
+            {
+                "active_bookings": active_bookings,
+                "pending_bookings": pending_bookings,
+                "completed_bookings": completed_bookings,
+                "total_spent": total_spent,
+            }
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Sender dashboard statistics retrieved successfully.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,

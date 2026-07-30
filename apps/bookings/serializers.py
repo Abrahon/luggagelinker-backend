@@ -426,3 +426,16 @@ class VerifyDeliveryPinSerializer(serializers.Serializer):
 
         attrs["booking_instance"] = booking
         return attrs
+
+
+# sender dashbaord
+# apps/bookings/serializers.py
+
+class SenderDashboardStatsSerializer(serializers.Serializer):
+    active_bookings = serializers.IntegerField()
+    pending_bookings = serializers.IntegerField()
+    completed_bookings = serializers.IntegerField()
+    total_spent = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2
+    )

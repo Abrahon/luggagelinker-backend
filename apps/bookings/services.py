@@ -279,6 +279,8 @@ class BookingLifecycleService:
 
             return booking
 
+        
+
     @classmethod
     def refuse_pickup(cls, booking: Booking, reason: str):
 

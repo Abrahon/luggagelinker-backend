@@ -14,7 +14,8 @@ from .views import (
     ActiveBookingListView,
     SenderCompletedDeliveryListView,
     TravelerCompletedDeliveryListView,
-    CancelledBookingListView
+    CancelledBookingListView,
+    SenderDashboardStatsView
 )
 
 app_name = "bookings"
@@ -69,5 +70,12 @@ urlpatterns = [
     path("traveler/completed-deliveries/",TravelerCompletedDeliveryListView.as_view(),name="traveler-completed-deliveries"),
 
     path("bookings/cancelled/",CancelledBookingListView.as_view(),name="cancelled-bookings"),
+    # apps/bookings/urls.py
+    path(
+        "sender/dashboard/stats/",
+        SenderDashboardStatsView.as_view(),
+        name="sender-dashboard-stats",
+    ),
+
 
 ]

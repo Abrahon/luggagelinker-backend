@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from apps.profiles.models import Profile
 from .models import ActiveTracker, LocationHistory
+from apps.chat.models import ChatRoom
 
 
 class TrackerUserSerializer(serializers.Serializer):
@@ -25,11 +26,8 @@ class TrackerUserSerializer(serializers.Serializer):
     def get_profile_image(self, obj):
         profile = getattr(obj, "profile", None)
 
-        if (
-            profile
-            and profile.profile_image
-        ):
-            return profile.profile_image.url
+        if profile and profile.profile_picture:
+            return profile.profile_picture.url
 
         return None
 
@@ -69,12 +67,17 @@ class ActiveTrackerSerializer(serializers.ModelSerializer):
         source="room.id",
         read_only=True,
     )
+    room = serializers.PrimaryKeyRelatedField(
+        queryset=ChatRoom.objects.all(),
+        write_only=True
+    )
 
     class Meta:
         model = ActiveTracker
 
         fields = (
             "id",
+            "room",
             "room_id",
             "tracker_user",
 
