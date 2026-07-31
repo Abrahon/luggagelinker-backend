@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework import generics, permissions
-
+from apps.bookings.serializers import SenderBookingDetailSerializer
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import BookingSerializer
 from decimal import Decimal
@@ -1114,4 +1114,32 @@ class SenderActionRequiredView(APIView):
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,
+        )
+
+
+
+
+class SenderBookingDetailView(generics.RetrieveAPIView):
+
+    serializer_class = SenderBookingDetailSerializer
+    permission_classes = [IsAuthenticated]
+
+    lookup_field = "id"
+
+    def get_queryset(self):
+
+        return (
+            Booking.objects.filter(
+                sender=self.request.user,
+                is_active=True,
+            )
+            .select_related(
+                "package",
+                "trip",
+                "traveler",
+                "traveler__profile",
+            )
+            .prefetch_related(
+                "package__images",
+            )
         )

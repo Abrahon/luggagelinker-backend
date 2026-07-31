@@ -18,7 +18,8 @@ from .views import (
     SenderDashboardStatsView,
     SenderPaymentSummaryView,
     SenderActionRequiredView,
-    SenderMyBookingListView
+    SenderMyBookingListView,
+    SenderBookingDetailView
 )
 
 app_name = "bookings"
@@ -95,6 +96,11 @@ urlpatterns = [
         SenderMyBookingListView.as_view(),
         name="sender-my-bookings",
     ),
+    path(
+        "sender/bookings/<uuid:id>/",
+        SenderBookingDetailView.as_view(),
+        name="sender-booking-detail",
+   ),
 
 
 

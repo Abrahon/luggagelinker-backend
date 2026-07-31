@@ -713,3 +713,148 @@ class MyBookingSerializer(serializers.ModelSerializer):
         }
 
         return mapping.get(obj.status, 0)
+
+
+
+class SenderBookingDetailSerializer(serializers.ModelSerializer):
+    traveler_matches_listing = serializers.BooleanField(
+    source="package.traveler_matches_listing",
+    read_only=True,
+    )
+
+    traveler_refusal_reason = serializers.CharField(
+        source="package.traveler_refusal_reason",
+        read_only=True,
+        allow_null=True,
+    )
+
+    tracking_number = serializers.CharField(read_only=True)
+
+    package_title = serializers.CharField(
+        source="package.title",
+        read_only=True,
+    )
+
+    package_description = serializers.CharField(
+        source="package.description",
+        read_only=True,
+    )
+
+    trip_title = serializers.CharField(
+        source="trip.title",
+        read_only=True,
+    )
+
+    traveler_name = serializers.SerializerMethodField()
+
+    traveler_email = serializers.CharField(
+        source="traveler.email",
+        read_only=True,
+    )
+
+    traveler_phone = serializers.SerializerMethodField()
+
+    traveler_profile_picture = serializers.SerializerMethodField()
+
+    package_image = serializers.SerializerMethodField()
+
+    route = serializers.SerializerMethodField()
+
+    escrow_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+
+        fields = [
+            "id",
+            "tracking_number",
+
+            "package_title",
+            "package_description",
+            "package_image",
+            "traveler_matches_listing",
+            "traveler_refusal_reason",
+
+            "trip_title",
+
+            "traveler_name",
+            "traveler_email",
+            "traveler_phone",
+            "traveler_profile_picture",
+
+            "route",
+
+            "status",
+            "payment_status",
+            "escrow_status",
+
+            "currency",
+            "agreed_reward",
+            "agreed_weight_kg",
+
+            "traveler_matches_listing",
+            "traveler_refusal_reason",
+
+            "created_at",
+            "picked_up_at",
+            "in_transit_at",
+            "delivered_at",
+            "completed_at",
+
+            "expires_at",
+        ]
+
+    def get_traveler_name(self, obj):
+        profile = getattr(obj.traveler, "profile", None)
+
+        if profile:
+            return profile.full_name
+
+        return obj.traveler.email
+
+
+    def get_traveler_phone(self, obj):
+        profile = getattr(obj.traveler, "profile", None)
+
+        if profile:
+            return profile.phone
+
+        return ""
+
+
+    def get_traveler_profile_picture(self, obj):
+        profile = getattr(obj.traveler, "profile", None)
+
+        if profile and profile.profile_picture:
+            return profile.profile_picture.url
+
+        return None
+
+    def get_package_image(self, obj):
+        image = obj.package.images.filter(
+            is_primary=True
+        ).first()
+
+        if image:
+            return image.image
+
+        image = obj.package.images.first()
+
+        if image:
+            return image.image
+
+        return None
+
+    def get_route(self, obj):
+
+        trip = obj.trip
+
+        return {
+            "from_country": trip.from_country,
+            "from_city": trip.from_city,
+            "to_country": trip.to_country,
+            "to_city": trip.to_city,
+        }
+
+    def get_escrow_status(self, obj):
+        return WalletService.get_escrow_status(obj)
