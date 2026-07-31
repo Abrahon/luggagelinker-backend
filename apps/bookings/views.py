@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework import generics, permissions
-from apps.bookings.serializers import SenderBookingDetailSerializer
+from apps.bookings.serializers import SenderBookingDetailSerializer,BookingTimelineItemSerializer
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import BookingSerializer
 from decimal import Decimal
@@ -1142,4 +1142,154 @@ class SenderBookingDetailView(generics.RetrieveAPIView):
             .prefetch_related(
                 "package__images",
             )
+        )
+
+
+# views.py
+
+
+class SenderBookingTimelineView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, booking_id):
+
+        try:
+            booking = Booking.objects.select_related(
+                "sender"
+            ).get(
+                id=booking_id,
+                sender=request.user,
+            )
+
+        except Booking.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Booking not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        timeline = []
+
+        # 1. Booking Created
+        timeline.append({
+            "title": "Booking Created",
+            "status": "PENDING",
+            "completed": True,
+            "timestamp": booking.created_at,
+        })
+
+        # 2. Traveler Accepted
+        if booking.traveler_accepted_at:
+            timeline.append({
+                "title": "Traveler Accepted",
+                "status": "TRAVELER_ACCEPTED",
+                "completed": True,
+                "timestamp": booking.traveler_accepted_at,
+            })
+        elif booking.status != BookingStatus.PENDING:
+            timeline.append({
+                "title": "Traveler Accepted",
+                "status": "TRAVELER_ACCEPTED",
+                "completed": True,
+                "timestamp": None,
+            })
+
+        # 3. Payment
+        if booking.payment_status == "PAID":
+            timeline.append({
+                "title": "Payment Completed",
+                "status": "CONFIRMED",
+                "completed": True,
+                "timestamp": booking.confirmed_at,
+            })
+        elif booking.status == BookingStatus.PAYMENT_PENDING:
+            timeline.append({
+                "title": "Waiting For Payment",
+                "status": "PAYMENT_PENDING",
+                "completed": False,
+                "timestamp": None,
+            })
+
+        # --------------------------
+        # Cancelled Flow
+        # --------------------------
+
+        if booking.status in [
+            BookingStatus.CANCELLED,
+            BookingStatus.REJECTED,
+            BookingStatus.EXPIRED,
+        ]:
+
+            refund = WalletTransaction.objects.filter(
+                booking=booking,
+                type=WalletTransaction.TransactionType.REFUND,
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+            ).first()
+
+            if refund:
+                timeline.append({
+                    "title": "Refund Completed",
+                    "status": "REFUNDED",
+                    "completed": True,
+                    "timestamp": refund.created_at,
+                })
+
+            timeline.append({
+                "title": "Booking Cancelled",
+                "status": booking.status,
+                "completed": True,
+                "timestamp": booking.updated_at,
+            })
+
+        else:
+
+            # Picked Up
+
+            timeline.append({
+                "title": "Package Picked Up",
+                "status": "PICKED_UP",
+                "completed": booking.picked_up_at is not None,
+                "timestamp": booking.picked_up_at,
+            })
+
+            # Transit
+
+            timeline.append({
+                "title": "In Transit",
+                "status": "IN_TRANSIT",
+                "completed": booking.in_transit_at is not None,
+                "timestamp": booking.in_transit_at,
+            })
+
+            # Delivered
+
+            timeline.append({
+                "title": "Delivered",
+                "status": "DELIVERED",
+                "completed": booking.delivered_at is not None,
+                "timestamp": booking.delivered_at,
+            })
+
+            # Completed
+
+            timeline.append({
+                "title": "Completed",
+                "status": "COMPLETED",
+                "completed": booking.completed_at is not None,
+                "timestamp": booking.completed_at,
+            })
+
+        serializer = BookingTimelineItemSerializer(
+            timeline,
+            many=True,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Booking timeline retrieved successfully.",
+                "data": serializer.data,
+            }
         )

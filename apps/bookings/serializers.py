@@ -858,3 +858,14 @@ class SenderBookingDetailSerializer(serializers.ModelSerializer):
 
     def get_escrow_status(self, obj):
         return WalletService.get_escrow_status(obj)
+
+
+# timeline 
+# serializers.py
+
+
+class BookingTimelineItemSerializer(serializers.Serializer):
+    title = serializers.CharField()
+    status = serializers.CharField()
+    completed = serializers.BooleanField()
+    timestamp = serializers.DateTimeField(allow_null=True)
