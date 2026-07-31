@@ -21,7 +21,8 @@ from .views import (
     SenderMyBookingListView,
     SenderBookingDetailView,
     SenderBookingTimelineView,
-    SenderRecentBookingView
+    SenderRecentBookingView,
+    SenderDeliveryHistoryView
 )
 
 app_name = "bookings"
@@ -114,6 +115,11 @@ urlpatterns = [
         "sender/recent-bookings/",
         SenderRecentBookingView.as_view(),
         name="sender-recent-bookings",
+    ),
+    path(
+        "sender/delivery-history/",
+        SenderDeliveryHistoryView.as_view(),
+        name="sender-delivery-history",
     ),
 
 

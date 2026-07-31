@@ -1203,3 +1203,76 @@ class SenderRecentBookingSerializer(serializers.ModelSerializer):
     def get_escrow_status(self, obj):
 
         return WalletService.get_escrow_status(obj)
+
+
+# delivery history
+
+
+
+class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
+    tracking_number = serializers.CharField(read_only=True)
+
+    package_title = serializers.CharField(
+        source="package.title",
+        read_only=True,
+    )
+
+    traveler_name = serializers.SerializerMethodField()
+
+    package_image = serializers.SerializerMethodField()
+
+    escrow_status = serializers.SerializerMethodField()
+
+    completed_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+
+        fields = [
+            "id",
+            "tracking_number",
+            "package_title",
+            "traveler_name",
+            "status",
+            "payment_status",
+            "escrow_status",
+            "currency",
+            "agreed_reward",
+            "completed_date",
+            "package_image",
+        ]
+
+    def get_traveler_name(self, obj):
+        profile = getattr(obj.traveler, "profile", None)
+
+        if profile and profile.full_name:
+            return profile.full_name
+
+        return obj.traveler.email
+
+    def get_package_image(self, obj):
+        image = obj.package.images.filter(
+            is_primary=True
+        ).first()
+
+        if image:
+            return image.image
+
+        image = obj.package.images.first()
+
+        if image:
+            return image.image
+
+        return None
+
+    def get_completed_date(self, obj):
+        if obj.completed_at:
+            return obj.completed_at.strftime("%Y-%m-%d")
+
+        if obj.updated_at:
+            return obj.updated_at.strftime("%Y-%m-%d")
+
+        return None
+
+    def get_escrow_status(self, obj):
+        return WalletService.get_escrow_status(obj)

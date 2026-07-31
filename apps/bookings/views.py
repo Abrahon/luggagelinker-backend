@@ -27,12 +27,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework import generics, permissions
-from apps.bookings.serializers import SenderBookingDetailSerializer,BookingTimelineItemSerializer
+from apps.bookings.serializers import SenderBookingDetailSerializer,BookingTimelineItemSerializer,SenderDeliveryHistorySerializer
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import BookingSerializer
 from decimal import Decimal
-from decimal import Decimal
-
 from django.db.models import Sum
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
@@ -1339,3 +1337,54 @@ class SenderRecentBookingView(generics.ListAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+
+
+
+
+class SenderDeliveryHistoryView(generics.ListAPIView):
+    serializer_class = SenderDeliveryHistorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+
+        queryset = (
+            Booking.objects.filter(
+                sender=self.request.user,
+                is_active=True,
+            )
+            .select_related(
+                "package",
+                "trip",
+                "traveler",
+                "traveler__profile",
+            )
+            .prefetch_related(
+                "package__images",
+            )
+            .filter(
+                status__in=[
+                    BookingStatus.COMPLETED,
+                    BookingStatus.CANCELLED,
+                    BookingStatus.REJECTED,
+                    BookingStatus.EXPIRED,
+                ]
+            )
+            .order_by("-updated_at")
+        )
+
+        status_param = self.request.query_params.get("status")
+
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+
+        search = self.request.query_params.get("search")
+
+        if search:
+            queryset = queryset.filter(
+                Q(tracking_number__icontains=search)
+                | Q(package__title__icontains=search)
+            )
+
+        return queryset
