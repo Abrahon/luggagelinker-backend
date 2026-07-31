@@ -371,11 +371,7 @@ class SenderPaymentHistorySerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
-    date = serializers.DateField(
-        source="created_at",
-        format="%Y-%m-%d",
-        read_only=True,
-    )
+    date = serializers.SerializerMethodField()
 
     class Meta:
         model = WalletTransaction
@@ -392,3 +388,5 @@ class SenderPaymentHistorySerializer(serializers.ModelSerializer):
             "description",
             "date",
         )
+    def get_date(self, obj):
+        return obj.created_at.strftime("%Y-%m-%d")

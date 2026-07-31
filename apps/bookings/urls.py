@@ -16,7 +16,8 @@ from .views import (
     TravelerCompletedDeliveryListView,
     CancelledBookingListView,
     SenderDashboardStatsView,
-    SenderPaymentSummaryView
+    SenderPaymentSummaryView,
+    SenderActionRequiredView
 )
 
 app_name = "bookings"
@@ -83,6 +84,11 @@ urlpatterns = [
         SenderPaymentSummaryView.as_view(),
         name="sender-payment-summary",
     ),
+    path(
+        "sender/action-required/",
+        SenderActionRequiredView.as_view(),
+        name="sender-action-required",
+),
 
 
 

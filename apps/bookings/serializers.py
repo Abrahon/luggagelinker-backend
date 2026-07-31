@@ -468,3 +468,27 @@ class SenderPaymentSummarySerializer(serializers.Serializer):
         decimal_places=2,
         read_only=True,
     )
+# sender 
+
+class SenderActionRequiredSerializer(serializers.Serializer):
+    booking_id = serializers.UUIDField()
+    tracking_number = serializers.CharField()
+
+    package_title = serializers.CharField()
+
+    action = serializers.CharField()
+
+    title = serializers.CharField()
+
+    description = serializers.CharField()
+
+    button_text = serializers.CharField()
+
+    current_status = serializers.CharField()
+
+    reward = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+    )
+
+    currency = serializers.CharField()

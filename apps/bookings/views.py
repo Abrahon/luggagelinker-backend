@@ -42,12 +42,14 @@ from rest_framework import status
 from apps.bookings.models import Booking, PaymentStatus
 from apps.wallets.models import Wallet, WalletTransaction
 from .serializers import SenderPaymentSummarySerializer
-
-from django.db.models import Sum
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+
+from .models import Booking, BookingStatus, PaymentStatus
+from .serializers import SenderActionRequiredSerializer
+
 
 from apps.bookings.models import Booking
 from apps.bookings.serializers import SenderDashboardStatsSerializer
@@ -963,6 +965,81 @@ class SenderPaymentSummaryView(APIView):
             {
                 "success": True,
                 "message": "Sender payment summary retrieved successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# sender 
+
+class SenderActionRequiredView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        sender = request.user
+
+        actions = []
+
+        bookings = (
+            Booking.objects.filter(sender=sender)
+            .select_related("package")
+            .order_by("-created_at")
+        )
+
+        for booking in bookings:
+
+            # -----------------------------
+            # Pay Now
+            # -----------------------------
+            if (
+                booking.status == BookingStatus.PAYMENT_PENDING
+                and booking.payment_status == PaymentStatus.UNPAID
+            ):
+
+                actions.append({
+                    "booking_id": booking.id,
+                    "tracking_number": booking.tracking_number,
+                    "package_title": booking.package.title,
+                    "action": "PAY_NOW",
+                    "title": "Pay for Booking",
+                    "description": "Traveler accepted your request. Complete payment.",
+                    "button_text": "Pay Now",
+                    "current_status": booking.status,
+                    "reward": booking.agreed_reward,
+                    "currency": booking.currency,
+                })
+
+            # -----------------------------
+            # Verify Delivery
+            # -----------------------------
+            elif booking.status == BookingStatus.DELIVERED:
+
+                actions.append({
+                    "booking_id": booking.id,
+                    "tracking_number": booking.tracking_number,
+                    "package_title": booking.package.title,
+                    "action": "VERIFY_DELIVERY",
+                    "title": "Verify Delivery",
+                    "description": "Traveler marked the shipment as delivered. Verify using your delivery PIN.",
+                    "button_text": "Verify Delivery",
+                    "current_status": booking.status,
+                    "reward": booking.agreed_reward,
+                    "currency": booking.currency,
+                })
+
+        serializer = SenderActionRequiredSerializer(
+            actions,
+            many=True,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Action required list retrieved successfully.",
+                "count": len(serializer.data),
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,
