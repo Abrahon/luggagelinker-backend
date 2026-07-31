@@ -31,6 +31,8 @@ from apps.bookings.serializers import SenderBookingDetailSerializer,BookingTimel
 from apps.bookings.models import Booking, BookingStatus
 from apps.bookings.serializers import BookingSerializer
 from decimal import Decimal
+from django.db.models import Q
+from rest_framework import generics, permissions
 from django.db.models import Sum
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
@@ -179,18 +181,19 @@ class TravelerPendingBookingsView(generics.ListAPIView):
 
 
 
-from rest_framework import generics, permissions
+
+
+
 
 class ActiveBookingListView(generics.ListAPIView):
-
     serializer_class = BookingSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-
         return (
             Booking.objects.filter(
-                traveler=self.request.user,
+                Q(traveler=self.request.user) |
+                Q(sender=self.request.user),
                 status__in=[
                     BookingStatus.PAYMENT_PENDING,
                     BookingStatus.CONFIRMED,
