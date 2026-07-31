@@ -20,7 +20,8 @@ from .views import (
     SenderActionRequiredView,
     SenderMyBookingListView,
     SenderBookingDetailView,
-    SenderBookingTimelineView
+    SenderBookingTimelineView,
+    SenderRecentBookingView
 )
 
 app_name = "bookings"
@@ -108,6 +109,11 @@ urlpatterns = [
         "sender/bookings/<uuid:booking_id>/timeline/",
         SenderBookingTimelineView.as_view(),
         name="sender-booking-timeline",
+    ),
+    path(
+        "sender/recent-bookings/",
+        SenderRecentBookingView.as_view(),
+        name="sender-recent-bookings",
     ),
 
 

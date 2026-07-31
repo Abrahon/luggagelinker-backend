@@ -52,7 +52,7 @@ from .serializers import SenderActionRequiredSerializer
 
 from .serializers import MyBookingSerializer
 from apps.bookings.models import Booking
-from apps.bookings.serializers import SenderDashboardStatsSerializer
+from apps.bookings.serializers import SenderDashboardStatsSerializer,SenderRecentBookingSerializer
 from apps.bookings.models import (
     Booking,
     BookingStatus,
@@ -1292,4 +1292,50 @@ class SenderBookingTimelineView(APIView):
                 "message": "Booking timeline retrieved successfully.",
                 "data": serializer.data,
             }
+        )
+
+
+
+
+class SenderRecentBookingView(generics.ListAPIView):
+
+    serializer_class = SenderRecentBookingSerializer
+
+    permission_classes = [IsAuthenticated]
+
+    pagination_class = None
+
+    def get_queryset(self):
+
+        return (
+            Booking.objects.filter(
+                sender=self.request.user,
+                is_active=True,
+            )
+            .select_related(
+                "package",
+                "traveler",
+                "traveler__profile",
+            )
+            .prefetch_related(
+                "package__images",
+            )
+            .order_by("-created_at")[:5]
+        )
+
+    def list(self, request, *args, **kwargs):
+
+        serializer = self.get_serializer(
+            self.get_queryset(),
+            many=True,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Recent bookings retrieved successfully.",
+                "count": len(serializer.data),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
         )

@@ -1140,3 +1140,66 @@ class BookingTimelineItemSerializer(serializers.Serializer):
     status = serializers.CharField()
     completed = serializers.BooleanField()
     timestamp = serializers.DateTimeField(allow_null=True)
+
+
+
+
+
+class SenderRecentBookingSerializer(serializers.ModelSerializer):
+
+    package_title = serializers.CharField(
+        source="package.title",
+        read_only=True,
+    )
+
+    traveler_name = serializers.SerializerMethodField()
+
+    package_image = serializers.SerializerMethodField()
+
+    escrow_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+
+        fields = [
+            "id",
+            "tracking_number",
+            "package_title",
+            "traveler_name",
+            "status",
+            "payment_status",
+            "escrow_status",
+            "currency",
+            "agreed_reward",
+            "created_at",
+            "package_image",
+        ]
+
+    def get_traveler_name(self, obj):
+
+        profile = getattr(obj.traveler, "profile", None)
+
+        if profile and profile.full_name:
+            return profile.full_name
+
+        return obj.traveler.email
+
+    def get_package_image(self, obj):
+
+        image = obj.package.images.filter(
+            is_primary=True
+        ).first()
+
+        if image:
+            return image.image
+
+        image = obj.package.images.first()
+
+        if image:
+            return image.image
+
+        return None
+
+    def get_escrow_status(self, obj):
+
+        return WalletService.get_escrow_status(obj)
