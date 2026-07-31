@@ -716,10 +716,161 @@ class MyBookingSerializer(serializers.ModelSerializer):
 
 
 
+# class SenderBookingDetailSerializer(serializers.ModelSerializer):
+#     traveler_matches_listing = serializers.BooleanField(
+#     source="package.traveler_matches_listing",
+#     read_only=True,
+#     )
+
+#     traveler_refusal_reason = serializers.CharField(
+#         source="package.traveler_refusal_reason",
+#         read_only=True,
+#         allow_null=True,
+#     )
+
+#     tracking_number = serializers.CharField(read_only=True)
+
+#     package_title = serializers.CharField(
+#         source="package.title",
+#         read_only=True,
+#     )
+
+#     package_description = serializers.CharField(
+#         source="package.description",
+#         read_only=True,
+#     )
+
+#     trip_title = serializers.CharField(
+#         source="trip.title",
+#         read_only=True,
+#     )
+
+#     traveler_name = serializers.SerializerMethodField()
+
+#     traveler_email = serializers.CharField(
+#         source="traveler.email",
+#         read_only=True,
+#     )
+
+#     traveler_phone = serializers.SerializerMethodField()
+
+#     traveler_profile_picture = serializers.SerializerMethodField()
+
+#     package_image = serializers.SerializerMethodField()
+
+#     route = serializers.SerializerMethodField()
+
+#     escrow_status = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = Booking
+
+#         fields = [
+#             "id",
+#             "tracking_number",
+
+#             "package_title",
+#             "package_description",
+#             "package_image",
+#             "traveler_matches_listing",
+#             "traveler_refusal_reason",
+
+#             "trip_title",
+
+#             "traveler_name",
+#             "traveler_email",
+#             "traveler_phone",
+#             "traveler_profile_picture",
+
+#             "route",
+
+#             "status",
+#             "payment_status",
+#             "escrow_status",
+
+#             "currency",
+#             "agreed_reward",
+#             "agreed_weight_kg",
+
+#             "traveler_matches_listing",
+#             "traveler_refusal_reason",
+
+#             "created_at",
+#             "picked_up_at",
+#             "in_transit_at",
+#             "delivered_at",
+#             "completed_at",
+
+#             "expires_at",
+#         ]
+
+#     def get_traveler_name(self, obj):
+#         profile = getattr(obj.traveler, "profile", None)
+
+#         if profile:
+#             return profile.full_name
+
+#         return obj.traveler.email
+
+
+#     def get_traveler_phone(self, obj):
+#         profile = getattr(obj.traveler, "profile", None)
+
+#         if profile:
+#             return profile.phone
+
+#         return ""
+
+
+#     def get_traveler_profile_picture(self, obj):
+#         profile = getattr(obj.traveler, "profile", None)
+
+#         if profile and profile.profile_picture:
+#             return profile.profile_picture.url
+
+#         return None
+
+#     def get_package_image(self, obj):
+#         image = obj.package.images.filter(
+#             is_primary=True
+#         ).first()
+
+#         if image:
+#             return image.image
+
+#         image = obj.package.images.first()
+
+#         if image:
+#             return image.image
+
+#         return None
+
+#     def get_route(self, obj):
+
+#         trip = obj.trip
+
+#         return {
+#             "from_country": trip.from_country,
+#             "from_city": trip.from_city,
+#             "to_country": trip.to_country,
+#             "to_city": trip.to_city,
+#         }
+
+#     def get_escrow_status(self, obj):
+#         return WalletService.get_escrow_status(obj)
+
+from datetime import timedelta
+
+
+# Make sure to import your Booking model, BookingStatus enum, and WalletService
+# from .models import Booking, BookingStatus
+# from .services import WalletService
+
+
 class SenderBookingDetailSerializer(serializers.ModelSerializer):
     traveler_matches_listing = serializers.BooleanField(
-    source="package.traveler_matches_listing",
-    read_only=True,
+        source="package.traveler_matches_listing",
+        read_only=True,
     )
 
     traveler_refusal_reason = serializers.CharField(
@@ -762,93 +913,83 @@ class SenderBookingDetailSerializer(serializers.ModelSerializer):
 
     escrow_status = serializers.SerializerMethodField()
 
+    progress_percentage = serializers.SerializerMethodField()
+
+    current_step = serializers.SerializerMethodField()
+
+    estimated_delivery = serializers.SerializerMethodField()
+
+    latest_update = serializers.SerializerMethodField()
+
+    show_tracking = serializers.SerializerMethodField()
+
     class Meta:
         model = Booking
 
         fields = [
             "id",
             "tracking_number",
-
             "package_title",
             "package_description",
             "package_image",
             "traveler_matches_listing",
             "traveler_refusal_reason",
-
             "trip_title",
-
             "traveler_name",
             "traveler_email",
             "traveler_phone",
             "traveler_profile_picture",
-
             "route",
-
             "status",
             "payment_status",
             "escrow_status",
-
+            "progress_percentage",
+            "current_step",
+            "estimated_delivery",
+            "latest_update",
+            "show_tracking",
             "currency",
             "agreed_reward",
             "agreed_weight_kg",
-
-            "traveler_matches_listing",
-            "traveler_refusal_reason",
-
             "created_at",
             "picked_up_at",
             "in_transit_at",
             "delivered_at",
             "completed_at",
-
             "expires_at",
         ]
 
     def get_traveler_name(self, obj):
         profile = getattr(obj.traveler, "profile", None)
-
-        if profile:
+        if profile and profile.full_name:
             return profile.full_name
-
         return obj.traveler.email
-
 
     def get_traveler_phone(self, obj):
         profile = getattr(obj.traveler, "profile", None)
-
         if profile:
             return profile.phone
-
         return ""
-
 
     def get_traveler_profile_picture(self, obj):
         profile = getattr(obj.traveler, "profile", None)
-
         if profile and profile.profile_picture:
             return profile.profile_picture.url
-
         return None
 
     def get_package_image(self, obj):
-        image = obj.package.images.filter(
-            is_primary=True
-        ).first()
-
+        image = obj.package.images.filter(is_primary=True).first()
         if image:
-            return image.image
+            return image.image.url if hasattr(image.image, "url") else image.image
 
         image = obj.package.images.first()
-
         if image:
-            return image.image
+            return image.image.url if hasattr(image.image, "url") else image.image
 
         return None
 
     def get_route(self, obj):
-
         trip = obj.trip
-
         return {
             "from_country": trip.from_country,
             "from_city": trip.from_city,
@@ -859,6 +1000,136 @@ class SenderBookingDetailSerializer(serializers.ModelSerializer):
     def get_escrow_status(self, obj):
         return WalletService.get_escrow_status(obj)
 
+    def get_current_step(self, obj):
+        steps = {
+            BookingStatus.PENDING: 1,
+            BookingStatus.TRAVELER_ACCEPTED: 2,
+            BookingStatus.PAYMENT_PENDING: 3,
+            BookingStatus.CONFIRMED: 4,
+            BookingStatus.PICKED_UP: 5,
+            BookingStatus.IN_TRANSIT: 6,
+            BookingStatus.DELIVERED: 7,
+            BookingStatus.COMPLETED: 8,
+            BookingStatus.CANCELLED: 0,
+            BookingStatus.REJECTED: 0,
+            BookingStatus.EXPIRED: 0,
+        }
+        return steps.get(obj.status, 0)
+
+    def get_progress_percentage(self, obj):
+        progress = {
+            BookingStatus.PENDING: 10,
+            BookingStatus.TRAVELER_ACCEPTED: 20,
+            BookingStatus.PAYMENT_PENDING: 30,
+            BookingStatus.CONFIRMED: 40,
+            BookingStatus.PICKED_UP: 55,
+            BookingStatus.IN_TRANSIT: 75,
+            BookingStatus.DELIVERED: 90,
+            BookingStatus.COMPLETED: 100,
+            BookingStatus.CANCELLED: 0,
+            BookingStatus.REJECTED: 0,
+            BookingStatus.EXPIRED: 0,
+        }
+        return progress.get(obj.status, 0)
+
+    def get_estimated_delivery(self, obj):
+        if hasattr(obj.trip, "arrival_date") and obj.trip.arrival_date:
+            return obj.trip.arrival_date
+
+        if obj.status == BookingStatus.IN_TRANSIT:
+            return (obj.in_transit_at + timedelta(days=3)) if obj.in_transit_at else None
+
+        return None
+
+    def get_show_tracking(self, obj):
+        return obj.status in [
+            BookingStatus.CONFIRMED,
+            BookingStatus.PICKED_UP,
+            BookingStatus.IN_TRANSIT,
+            BookingStatus.DELIVERED,
+        ]
+
+    def get_latest_update(self, obj):
+        if obj.status == BookingStatus.PENDING:
+            return {
+                "title": "Booking Created",
+                "description": "Waiting for traveler acceptance.",
+                "time": obj.created_at,
+            }
+
+        if obj.status == BookingStatus.TRAVELER_ACCEPTED:
+            return {
+                "title": "Traveler Accepted",
+                "description": "Traveler accepted your booking.",
+                "time": getattr(obj, "traveler_accepted_at", None),
+            }
+
+        if obj.status == BookingStatus.PAYMENT_PENDING:
+            return {
+                "title": "Waiting For Payment",
+                "description": "Complete payment to confirm this shipment.",
+                "time": None,
+            }
+
+        if obj.status == BookingStatus.CONFIRMED:
+            return {
+                "title": "Booking Confirmed",
+                "description": "Payment completed successfully.",
+                "time": getattr(obj, "confirmed_at", None),
+            }
+
+        if obj.status == BookingStatus.PICKED_UP:
+            return {
+                "title": "Package Picked Up",
+                "description": "Traveler collected your package.",
+                "time": obj.picked_up_at,
+            }
+
+        if obj.status == BookingStatus.IN_TRANSIT:
+            return {
+                "title": "Package In Transit",
+                "description": "Traveler is transporting your package.",
+                "time": obj.in_transit_at,
+            }
+
+        if obj.status == BookingStatus.DELIVERED:
+            return {
+                "title": "Delivered",
+                "description": "Traveler marked the package as delivered.",
+                "time": obj.delivered_at,
+            }
+
+        if obj.status == BookingStatus.COMPLETED:
+            return {
+                "title": "Completed",
+                "description": "Booking completed successfully.",
+                "time": obj.completed_at,
+            }
+
+        if obj.status == BookingStatus.CANCELLED:
+            return {
+                "title": "Booking Cancelled",
+                "description": "Booking was cancelled.",
+                "time": getattr(obj, "updated_at", None),
+            }
+
+        if obj.status == BookingStatus.REJECTED:
+            return {
+                "title": "Traveler Rejected Package",
+                "description": getattr(obj.package, "traveler_refusal_reason", None)
+                or "Traveler rejected the package.",
+                "time": getattr(obj, "updated_at", None),
+            }
+
+        if obj.status == BookingStatus.EXPIRED:
+            return {
+                "title": "Booking Expired",
+                "description": "Booking request expired.",
+                "time": getattr(obj, "updated_at", None),
+            }
+
+        return None
+    
 
 # timeline 
 # serializers.py
