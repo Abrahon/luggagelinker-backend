@@ -161,8 +161,9 @@ class CreateCheckoutSessionView(APIView):
                         "user_id": str(request.user.id),
                         "plan_id": str(plan.id),
                     },
-                    success_url=f"{settings.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
-                    cancel_url=f"{settings.FRONTEND_URL}/payment/cancel",
+                    # UPDATED HERE: Plural /payments/ and /payments/failure
+                    success_url=f"{settings.FRONTEND_URL}/payments/success?session_id={{CHECKOUT_SESSION_ID}}",
+                    cancel_url=f"{settings.FRONTEND_URL}/payments/failure",
                 )
 
                 # ---------------------------

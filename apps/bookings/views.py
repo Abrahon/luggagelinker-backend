@@ -1043,66 +1043,61 @@ class SenderPaymentSummaryView(APIView):
 # sender 
 
 class SenderActionRequiredView(APIView):
-
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-
         sender = request.user
 
         actions = []
 
         bookings = (
             Booking.objects.filter(sender=sender)
-            .select_related("package")
+            .select_related(
+                "package",
+                "traveler",
+                "traveler__profile",
+            )
             .order_by("-created_at")
         )
 
         for booking in bookings:
 
-            # -----------------------------
-            # Pay Now
-            # -----------------------------
+            # Only Payment Required
             if (
                 booking.status == BookingStatus.PAYMENT_PENDING
                 and booking.payment_status == PaymentStatus.UNPAID
             ):
+                traveler_name = ""
 
-                actions.append({
-                    "booking_id": booking.id,
-                    "tracking_number": booking.tracking_number,
-                    "package_title": booking.package.title,
-                    "action": "PAY_NOW",
-                    "title": "Pay for Booking",
-                    "description": "Traveler accepted your request. Complete payment.",
-                    "button_text": "Pay Now",
-                    "current_status": booking.status,
-                    "reward": booking.agreed_reward,
-                    "currency": booking.currency,
-                })
+                if (
+                    booking.traveler
+                    and hasattr(booking.traveler, "profile")
+                    and booking.traveler.profile
+                ):
+                    traveler_name = booking.traveler.profile.full_name
+                else:
+                    traveler_name = booking.traveler.email if booking.traveler else ""
 
-            # -----------------------------
-            # Verify Delivery
-            # -----------------------------
-            elif booking.status == BookingStatus.DELIVERED:
+                actions.append(
+                    {
+                        "booking_id": booking.id,
+                        "tracking_number": booking.tracking_number,
+                        "package_title": booking.package.title,
+                        "traveler_name": traveler_name,
+                        "action": "PAY_NOW",
+                        "title": "Payment Required",
+                        "description": (
+                            "Traveler accepted your booking. "
+                            "Complete payment to confirm this shipment."
+                        ),
+                        "button_text": "Pay Now",
+                        "current_status": booking.status,
+                        "reward": booking.agreed_reward,
+                        "currency": booking.currency,
+                    }
+                )
 
-                actions.append({
-                    "booking_id": booking.id,
-                    "tracking_number": booking.tracking_number,
-                    "package_title": booking.package.title,
-                    "action": "VERIFY_DELIVERY",
-                    "title": "Verify Delivery",
-                    "description": "Traveler marked the shipment as delivered. Verify using your delivery PIN.",
-                    "button_text": "Verify Delivery",
-                    "current_status": booking.status,
-                    "reward": booking.agreed_reward,
-                    "currency": booking.currency,
-                })
-
-        serializer = SenderActionRequiredSerializer(
-            actions,
-            many=True,
-        )
+        serializer = SenderActionRequiredSerializer(actions, many=True)
 
         return Response(
             {
