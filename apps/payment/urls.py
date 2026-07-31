@@ -12,7 +12,8 @@ from .views import (
     stripe_connect_success_view,
     stripe_webhook,
     AdminPaymentDashboardStatsView,
-    AdminPaymentListView
+    AdminPaymentListView,
+    SenderPaymentHistoryView
 )
 
 urlpatterns = [
@@ -67,5 +68,6 @@ urlpatterns = [
     # admin
     path("admin/payment-dashboard/stats/",AdminPaymentDashboardStatsView.as_view(),name="admin-payment-dashboard-stats"),
     path("admin/payments/",AdminPaymentListView.as_view(),name="admin-payment-list"),
+    path("sender/payment-history/",SenderPaymentHistoryView.as_view(),name="sender-payment-history"),
   
 ]

@@ -38,6 +38,7 @@ from rest_framework.permissions import IsAdminUser
 from .models import BookingPayment, BookingPaymentLog
 from .services import BookingPaymentService
 import stripe
+from .serializers import SenderPaymentHistorySerializer
 from decimal import Decimal
 
 from django.db.models import Sum
@@ -857,3 +858,23 @@ def stripe_connect_refresh_view(request):
     )
 
     return redirect(onboarding_url)
+
+
+
+
+
+class SenderPaymentHistoryView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SenderPaymentHistorySerializer
+
+    def get_queryset(self):
+        return (
+            WalletTransaction.objects.select_related(
+                "wallet",
+                "booking",
+                "booking__package",
+            )
+            .filter(wallet__user=self.request.user)
+            .exclude(type="DEPOSIT")  # optional
+            .order_by("-created_at")
+        )

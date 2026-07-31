@@ -6,6 +6,8 @@ from rest_framework import serializers
 from django.utils.translation import gettext_lazy as _
 from apps.bookings.models import Booking
 from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus
+from apps.wallets.models import WalletTransaction
+
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -332,3 +334,61 @@ class AdminPaymentStatsSerializer(serializers.Serializer):
         max_digits=12,
         decimal_places=2,
     )
+
+
+
+
+
+
+class SenderPaymentHistorySerializer(serializers.ModelSerializer):
+    tracking_number = serializers.CharField(
+        source="booking.tracking_number",
+        read_only=True,
+    )
+
+    package_title = serializers.CharField(
+        source="booking.package.title",
+        read_only=True,
+    )
+
+    currency = serializers.CharField(
+        source="booking.currency",
+        read_only=True,
+    )
+
+    booking_status = serializers.CharField(
+        source="booking.status",
+        read_only=True,
+    )
+
+    transaction_type = serializers.CharField(
+        source="type",
+        read_only=True,
+    )
+
+    transaction_status = serializers.CharField(
+        source="status",
+        read_only=True,
+    )
+
+    date = serializers.DateField(
+        source="created_at",
+        format="%Y-%m-%d",
+        read_only=True,
+    )
+
+    class Meta:
+        model = WalletTransaction
+
+        fields = (
+            "id",
+            "tracking_number",
+            "package_title",
+            "transaction_type",
+            "amount",
+            "currency",
+            "transaction_status",
+            "booking_status",
+            "description",
+            "date",
+        )
