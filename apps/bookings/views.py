@@ -50,7 +50,7 @@ from rest_framework import status
 from .models import Booking, BookingStatus, PaymentStatus
 from .serializers import SenderActionRequiredSerializer
 
-
+from .serializers import MyBookingSerializer
 from apps.bookings.models import Booking
 from apps.bookings.serializers import SenderDashboardStatsSerializer
 from apps.bookings.models import (
@@ -316,8 +316,79 @@ class BookingDetailView(generics.RetrieveAPIView):
             )
 
 
+from django.db.models import Q
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+
+from apps.bookings.models import Booking
+from apps.bookings.serializers import MyBookingSerializer
 
 
+class SenderMyBookingListView(generics.ListAPIView):
+    """
+    Sender → My Bookings
+
+    Optional Query Params
+
+    ?status=IN_TRANSIT
+    ?search=macbook
+    """
+
+    serializer_class = MyBookingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+
+        queryset = (
+            Booking.objects.filter(
+                sender=self.request.user,
+                is_active=True,
+            )
+            .select_related(
+                "package",
+                "trip",
+                "traveler",
+                "traveler__profile",
+                "match",
+            )
+            .prefetch_related(
+                "package__images",
+            )
+            .order_by("-created_at")
+        )
+
+        # --------------------------
+        # Filter by Booking Status
+        # --------------------------
+
+        status_param = self.request.query_params.get("status")
+
+        if status_param:
+            queryset = queryset.filter(
+                status=status_param.upper()
+            )
+
+        # --------------------------
+        # Search
+        # --------------------------
+
+        search = self.request.query_params.get("search")
+
+        if search:
+            queryset = queryset.filter(
+                Q(tracking_number__icontains=search)
+                | Q(package__title__icontains=search)
+                | Q(trip__title__icontains=search)
+                | Q(trip__from_city__icontains=search)
+                | Q(trip__to_city__icontains=search)
+                | Q(traveler__email__icontains=search)
+                | Q(traveler__profile__first_name__icontains=search)
+                | Q(traveler__profile__last_name__icontains=search)
+            ).distinct()
+
+        return queryset
+
+    
 class BookingRespondView(generics.UpdateAPIView):
     """
     Endpoint for travelers to ACCEPT or REJECT an incoming pending booking request.

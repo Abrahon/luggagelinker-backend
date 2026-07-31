@@ -263,7 +263,7 @@ class BookingSerializer(serializers.ModelSerializer):
                 )
             raise serializers.ValidationError(str(e))
 
-        
+
 
 
 class VerifyPickupPinSerializer(serializers.Serializer):
@@ -492,3 +492,224 @@ class SenderActionRequiredSerializer(serializers.Serializer):
     )
 
     currency = serializers.CharField()
+
+
+# sender
+from rest_framework import serializers
+
+from apps.bookings.models import Booking, BookingStatus, PaymentStatus
+from apps.wallets.services import WalletService
+
+
+class MyBookingSerializer(serializers.ModelSerializer):
+    tracking_number = serializers.CharField(read_only=True)
+
+    package_title = serializers.CharField(
+        source="package.title",
+        read_only=True,
+    )
+
+    trip_title = serializers.CharField(
+        source="trip.title",
+        read_only=True,
+    )
+
+    traveler_name = serializers.SerializerMethodField()
+    traveler_email = serializers.CharField(
+        source="traveler.email",
+        read_only=True,
+    )
+
+    package_image = serializers.SerializerMethodField()
+    route = serializers.SerializerMethodField()
+
+    escrow_status = serializers.SerializerMethodField()
+
+    created_date = serializers.SerializerMethodField()
+
+    can_pay = serializers.SerializerMethodField()
+    can_track = serializers.SerializerMethodField()
+    can_chat = serializers.SerializerMethodField()
+    can_verify_delivery = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+    can_review = serializers.SerializerMethodField()
+    can_view_receipt = serializers.SerializerMethodField()
+
+    show_progress = serializers.SerializerMethodField()
+    show_payment_required = serializers.SerializerMethodField()
+    show_delivery_verification = serializers.SerializerMethodField()
+
+    current_step = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+
+        fields = [
+            "id",
+            "tracking_number",
+
+            "package_title",
+            "trip_title",
+
+            "traveler_name",
+            "traveler_email",
+
+            "route",
+            "package_image",
+
+            "status",
+            "payment_status",
+            "escrow_status",
+
+            "currency",
+            "agreed_reward",
+
+            "created_date",
+
+            "current_step",
+
+            "can_pay",
+            "can_track",
+            "can_chat",
+            "can_verify_delivery",
+            "can_cancel",
+            "can_review",
+            "can_view_receipt",
+
+            "show_progress",
+            "show_payment_required",
+            "show_delivery_verification",
+        ]
+
+    # --------------------------------------------------
+    # Basic Information
+    # --------------------------------------------------
+
+    def get_traveler_name(self, obj):
+        if (
+            hasattr(obj.traveler, "profile")
+            and obj.traveler.profile
+            and obj.traveler.profile.full_name
+        ):
+            return obj.traveler.profile.full_name
+
+        return obj.traveler.email
+
+    def get_package_image(self, obj):
+        primary = obj.package.images.filter(
+            is_primary=True
+        ).first()
+
+        if primary:
+            return primary.image
+
+        first = obj.package.images.first()
+
+        if first:
+            return first.image
+
+        return None
+
+    def get_route(self, obj):
+        trip = obj.trip
+
+        return {
+            "from_country": trip.from_country,
+            "from_city": trip.from_city,
+            "to_country": trip.to_country,
+            "to_city": trip.to_city,
+        }
+
+    def get_created_date(self, obj):
+        return obj.created_at.strftime("%Y-%m-%d")
+
+    def get_escrow_status(self, obj):
+        return WalletService.get_escrow_status(obj)
+
+    # --------------------------------------------------
+    # Button Visibility
+    # --------------------------------------------------
+
+    def get_can_pay(self, obj):
+        return (
+            obj.status == BookingStatus.PAYMENT_PENDING
+            and obj.payment_status == PaymentStatus.UNPAID
+        )
+
+    def get_can_track(self, obj):
+        return obj.status in [
+            BookingStatus.CONFIRMED,
+            BookingStatus.PICKED_UP,
+            BookingStatus.IN_TRANSIT,
+            BookingStatus.DELIVERED,
+        ]
+
+    def get_can_chat(self, obj):
+        return obj.status in [
+            BookingStatus.TRAVELER_ACCEPTED,
+            BookingStatus.PAYMENT_PENDING,
+            BookingStatus.CONFIRMED,
+            BookingStatus.PICKED_UP,
+            BookingStatus.IN_TRANSIT,
+            BookingStatus.DELIVERED,
+        ]
+
+    def get_can_verify_delivery(self, obj):
+        return obj.status == BookingStatus.DELIVERED
+
+    def get_can_cancel(self, obj):
+        return obj.status in [
+            BookingStatus.PENDING,
+            BookingStatus.TRAVELER_ACCEPTED,
+            BookingStatus.PAYMENT_PENDING,
+        ]
+
+    def get_can_review(self, obj):
+        return obj.status == BookingStatus.COMPLETED
+
+    def get_can_view_receipt(self, obj):
+        return obj.status == BookingStatus.COMPLETED
+
+    # --------------------------------------------------
+    # UI Sections
+    # --------------------------------------------------
+
+    def get_show_progress(self, obj):
+        return obj.status in [
+            BookingStatus.CONFIRMED,
+            BookingStatus.PICKED_UP,
+            BookingStatus.IN_TRANSIT,
+            BookingStatus.DELIVERED,
+            BookingStatus.COMPLETED,
+        ]
+
+    def get_show_payment_required(self, obj):
+        return (
+            obj.status == BookingStatus.PAYMENT_PENDING
+            and obj.payment_status == PaymentStatus.UNPAID
+        )
+
+    def get_show_delivery_verification(self, obj):
+        return obj.status == BookingStatus.DELIVERED
+
+    # --------------------------------------------------
+    # Progress Step
+    # --------------------------------------------------
+
+    def get_current_step(self, obj):
+
+        mapping = {
+            BookingStatus.PENDING: 1,
+            BookingStatus.TRAVELER_ACCEPTED: 2,
+            BookingStatus.PAYMENT_PENDING: 3,
+            BookingStatus.CONFIRMED: 4,
+            BookingStatus.PICKED_UP: 5,
+            BookingStatus.IN_TRANSIT: 6,
+            BookingStatus.DELIVERED: 7,
+            BookingStatus.COMPLETED: 8,
+            BookingStatus.CANCELLED: 0,
+            BookingStatus.REJECTED: 0,
+            BookingStatus.EXPIRED: 0,
+        }
+
+        return mapping.get(obj.status, 0)

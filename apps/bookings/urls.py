@@ -17,7 +17,8 @@ from .views import (
     CancelledBookingListView,
     SenderDashboardStatsView,
     SenderPaymentSummaryView,
-    SenderActionRequiredView
+    SenderActionRequiredView,
+    SenderMyBookingListView
 )
 
 app_name = "bookings"
@@ -88,7 +89,12 @@ urlpatterns = [
         "sender/action-required/",
         SenderActionRequiredView.as_view(),
         name="sender-action-required",
-),
+    ),
+    path(
+        "sender/my-bookings/",
+        SenderMyBookingListView.as_view(),
+        name="sender-my-bookings",
+    ),
 
 
 
