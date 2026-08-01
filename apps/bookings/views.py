@@ -1386,3 +1386,171 @@ class SenderDeliveryHistoryView(generics.ListAPIView):
             )
 
         return queryset
+
+#
+from decimal import Decimal
+
+from django.db.models import Sum
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.bookings.models import Booking, BookingStatus
+from apps.wallets.models import WalletTransaction
+
+
+class SenderBookingStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sender = request.user
+
+        bookings = Booking.objects.filter(
+            sender=sender,
+            is_active=True,
+        )
+
+        # Pending Requests
+        pending_requests = bookings.filter(
+            status__in=[
+                BookingStatus.PENDING,
+                BookingStatus.TRAVELER_ACCEPTED,
+                BookingStatus.PAYMENT_PENDING,
+            ]
+        ).count()
+
+        # Active Bookings
+        active_bookings = bookings.filter(
+            status__in=[
+                BookingStatus.CONFIRMED,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+            ]
+        ).count()
+
+        # Completed Bookings
+        completed_bookings = bookings.filter(
+            status__in=[
+                BookingStatus.DELIVERED,
+                BookingStatus.COMPLETED,
+            ]
+        ).count()
+
+        # Current Escrow Held
+        total_escrow_held = (
+            WalletTransaction.objects.filter(
+                booking__sender=sender,
+                type__in=[
+                    WalletTransaction.TransactionType.ESCROW_HOLD,
+                    WalletTransaction.TransactionType.ESCROW_RELEASE,
+                    WalletTransaction.TransactionType.REFUND,
+                ],
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+            ).aggregate(
+                total=Sum("amount")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Sender dashboard statistics retrieved successfully.",
+                "data": {
+                    "pending_requests": pending_requests,
+                    "active_bookings": active_bookings,
+                    "completed_bookings": completed_bookings,
+                    "total_escrow_held": {
+                        "amount": str(total_escrow_held),
+                        "currency": "USD",
+                    },
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+
+class SenderBookingStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sender = request.user
+
+        bookings = Booking.objects.filter(
+            sender=sender,
+            is_active=True,
+        )
+
+        # Pending Requests
+        pending_requests = bookings.filter(
+            status__in=[
+                BookingStatus.PENDING,
+                BookingStatus.TRAVELER_ACCEPTED,
+                BookingStatus.PAYMENT_PENDING,
+            ]
+        ).count()
+
+        # Active Bookings
+        active_bookings = bookings.filter(
+            status__in=[
+                BookingStatus.CONFIRMED,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+            ]
+        ).count()
+
+        # Completed Bookings
+        completed_bookings = bookings.filter(
+            status__in=[
+                BookingStatus.DELIVERED,
+                BookingStatus.COMPLETED,
+            ]
+        ).count()
+
+        # Current Escrow Held (same logic as SenderPaymentSummaryView)
+        wallet = Wallet.objects.filter(user=sender).first()
+
+        current_held = Decimal("0.00")
+
+        if wallet:
+            current_held = (
+                WalletTransaction.objects.filter(
+                    wallet=wallet,
+                    type=WalletTransaction.TransactionType.ESCROW_HOLD,
+                    status=WalletTransaction.TransactionStatus.PENDING,
+                    booking__status__in=[
+                        BookingStatus.CONFIRMED,
+                        BookingStatus.PICKED_UP,
+                        BookingStatus.IN_TRANSIT,
+                    ],
+                    amount__lt=0,
+                ).aggregate(
+                    total=Sum("amount")
+                )["total"]
+                or Decimal("0.00")
+            )
+
+            current_held = abs(current_held)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Sender dashboard statistics retrieved successfully.",
+                "data": {
+                    "pending_requests": pending_requests,
+                    "active_bookings": active_bookings,
+                    "completed_bookings": completed_bookings,
+                    "total_escrow_held": {
+                        "amount": str(current_held),
+                        "currency": "USD",
+                    },
+                },
+            },
+            status=status.HTTP_200_OK,
+        )

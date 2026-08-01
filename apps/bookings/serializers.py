@@ -482,7 +482,7 @@ class SenderActionRequiredSerializer(serializers.Serializer):
     current_status = serializers.CharField()
     reward = serializers.DecimalField(max_digits=10, decimal_places=2)
     currency = serializers.CharField()
-    
+
 
 # sender
 from rest_framework import serializers
@@ -1266,3 +1266,15 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
 
     def get_escrow_status(self, obj):
         return WalletService.get_escrow_status(obj)
+
+
+
+
+class SenderBookingStatsSerializer(serializers.Serializer):
+    pending_requests = serializers.IntegerField()
+    active_bookings = serializers.IntegerField()
+    completed_bookings = serializers.IntegerField()
+    total_escrow_held = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
