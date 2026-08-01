@@ -1278,3 +1278,19 @@ class SenderBookingStatsSerializer(serializers.Serializer):
         max_digits=12,
         decimal_places=2,
     )
+
+
+
+
+
+class SenderDeliveryHistoryStatsSerializer(serializers.Serializer):
+    completed = serializers.IntegerField()
+    cancelled = serializers.IntegerField()
+    refunded = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
+    total_paid = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )

@@ -10,6 +10,7 @@ from .views import (
     BookingDetailView,
     BookingRespondView,
     BookingStartTransitView,
+    SenderDeliveryHistoryStatsView,
     TravelerPendingBookingsView,
     ActiveBookingListView,
     SenderCompletedDeliveryListView,
@@ -129,7 +130,11 @@ urlpatterns = [
         name="sender-booking-stats",
     ),
 
-
+    path(
+        "sender/delivery-history/stats/",
+        SenderDeliveryHistoryStatsView.as_view(),
+        name="sender-delivery-history-stats",
+    ),
 
 
 ]

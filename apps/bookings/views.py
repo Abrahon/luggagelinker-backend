@@ -38,7 +38,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
-
+from .serializers import SenderDeliveryHistoryStatsSerializer
 from apps.bookings.models import Booking, PaymentStatus
 from apps.wallets.models import Wallet, WalletTransaction
 from .serializers import SenderPaymentSummarySerializer
@@ -1551,6 +1551,77 @@ class SenderBookingStatsView(APIView):
                         "currency": "USD",
                     },
                 },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+class SenderDeliveryHistoryStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sender = request.user
+
+        bookings = Booking.objects.filter(sender=sender)
+
+        completed = bookings.filter(
+            status__in=[
+                BookingStatus.DELIVERED,
+                BookingStatus.COMPLETED,
+            ]
+        ).count()
+
+        cancelled = bookings.filter(
+            status__in=[
+                BookingStatus.CANCELLED,
+                BookingStatus.REJECTED,
+                BookingStatus.EXPIRED,
+            ]
+        ).count()
+
+        total_paid = (
+            bookings.filter(
+                payment_status=PaymentStatus.PAID,
+            ).aggregate(
+                total=Sum("agreed_reward")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        refunded = Decimal("0.00")
+
+        wallet = Wallet.objects.filter(user=sender).first()
+
+        if wallet:
+            refunded = (
+                WalletTransaction.objects.filter(
+                    wallet=wallet,
+                    type=WalletTransaction.TransactionType.REFUND,
+                    status=WalletTransaction.TransactionStatus.COMPLETED,
+                ).aggregate(
+                    total=Sum("amount")
+                )["total"]
+                or Decimal("0.00")
+            )
+
+        serializer = SenderDeliveryHistoryStatsSerializer(
+            {
+                "completed": completed,
+                "cancelled": cancelled,
+                "refunded": abs(refunded),
+                "total_paid": total_paid,
+            }
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Delivery history statistics retrieved successfully.",
+                "data": serializer.data,
             },
             status=status.HTTP_200_OK,
         )
