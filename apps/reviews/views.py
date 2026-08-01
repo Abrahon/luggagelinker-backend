@@ -54,8 +54,7 @@ class ReviewListCreateAPIView(generics.ListCreateAPIView):
 
         transaction.on_commit(
             lambda: notify_review_received(
-                traveler=review.traveler,
-                sender=review.sender,
+                user=review.traveler,
                 review=review,
             )
         )

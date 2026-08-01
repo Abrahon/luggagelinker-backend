@@ -22,6 +22,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.db import models
 from .models import Match
 from .serializers import MatchSerializer
+from collections import OrderedDict
 
 # from .utils import success_response, error_response
 
@@ -49,29 +50,70 @@ def error_response(message, status_code=400, errors=None):
     )
 
 
+
 class MyMatchListView(generics.ListAPIView):
     serializer_class = MatchSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        # High performance optimization: fetch relationships upfront in single join
-        return Match.objects.filter(is_active=True).select_related(
-            "package__sender", "trip__traveler"
-        ).filter(
-            models.Q(package__sender=user) | models.Q(trip__traveler=user)
-        ).order_by("-created_at")
+
+        return (
+            Match.objects.filter(is_active=True)
+            .select_related(
+                "package__sender",
+                "trip__traveler",
+            )
+            .filter(
+                models.Q(package__sender=user)
+                | models.Q(trip__traveler=user)
+            )
+            .order_by("-created_at")
+        )
+
+
 
     def list(self, request, *args, **kwargs):
-        try:
-            queryset = self.get_queryset()
-            if not queryset.exists():
-                return Response({"success": False, "message": "No matches found.", "data": []}, status=404)
-            
-            serializer = self.get_serializer(queryset, many=True)
-            return Response({"success": True, "message": "Matches retrieved successfully.", "data": serializer.data}, status=200)
-        except Exception as e:
-            return Response({"success": False, "message": "Failed to fetch matches.", "errors": str(e)}, status=500)
+        queryset = self.get_queryset()
+
+        if not queryset.exists():
+            return Response(
+                {
+                    "success": False,
+                    "message": "No matches found.",
+                    "data": [],
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+
+            paginated_response = self.get_paginated_response(serializer.data)
+
+            paginated_response.data = OrderedDict([
+                ("success", True),
+                ("message", "Matches retrieved successfully."),
+                ("count", paginated_response.data["count"]),
+                ("next", paginated_response.data["next"]),
+                ("previous", paginated_response.data["previous"]),
+                ("data", paginated_response.data["results"]),
+            ])
+
+            return paginated_response
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Matches retrieved successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
         
 
 

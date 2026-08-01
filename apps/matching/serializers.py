@@ -5,6 +5,8 @@ from .models import Match, MatchStatus
 # ==========================================================
 # MATCH MAIN SERIALIZER
 # ==========================================================
+
+from django.db.models import Avg
 from rest_framework import serializers
 from .models import Match, MatchStatus
 
@@ -41,25 +43,15 @@ class MatchSerializer(serializers.ModelSerializer):
     )
 
     # ------------------------------------------------------
-    # TRAVELER DETAILS FROM PROFILE MODEL
+    # TRAVELER DETAILS & DYNAMIC REVIEWS
     # ------------------------------------------------------
     traveler_name = serializers.SerializerMethodField()
 
     traveler_avatar = serializers.SerializerMethodField()
 
-    traveler_rating = serializers.DecimalField(
-        source="trip.traveler.profile.average_rating",
-        max_digits=3,
-        decimal_places=2,
-        read_only=True,
-        default=0.00,
-    )
+    traveler_rating = serializers.SerializerMethodField()
 
-    total_reviews = serializers.IntegerField(
-        source="trip.traveler.profile.total_reviews",
-        read_only=True,
-        default=0,
-    )
+    total_reviews = serializers.SerializerMethodField()
 
     # ------------------------------------------------------
     # TRIP DETAILS & DATES
@@ -199,6 +191,28 @@ class MatchSerializer(serializers.ModelSerializer):
     # ------------------------------------------------------
     # HELPER METHODS
     # ------------------------------------------------------
+
+    def get_traveler_rating(self, obj):
+        traveler = getattr(obj.trip, "traveler", None)
+        if not traveler:
+            return "0.00"
+
+        # Calculate average rating directly from received_reviews related_name
+        aggregate_result = traveler.received_reviews.aggregate(avg_rating=Avg("rating"))
+        avg_rating = aggregate_result.get("avg_rating")
+
+        if avg_rating is not None:
+            return f"{avg_rating:.2f}"
+
+        return "0.00"
+
+    def get_total_reviews(self, obj):
+        traveler = getattr(obj.trip, "traveler", None)
+        if not traveler:
+            return 0
+
+        # Count total reviews directly from received_reviews related_name
+        return traveler.received_reviews.count()
 
     def get_package_image(self, obj):
         package = getattr(obj, "package", None)
