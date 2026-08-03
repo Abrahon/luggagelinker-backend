@@ -142,25 +142,29 @@ class CreatePackageView(generics.CreateAPIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         
-        
-class MyPackageListView(generics.ListAPIView):
 
+class MyPackageListView(generics.ListAPIView):
     serializer_class = PackageSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return (
+        queryset = (
             Package.objects.filter(
                 sender=self.request.user,
-                is_active=True,
             )
+            .prefetch_related("images")
             .order_by("-created_at")
         )
 
+        status_param = self.request.query_params.get("status")
+
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+
+        return queryset
+
     def list(self, request, *args, **kwargs):
-
         try:
-
             queryset = self.get_queryset()
 
             serializer = self.get_serializer(
@@ -179,7 +183,6 @@ class MyPackageListView(generics.ListAPIView):
             )
 
         except Exception:
-
             logger.exception(
                 f"Failed to fetch packages. User={request.user.id}"
             )
@@ -191,8 +194,6 @@ class MyPackageListView(generics.ListAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-
 
 
 class TravelerPackageListView(generics.ListAPIView):
