@@ -5,6 +5,8 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.conf import settings
+import hashlib
+import random
 
 # Top-level Imports matching instructions 5 & 14
 from apps.wallets.models import (
@@ -347,6 +349,37 @@ class WalletService:
             description=f"User terminated processing for Withdrawal ID #{withdrawal.id}. Funds re-credited."
         )
         return withdrawal
+
+
+
+
+
+
+        @staticmethod
+        def generate_virtual_card_number(user):
+            seed = hashlib.sha256(str(user.id).encode()).hexdigest()
+
+            digits = "".join(str(int(c, 16) % 10) for c in seed[:12])
+
+            return f"4829{digits}"
+
+        @staticmethod
+        def generate_masked_card(user):
+            number = WalletService.generate_virtual_card_number(user)
+
+            return (
+                f"{number[:4]} •••• •••• {number[-4:]}"
+            )
+
+        @staticmethod
+        def generate_virtual_cvv(user):
+            seed = hashlib.md5(str(user.id).encode()).hexdigest()
+
+            return str(int(seed[:6], 16) % 900 + 100)
+
+        @staticmethod
+        def generate_expiry():
+            return "08/28"
 
     @classmethod
     @transaction.atomic

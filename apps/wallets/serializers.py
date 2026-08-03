@@ -810,3 +810,64 @@ class RecentCompletedBookingSerializer(serializers.ModelSerializer):
             "currency",
             "delivered_at",
         ]
+
+
+from rest_framework import serializers
+from decimal import Decimal
+from apps.wallets.models import Wallet
+
+
+class TravelerWalletCardSerializer(serializers.ModelSerializer):
+    held_in_escrow = serializers.SerializerMethodField()
+    pending_payout = serializers.SerializerMethodField()
+    currency = serializers.SerializerMethodField()
+    card_details = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField()  # <--- Requires get_full_name()
+
+    class Meta:
+        model = Wallet
+        fields = [
+            "available_balance",
+            "held_in_escrow",
+            "pending_payout",
+            "currency",
+            "card_details",
+            "full_name",
+        ]
+
+    def get_full_name(self, obj):
+        """Returns the user's full name from profile, or falls back to email."""
+        profile = getattr(obj.user, "profile", None)
+        if profile:
+            name = " ".join(
+                filter(
+                    None,
+                    [
+                        getattr(profile, "first_name", ""),
+                        getattr(profile, "last_name", ""),
+                    ],
+                )
+            )
+            if name:
+                return name
+        return getattr(obj.user, "email", "")
+
+    def get_held_in_escrow(self, obj):
+        return Decimal("0.00")
+
+    def get_pending_payout(self, obj):
+        return obj.pending_balance
+
+    def get_currency(self, obj):
+        return "USD"
+
+    def get_card_details(self, obj):
+        holder_name = self.get_full_name(obj)
+
+        return {
+            "card_number_masked": "4829 •••• •••• 9104",
+            "card_number_full": "4829741288309104",
+            "card_holder_name": holder_name.upper(),
+            "expiry_date": "08/28",
+            "cvv": "349",
+        }

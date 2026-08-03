@@ -6,7 +6,7 @@ import stripe
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import generics, status, viewsets
+from rest_framework import generics, request, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.filters import OrderingFilter
@@ -1195,6 +1195,46 @@ class RecentCompletedBookingView(generics.GenericAPIView):
                 "success": True,
                 "message": "Recent completed deliveries retrieved successfully.",
                 "count": queryset.count(),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.wallets.models import Wallet
+from apps.wallets.serializers import TravelerWalletCardSerializer
+
+
+class TravelerWalletCardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        wallet, _ = Wallet.objects.select_related(
+            "user",
+            "user__profile",
+        ).get_or_create(
+            user=request.user,
+            defaults={
+                "currency": "USD",
+            },
+        )
+
+        serializer = TravelerWalletCardSerializer(wallet)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Traveler wallet card retrieved successfully.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,

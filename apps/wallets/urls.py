@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    TravelerWalletCardView,
     WalletViewSet,
     WalletTransactionListView,
 
@@ -196,4 +197,13 @@ urlpatterns = [
         RecentCompletedBookingView.as_view(),
         name="recent-completed-bookings",
     ),
+
+
+    path(
+        "traveler/wallet/card/",
+        TravelerWalletCardView.as_view(),
+        name="traveler-wallet-card",
+    ),
+
+
 ]
