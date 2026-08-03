@@ -5,7 +5,7 @@ import logging
 
 from django.db import transaction
 
-from rest_framework import generics, status
+from rest_framework import generics, request, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
@@ -31,6 +31,14 @@ from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from django.db.models import Count
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.packages.models import Package, PackageStatus
+from apps.packages.serializers import PackageDashboardStatsSerializer
 from .models import PackageImage
 from .models import Package
 from .serializers import PackageSerializer
@@ -275,23 +283,57 @@ class PackageDetailView(generics.RetrieveAPIView):
         )
 
 
+from django.db import transaction
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
+
+from apps.packages.models import Package, PackageStatus
+from apps.packages.serializers import PackageSerializer
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
-
     serializer_class = PackageSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
+    # DO NOT set lookup_field = "id"
 
-        return Package.objects.filter(
-            sender=self.request.user,
-            is_active=True,
+    def get_queryset(self):
+        return (
+            Package.objects.filter(
+                sender=self.request.user
+            ).prefetch_related("images")
         )
 
-    # ==========================================
-    # UPDATE
-    # ==========================================
+    # ==========================================================
+    # GET
+    # ==========================================================
+
+    def retrieve(self, request, *args, **kwargs):
+        package = self.get_object()
+
+        serializer = self.get_serializer(
+            package,
+            context={"request": request},
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Package fetched successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # ==========================================================
+    # PATCH / PUT
+    # ==========================================================
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
@@ -306,21 +348,24 @@ class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
         )
 
         try:
-
             serializer.is_valid(raise_exception=True)
 
             package = serializer.save()
 
+            package.refresh_from_db()
+
             logger.info(
-                f"Package updated successfully. "
-                f"Package={package.id}"
+                f"Package updated successfully. Package={package.id}"
             )
 
             return Response(
                 {
                     "success": True,
                     "message": "Package updated successfully.",
-                    "data": PackageSerializer(package).data,
+                    "data": PackageSerializer(
+                        package,
+                        context={"request": request},
+                    ).data,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -337,7 +382,6 @@ class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
             )
 
         except Exception:
-
             logger.exception(
                 f"Package update failed. Package={package.id}"
             )
@@ -350,9 +394,9 @@ class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    # ==========================================
+    # ==========================================================
     # DELETE (Soft Delete)
-    # ==========================================
+    # ==========================================================
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
@@ -360,13 +404,20 @@ class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
         package = self.get_object()
 
         try:
-
+            package.status = PackageStatus.CANCELLED
             package.is_active = False
-            package.save(update_fields=["is_active"])
+            package.is_public = False
+
+            package.save(
+                update_fields=[
+                    "status",
+                    "is_active",
+                    "is_public",
+                ]
+            )
 
             logger.info(
-                f"Package deleted successfully. "
-                f"Package={package.id}"
+                f"Package deleted successfully. Package={package.id}"
             )
 
             return Response(
@@ -378,7 +429,6 @@ class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
             )
 
         except Exception:
-
             logger.exception(
                 f"Package delete failed. Package={package.id}"
             )
@@ -390,11 +440,6 @@ class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-
-
-# uplaod image
-
 # =========================
 # UPLOAD IMAGE
 # =========================
@@ -686,57 +731,66 @@ class AdminPackageReviewView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-# class TravelerHandshakeView(generics.UpdateAPIView):
-#     """
-#     PATCH /package/<uuid:pk>/handshake/
-#     Executed strictly by the assigned Traveler at the physical pick-up point.
-#     """
-#     queryset = Package.objects.all()
-#     permission_classes = [IsAuthenticated]
-#     serializer_class = PackageSerializer
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
 
-#     def patch(self, request, *args, **kwargs):
-#         package = self.get_object()
-#         user = request.user
+from apps.packages.models import Package, PackageStatus
+from apps.matching.models import Match, MatchStatus
+from apps.bookings.models import Booking, BookingStatus
 
-#         # 1. Traveler Authorization check (Protects endpoint access)
-#         has_active_booking = package.bookings.filter(traveler=user, is_active=True).exists()
-#         if not has_active_booking:
-#             raise PermissionDenied("You are not authorized to perform the physical handshake verification for this package.")
 
-#         # 2. Schema Validation (Handles cross-field validation rules internally)
-#         input_serializer = TravelerHandshakeSerializer(data=request.data)
-#         if not input_serializer.is_valid():
-#             return Response({
-#                 "success": False,
-#                 "message": "Validation failed.",
-#                 "errors": input_serializer.errors
-#             }, status=status.HTTP_400_BAD_REQUEST)
+class PackageDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated]
 
-#         matches_listing = input_serializer.validated_data["traveler_matches_listing"]
-#         refusal_reason = input_serializer.validated_data.get("traveler_refusal_reason", "").strip()
+    def get(self, request):
 
-#         package.traveler_matches_listing = matches_listing
+        user = request.user
 
-#         # 3. Route Lifecycle States cleanly
-#         if matches_listing:
-#             package.status = PackageStatus.IN_TRANSIT
-#             package.traveler_refusal_reason = None
-#             update_fields = ["traveler_matches_listing", "status", "traveler_refusal_reason"]
-#             msg = "Handshake clear. Package status updated to In Transit."
-#         else:
-#             package.status = PackageStatus.CANCELLED
-#             package.verification_status = VerificationStatus.REJECTED
-#             package.traveler_refusal_reason = refusal_reason
-#             update_fields = ["traveler_matches_listing", "status", "verification_status", "traveler_refusal_reason"]
-#             msg = "Traveler refused package handoff. Listing has been cancelled and flagged for fraud check."
+        packages = Package.objects.filter(sender=user)
 
-#         # 4. Atomic field updates
-#         package.save(update_fields=update_fields)
-        
-#         return Response({
-#             "success": True,
-#             "message": msg,
-#             "data": PackageSerializer(package).data
-#         }, status=status.HTTP_200_OK)
-    
+        bookings = Booking.objects.filter(sender=user)
+
+        matched = Match.objects.filter(
+            package__sender=user,
+            status=MatchStatus.AVAILABLE,
+            is_active=True,
+        ).values("package").distinct().count()
+
+        data = {
+            "total": packages.count(),
+
+            "draft": packages.filter(
+                status=PackageStatus.DRAFT
+            ).count(),
+
+            "published": packages.filter(
+                status=PackageStatus.PUBLISHED
+            ).count(),
+
+            "matched": matched,
+
+            "booked": bookings.filter(
+                status__in=[
+                    BookingStatus.CONFIRMED,
+                    BookingStatus.PICKED_UP,
+                    BookingStatus.IN_TRANSIT,
+                    BookingStatus.DELIVERED,
+                    BookingStatus.COMPLETED,
+                ]
+            ).count(),
+
+            "delivered": bookings.filter(
+                status=BookingStatus.COMPLETED
+            ).count(),
+        }
+
+        return Response(
+            {
+                "success": True,
+                "message": "Package dashboard statistics retrieved successfully.",
+                "data": data,
+            },
+            status=status.HTTP_200_OK,
+        )

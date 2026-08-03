@@ -371,3 +371,18 @@ class AdminPackageSerializer(serializers.ModelSerializer):
             return ""
 
         return f"{profile.first_name} {profile.last_name}"
+
+
+
+
+
+class PackageDashboardStatsSerializer(serializers.Serializer):
+    total = serializers.IntegerField()
+    draft = serializers.IntegerField()
+    published = serializers.IntegerField()
+    matched = serializers.IntegerField()
+    booked = serializers.IntegerField()
+    in_transit = serializers.IntegerField()
+    delivered = serializers.IntegerField()
+    cancelled = serializers.IntegerField()
+    expired = serializers.IntegerField()

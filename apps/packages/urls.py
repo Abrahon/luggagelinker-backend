@@ -12,7 +12,8 @@ from .views import (
     AdminPackageReviewView,
     AdminPackageListView,
     AdminPackageDetailView,
-    TravelerPackageListView
+    TravelerPackageListView,
+    PackageDashboardStatsView
 )
 
 urlpatterns = [
@@ -85,9 +86,11 @@ urlpatterns = [
         name="admin-package-detail",
     ),
 
-    # path(
-    #     "package/<uuid:pk>/handshake/",
-    #     TravelerHandshakeView.as_view(),
-    #     name="traveler-package-handshake",
-    # ),
+
+    path(
+        "package/dashboard-stats/",
+        PackageDashboardStatsView.as_view(),
+        name="my-package-dashboard-stats",
+    ),
+
 ]
