@@ -1,113 +1,205 @@
 from decimal import Decimal
-from apps.packages.models import Package, PackageStatus, VerificationStatus, RiskRule
+
+from apps.packages.models import (
+    Package,
+    PackageStatus,
+    VerificationStatus,
+    RiskRule,
+)
 
 
 class PackageService:
-    """
-    Dedicated Service Layer orchestrating risk evaluation, dynamic scoring pipelines,
-    automated publication rules, and explicit administrative oversight transitions.
-    """
+
+    HIGH_RISK_COUNTRIES = {
+        "Nigeria",
+        "Pakistan",
+        "Afghanistan",
+        "Iran",
+        "Iraq",
+        "Syria",
+    }
 
     @staticmethod
     def process_and_evaluate_risk(package: Package) -> Package:
-        """
-        Runs automated risk assessments against configured rules and user traits.
-        Updates verification state without deciding marketplace publication workflow.
-        """
+
         score = 0
 
-        # 1. Fetch Dynamic Category Weight from Admin Risk Rules database
-        rule = RiskRule.objects.filter(category=package.category).first()
+        # --------------------------------------------------
+        # 1. Category Risk
+        # --------------------------------------------------
+        rule = RiskRule.objects.filter(
+            category=package.category
+        ).first()
+
         if rule:
             score += rule.base_risk_score
-            # Check threshold requirement rules
-            if package.declared_value >= rule.requires_receipt_above and not package.purchase_receipt:
+
+            if (
+                package.declared_value >= rule.requires_receipt_above
+                and not package.purchase_receipt
+            ):
                 score += 20
 
-        # 2. Declared Value Tier Assessment
-        if package.declared_value > Decimal("500.00"):
+        # --------------------------------------------------
+        # 2. Declared Value
+        # --------------------------------------------------
+        value = package.declared_value
+
+        if value >= Decimal("5000"):
+            score += 35
+
+        elif value >= Decimal("2500"):
+            score += 30
+
+        elif value >= Decimal("1000"):
             score += 20
-        elif package.declared_value > Decimal("150.00"):
+
+        elif value >= Decimal("500"):
+            score += 15
+
+        elif value >= Decimal("150"):
             score += 10
 
-        # 3. Route Evaluation Boundary (International vs Domestic)
-        if package.pickup_country.lower().strip() != package.destination_country.lower().strip():
+        # --------------------------------------------------
+        # 3. Reward Amount
+        # --------------------------------------------------
+        reward = package.reward_amount
+
+        if reward >= Decimal("1000"):
+            score += 20
+
+        elif reward >= Decimal("500"):
             score += 15
 
-        # 4. Fast User Profile Evaluation Look-up (No heavy database cross-table scans)
-        user_profile = getattr(package.sender, 'profile', None)
-        completed_count = getattr(user_profile, 'completed_shipments', 0) if user_profile else 0
-        if completed_count == 0:
+        elif reward >= Decimal("200"):
+            score += 10
+
+        # --------------------------------------------------
+        # 4. International Route
+        # --------------------------------------------------
+        if (
+            package.pickup_country.lower().strip()
+            != package.destination_country.lower().strip()
+        ):
             score += 15
 
-        # Commit score calculations onto object instance state
+        # --------------------------------------------------
+        # 5. High Risk Country
+        # --------------------------------------------------
+        if (
+            package.pickup_country.strip()
+            in PackageService.HIGH_RISK_COUNTRIES
+        ):
+            score += 15
+
+        # --------------------------------------------------
+        # 6. Fragile
+        # --------------------------------------------------
+        if package.is_fragile:
+            score += 5
+
+        # --------------------------------------------------
+        # 7. Signature Required
+        # --------------------------------------------------
+        if package.requires_signature:
+            score += 5
+
+        # --------------------------------------------------
+        # 8. New User
+        # --------------------------------------------------
+        profile = getattr(package.sender, "profile", None)
+
+        completed = getattr(
+            profile,
+            "completed_deliveries",
+            0,
+        ) if profile else 0
+
+        if completed == 0:
+            score += 10
+
+        # --------------------------------------------------
+        # Final Score
+        # --------------------------------------------------
         package.risk_score = min(score, 100)
-        
-        if package.risk_score >= 70:
-            package.verification_status = VerificationStatus.MANUAL_REVIEW
-        else:
-            package.verification_status = VerificationStatus.AUTO_APPROVED
 
-        package.save()
+        # < 50 = Auto Approve
+        # >= 50 = Manual Review
+        if package.risk_score >= 50:
+            package.verification_status = (
+                VerificationStatus.MANUAL_REVIEW
+            )
+        else:
+            package.verification_status = (
+                VerificationStatus.AUTO_APPROVED
+            )
+
+        package.save(
+            update_fields=[
+                "risk_score",
+                "verification_status",
+            ]
+        )
+
         return package
 
     @staticmethod
-    def publish_package(package: Package) -> bool:
-        """
-        Encapsulates explicit listing publication criteria independently.
-        Returns True if criteria met and updated, False otherwise.
-        """
-        allowed_states = [VerificationStatus.AUTO_APPROVED, VerificationStatus.VERIFIED]
-        
-        if package.verification_status in allowed_states and package.is_public:
+    def publish_package(package):
+
+        if (
+            package.verification_status
+            in [
+                VerificationStatus.AUTO_APPROVED,
+                VerificationStatus.VERIFIED,
+            ]
+            and package.is_public
+        ):
             package.status = PackageStatus.PUBLISHED
-            package.save(update_fields=['status'])
+            package.is_active = True
+            package.save(
+                update_fields=[
+                    "status",
+                    "is_active",
+                ]
+            )
             return True
-            
+
         return False
 
     @staticmethod
     def review_package(package: Package, approve: bool) -> Package:
         """
-        Admin review of package verification.
+        Admin approves or rejects a package after manual review.
         """
 
         if package.verification_status not in [
-            VerificationStatus.PENDING,
             VerificationStatus.MANUAL_REVIEW,
+            VerificationStatus.AUTO_APPROVED,
         ]:
             raise ValueError(
-                "This package has already been reviewed."
+                "This package cannot be reviewed."
             )
 
         if approve:
-
             package.verification_status = VerificationStatus.VERIFIED
             package.status = PackageStatus.PUBLISHED
             package.is_active = True
-
-            package.save(
-                update_fields=[
-                    "verification_status",
-                    "status",
-                    "is_active",
-                    "updated_at",
-                ]
-            )
+            package.is_public = True
 
         else:
-
             package.verification_status = VerificationStatus.REJECTED
             package.status = PackageStatus.CANCELLED
             package.is_active = False
+            package.is_public = False
 
-            package.save(
-                update_fields=[
-                    "verification_status",
-                    "status",
-                    "is_active",
-                    "updated_at",
-                ]
-            )
+        package.save(
+            update_fields=[
+                "verification_status",
+                "status",
+                "is_active",
+                "is_public",
+                "updated_at",
+            ]
+        )
 
         return package
