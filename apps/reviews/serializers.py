@@ -127,6 +127,11 @@ class ReportSerializer(serializers.ModelSerializer):
         )
 
 
+
+from apps.bookings.models import BookingStatus
+from .models import Report
+
+
 class CreateReportSerializer(serializers.ModelSerializer):
 
     class Meta:
@@ -138,7 +143,12 @@ class CreateReportSerializer(serializers.ModelSerializer):
             "description",
         )
 
+    # -----------------------------------------------------
+    # Description Validation
+    # -----------------------------------------------------
+
     def validate_description(self, value):
+
         value = value.strip()
 
         if len(value) < 15:
@@ -148,69 +158,117 @@ class CreateReportSerializer(serializers.ModelSerializer):
 
         return value
 
+    # -----------------------------------------------------
+    # Main Validation
+    # -----------------------------------------------------
+
     def validate(self, attrs):
 
         request = self.context["request"]
-        reporter = request.user
 
+        reporter = request.user
         reported_user = attrs["reported_user"]
         booking = attrs.get("booking")
 
+        # ------------------------------------------
+        # Cannot report yourself
+        # ------------------------------------------
+
         if reporter == reported_user:
             raise serializers.ValidationError(
-                {"reported_user": "You cannot report yourself."}
+                {
+                    "reported_user": "You cannot report yourself."
+                }
             )
+
+        # ------------------------------------------
+        # Booking validations
+        # ------------------------------------------
 
         if booking:
 
-            if booking.status != "COMPLETED":
+            # Prevent reports only for pending bookings
+            if booking.status == BookingStatus.PENDING:
                 raise serializers.ValidationError(
                     {
-                        "booking": "Reports can only be submitted for completed bookings."
+                        "booking": (
+                            "You can report this booking only after it has been accepted."
+                        )
                     }
                 )
 
+            # Reporter must belong to booking
             if reporter not in [booking.sender, booking.traveler]:
                 raise serializers.ValidationError(
                     {
-                        "booking": "You are not associated with this booking."
+                        "booking": (
+                            "You are not associated with this booking."
+                        )
                     }
                 )
 
-            if reported_user not in [booking.sender, booking.traveler]:
+            # Reported user must belong to booking
+            if reported_user not in [
+                booking.sender,
+                booking.traveler,
+            ]:
                 raise serializers.ValidationError(
                     {
-                        "reported_user": "Reported user is not part of this booking."
+                        "reported_user": (
+                            "Reported user is not part of this booking."
+                        )
                     }
                 )
 
-            if reporter == booking.sender and reported_user != booking.traveler:
+            # Sender can report only traveler
+            if (
+                reporter == booking.sender
+                and reported_user != booking.traveler
+            ):
                 raise serializers.ValidationError(
                     {
-                        "reported_user": "Sender can only report the assigned traveler."
+                        "reported_user": (
+                            "You can only report the assigned traveler."
+                        )
                     }
                 )
 
-            if reporter == booking.traveler and reported_user != booking.sender:
+            # Traveler can report only sender
+            if (
+                reporter == booking.traveler
+                and reported_user != booking.sender
+            ):
                 raise serializers.ValidationError(
                     {
-                        "reported_user": "Traveler can only report the sender."
+                        "reported_user": (
+                            "You can only report the package sender."
+                        )
                     }
                 )
 
-        exists = Report.objects.filter(
+        # ------------------------------------------
+        # Duplicate report check
+        # ------------------------------------------
+
+        already_exists = Report.objects.filter(
             reporter=reporter,
             reported_user=reported_user,
             booking=booking,
         ).exists()
 
-        if exists:
+        if already_exists:
             raise serializers.ValidationError(
                 "You have already submitted a report for this booking."
             )
 
         return attrs
 
+    # -----------------------------------------------------
+    # Create
+    # -----------------------------------------------------
+
     def create(self, validated_data):
+
         validated_data["reporter"] = self.context["request"].user
+
         return super().create(validated_data)
