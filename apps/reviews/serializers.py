@@ -285,16 +285,8 @@ class CreateReportSerializer(serializers.ModelSerializer):
 
 
 class ReportSerializer(serializers.ModelSerializer):
-
-    reporter_name = serializers.CharField(
-        source="reporter.profile.full_name",
-        read_only=True,
-    )
-
-    reported_user_name = serializers.CharField(
-        source="reported_user.profile.full_name",
-        read_only=True,
-    )
+    reporter_name = serializers.SerializerMethodField()
+    reported_user_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Report
@@ -309,19 +301,38 @@ class ReportSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+    def get_reporter_name(self, obj):
+        if not obj.reporter:
+            return "N/A"
+
+        profile = getattr(obj.reporter, "profile", None)
+        if profile and getattr(profile, "full_name", None):
+            return profile.full_name
+
+        full_name = obj.reporter.get_full_name().strip() if hasattr(obj.reporter, "get_full_name") else ""
+        if full_name:
+            return full_name
+
+        return getattr(obj.reporter, "email", str(obj.reporter))
+
+    def get_reported_user_name(self, obj):
+        if not obj.reported_user:
+            return "N/A"
+
+        profile = getattr(obj.reported_user, "profile", None)
+        if profile and getattr(profile, "full_name", None):
+            return profile.full_name
+
+        full_name = obj.reported_user.get_full_name().strip() if hasattr(obj.reported_user, "get_full_name") else ""
+        if full_name:
+            return full_name
+
+        return getattr(obj.reported_user, "email", str(obj.reported_user))
 
 
 class ReportDetailSerializer(serializers.ModelSerializer):
-
-    reporter_name = serializers.CharField(
-        source="reporter.profile.full_name",
-        read_only=True,
-    )
-
-    reported_user_name = serializers.CharField(
-        source="reported_user.profile.full_name",
-        read_only=True,
-    )
+    reporter_name = serializers.SerializerMethodField()
+    reported_user_name = serializers.SerializerMethodField()
 
     evidence_files = ReportEvidenceSerializer(
         many=True,
@@ -334,7 +345,6 @@ class ReportDetailSerializer(serializers.ModelSerializer):
     )
 
     class Meta:
-
         model = Report
 
         fields = [
@@ -354,6 +364,34 @@ class ReportDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_reporter_name(self, obj):
+        if not obj.reporter:
+            return "N/A"
+
+        profile = getattr(obj.reporter, "profile", None)
+        if profile and getattr(profile, "full_name", None):
+            return profile.full_name
+
+        full_name = obj.reporter.get_full_name().strip() if hasattr(obj.reporter, "get_full_name") else ""
+        if full_name:
+            return full_name
+
+        return getattr(obj.reporter, "email", str(obj.reporter))
+
+    def get_reported_user_name(self, obj):
+        if not obj.reported_user:
+            return "N/A"
+
+        profile = getattr(obj.reported_user, "profile", None)
+        if profile and getattr(profile, "full_name", None):
+            return profile.full_name
+
+        full_name = obj.reported_user.get_full_name().strip() if hasattr(obj.reported_user, "get_full_name") else ""
+        if full_name:
+            return full_name
+
+        return getattr(obj.reported_user, "email", str(obj.reported_user))
 
 
 

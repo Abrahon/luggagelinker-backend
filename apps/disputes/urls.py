@@ -8,7 +8,10 @@ from .views import (
     AdminDisputeRetrieveAPIView,
     AdminDisputeAssignAPIView,
     AdminDisputeRequestEvidenceAPIView,
-    AdminDisputeResolveAPIView
+    AdminDisputeResolveAPIView,
+    DisputeWithdrawAPIView,
+    AdminDisputeStatusAPIView,
+    AdminDisputeNoteAPIView
 )
 
 urlpatterns = [
@@ -24,4 +27,24 @@ urlpatterns = [
     path("admin/disputes/<uuid:id>/assign/", AdminDisputeAssignAPIView.as_view(), name="admin-dispute-assign"),
     path("admin/disputes/<uuid:id>/request-evidence/", AdminDisputeRequestEvidenceAPIView.as_view(), name="admin-dispute-request-evidence"),
     path("admin/disputes/<uuid:id>/resolve/", AdminDisputeResolveAPIView.as_view(), name="admin-dispute-resolve"),
+
+    path(
+        "disputes/<uuid:id>/withdraw/",
+        DisputeWithdrawAPIView.as_view(),
+        name="dispute-withdraw",
+    ),
+
+    # Admin
+    path(
+        "admin/disputes/<uuid:id>/status/",
+        AdminDisputeStatusAPIView.as_view(),
+        name="admin-dispute-status",
+    ),
+
+    path(
+        "admin/disputes/<uuid:id>/notes/",
+        AdminDisputeNoteAPIView.as_view(),
+        name="admin-dispute-note",
+    ),
+
 ]

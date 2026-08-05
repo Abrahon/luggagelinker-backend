@@ -7,6 +7,20 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.parsers import MultiPartParser, FormParser
 
+from django.utils import timezone
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.disputes.models import (
+    Dispute,
+    DisputeHistory,
+)
+from apps.disputes.enums import (
+    DisputeStatus,
+    DisputeHistoryAction,
+)
 from .models import Dispute
 from .services import DisputeService
 from .admin_services import AdminDisputeService
@@ -336,3 +350,179 @@ class AdminDisputeResolveAPIView(DisputeErrorFormatMixin, generics.CreateAPIView
         except Exception:
             logger.exception("Unexpected crash inside system settlement execution framework path for dispute %s", dispute.id)
             return Response({"detail": "Internal server error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+
+class DisputeWithdrawAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, id):
+
+        try:
+            dispute = Dispute.objects.get(id=id)
+
+        except Dispute.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Dispute not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if dispute.opened_by != request.user:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Only the dispute creator can withdraw this dispute.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if dispute.status not in [
+            DisputeStatus.OPEN,
+            DisputeStatus.UNDER_REVIEW,
+        ]:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Only active disputes can be withdrawn.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous = dispute.status
+
+        dispute.status = DisputeStatus.REJECTED
+        dispute.resolved_at = timezone.now()
+        dispute.last_updated_by = request.user
+        dispute.save()
+
+        DisputeHistory.objects.create(
+            dispute=dispute,
+            actor=request.user,
+            action=DisputeHistoryAction.WITHDRAWN,
+            status_from=previous,
+            status_to=DisputeStatus.REJECTED,
+            notes="Dispute withdrawn by creator.",
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Dispute withdrawn successfully.",
+            }
+        )
+
+
+
+
+class AdminDisputeStatusAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, id):
+
+        try:
+            dispute = Dispute.objects.get(id=id)
+
+        except Dispute.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Dispute not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        new_status = request.data.get("status")
+
+        if new_status not in DisputeStatus.values:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invalid status.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous = dispute.status
+
+        dispute.status = new_status
+        dispute.last_updated_by = request.user
+
+        if new_status in [
+            DisputeStatus.RESOLVED,
+            DisputeStatus.REJECTED,
+        ]:
+            dispute.resolved_at = timezone.now()
+
+        dispute.save()
+
+        DisputeHistory.objects.create(
+            dispute=dispute,
+            actor=request.user,
+            action=DisputeHistoryAction.STATUS_CHANGED,
+            status_from=previous,
+            status_to=new_status,
+            notes=f"Status changed to {new_status}",
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Dispute status updated successfully.",
+            }
+        )
+
+
+
+
+class AdminDisputeNoteAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, id):
+
+        try:
+            dispute = Dispute.objects.get(id=id)
+
+        except Dispute.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Dispute not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        note = request.data.get("admin_notes")
+
+        if not note:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Admin note is required.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        dispute.admin_notes += f"\n\n{note}"
+        dispute.last_updated_by = request.user
+        dispute.save()
+
+        DisputeHistory.objects.create(
+            dispute=dispute,
+            actor=request.user,
+            action=DisputeHistoryAction.ADMIN_NOTE,
+            status_from=dispute.status,
+            status_to=dispute.status,
+            notes=note,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Admin note added successfully.",
+            }
+        )
