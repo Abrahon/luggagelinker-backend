@@ -28,19 +28,19 @@ urlpatterns = [
     ),
 
     path(
-        "reports/admin/",
+        "admin/reports/",
         AdminReportListAPIView.as_view(),
         name="admin-report-list",
     ),
 
     path(
-        "reports/admin/<uuid:id>/",
+        "admin/reports/<uuid:id>/",
         AdminReportDetailAPIView.as_view(),
         name="admin-report-detail",
     ),
 
     path(
-        "reports/admin/<uuid:id>/resolve/",
+        "admin/reports/<uuid:id>/resolve/",
         AdminResolveReportAPIView.as_view(),
         name="admin-report-resolve",
     ),

@@ -20,6 +20,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
+
+from apps.accounts.permissions import IsUserAllowed
 from .serializers import MonthlyWithdrawalSerializer
 from apps.bookings.models import Booking, BookingStatus, PaymentStatus
 from apps.wallets.services import WalletService
@@ -271,7 +273,7 @@ class WithdrawalRequestView(generics.ListCreateAPIView):
     POST /wallets/withdraw/
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsUserAllowed]
     serializer_class = WithdrawalRequestSerializer
 
     filter_backends = [DjangoFilterBackend, OrderingFilter]

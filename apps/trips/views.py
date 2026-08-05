@@ -9,6 +9,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.accounts.permissions import IsUserAllowed
 from apps.matching.services.trip_matching import run_trip_matching
 from apps.matching.services.trip_matching import run_trip_matching
 from .models import Trip
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 class CreateTripListView(generics.ListCreateAPIView):
 
     serializer_class = TripSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsUserAllowed,]
 
     # ==========================================================
     # LIST PUBLIC TRIPS
@@ -170,7 +171,7 @@ class CreateTripListView(generics.ListCreateAPIView):
 class MyTripListView(generics.ListAPIView):
 
     serializer_class = TripSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsUserAllowed]
 
     # ==========================================================
     # MY TRIPS
@@ -238,7 +239,7 @@ class MyTripListView(generics.ListAPIView):
 class TripDetailView(generics.RetrieveAPIView):
 
     serializer_class = TripSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsUserAllowed]
     lookup_field = "id"
 
     def get_queryset(self):
