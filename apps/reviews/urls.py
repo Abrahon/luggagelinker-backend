@@ -1,13 +1,47 @@
+
 from django.urls import path
-from .views import ReviewListCreateAPIView,AdminReportListAPIView, ReviewRetrieveUpdateDestroyAPIView,ReportListCreateAPIView,ReportDetailAPIView,AdminReportDetailAPIView
+
+from .views import (
+    ReviewListCreateAPIView,
+    ReviewRetrieveUpdateDestroyAPIView,
+    ReportListCreateAPIView,
+    ReportDetailAPIView,
+    AdminReportListAPIView,
+    AdminReportDetailAPIView,
+    AdminResolveReportAPIView,
+)
 
 urlpatterns = [
     path('reviews/', ReviewListCreateAPIView.as_view(), name='review-list-create'),
     path('reviews/<uuid:pk>/', ReviewRetrieveUpdateDestroyAPIView.as_view(), name='review-detail'),
 
-    path("reports/", ReportListCreateAPIView.as_view()),
-    path("reports/<uuid:pk>/", ReportDetailAPIView.as_view()),
+    path(
+        "reports/",
+        ReportListCreateAPIView.as_view(),
+        name="report-list",
+    ),
 
-    path("admin/reports/", AdminReportListAPIView.as_view()),
-    path("admin/reports/<uuid:pk>/", AdminReportDetailAPIView.as_view()),
+    path(
+        "reports/<uuid:id>/",
+        ReportDetailAPIView.as_view(),
+        name="report-detail",
+    ),
+
+    path(
+        "reports/admin/",
+        AdminReportListAPIView.as_view(),
+        name="admin-report-list",
+    ),
+
+    path(
+        "reports/admin/<uuid:id>/",
+        AdminReportDetailAPIView.as_view(),
+        name="admin-report-detail",
+    ),
+
+    path(
+        "reports/admin/<uuid:id>/resolve/",
+        AdminResolveReportAPIView.as_view(),
+        name="admin-report-resolve",
+    ),
 ]

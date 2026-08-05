@@ -99,7 +99,7 @@ class ReviewSerializer(serializers.ModelSerializer):
 
 
 
-from rest_framework import serializers
+
 
 from .models import ReportEvidence
 

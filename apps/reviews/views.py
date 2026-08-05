@@ -9,6 +9,34 @@ from .models import Review
 from .serializers import ReviewSerializer
 from django.db import transaction
 
+import logging
+from datetime import timedelta
+
+from django.db import transaction
+from django.utils import timezone
+
+from rest_framework import generics
+from rest_framework import permissions
+from rest_framework import status
+from rest_framework.response import Response
+
+from .models import (
+    Report,
+    UserModerationProfile,
+    ReportStatus,
+    ActionTaken,
+)
+
+from .serializers import (
+    CreateReportSerializer,
+    ReportSerializer,
+    ReportDetailSerializer,
+    AdminResolveReportSerializer,
+)
+
+logger = logging.getLogger(__name__)
+
+
 from apps.reviews.services import update_traveler_rating
 from apps.notifications.services import notify_review_received
 
@@ -100,287 +128,254 @@ class ReviewRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
 
 
 
-import logging
-
-from django.core.exceptions import ValidationError as DjangoValidationError
-
-from rest_framework import generics, permissions, status
-from rest_framework.response import Response
-
-from .models import Report
-from .serializers import ReportSerializer, CreateReportSerializer
-
-logger = logging.getLogger(__name__)
-
 
 class ReportListCreateAPIView(generics.ListCreateAPIView):
 
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+
         return (
             Report.objects.filter(
-                reporter=self.request.user
+                reporter=self.request.user,
             )
             .select_related(
-                "reporter",
-                "reported_user",
-                "booking",
+                "reporter__profile",
+                "reported_user__profile",
                 "assigned_admin",
+                "booking",
+            )
+            .prefetch_related(
+                "evidence_files",
             )
             .order_by("-created_at")
         )
 
     def get_serializer_class(self):
+
         if self.request.method == "POST":
             return CreateReportSerializer
+
         return ReportSerializer
 
     def list(self, request, *args, **kwargs):
 
-        queryset = self.get_queryset()
-
-        serializer = self.get_serializer(queryset, many=True)
+        serializer = self.get_serializer(
+            self.get_queryset(),
+            many=True,
+        )
 
         return Response(
             {
                 "success": True,
                 "message": "Reports retrieved successfully.",
-                "count": queryset.count(),
-                "results": serializer.data,
-            },
-            status=status.HTTP_200_OK,
+                "count": self.get_queryset().count(),
+                "data": serializer.data,
+            }
         )
 
     def create(self, request, *args, **kwargs):
 
         serializer = self.get_serializer(
             data=request.data,
-            context={"request": request},
+            context={
+                "request": request,
+            },
         )
 
-        if not serializer.is_valid():
-            return Response(
-                {
-                    "success": False,
-                    "message": "Validation failed.",
-                    "errors": serializer.errors,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        serializer.is_valid(
+            raise_exception=True,
+        )
 
-        try:
-            report = serializer.save()
+        report = serializer.save()
 
-            return Response(
-                {
-                    "success": True,
-                    "message": "Report submitted successfully.",
-                    "data": ReportSerializer(report).data,
-                },
-                status=status.HTTP_201_CREATED,
-            )
-
-        except DjangoValidationError as e:
-
-            return Response(
-                {
-                    "success": False,
-                    "message": "Unable to submit report.",
-                    "errors": e.message_dict if hasattr(e, "message_dict") else e.messages,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        except Exception as e:
-
-            logger.exception(e)
-
-            return Response(
-                {
-                    "success": False,
-                    "message": "Something went wrong.",
-                    "errors": {
-                        "detail": str(e)
-                    },
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
+        return Response(
+            {
+                "success": True,
+                "message": "Report submitted successfully.",
+                "data": ReportDetailSerializer(report).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 class ReportDetailAPIView(generics.RetrieveAPIView):
 
-    serializer_class = ReportSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    serializer_class = ReportDetailSerializer
+
+    lookup_field = "id"
+
     def get_queryset(self):
+
         return (
             Report.objects.filter(
-                reporter=self.request.user
+                reporter=self.request.user,
             )
             .select_related(
-                "reporter",
-                "reported_user",
-                "booking",
+                "reporter__profile",
+                "reported_user__profile",
                 "assigned_admin",
+                "booking",
+            )
+            .prefetch_related(
+                "evidence_files",
             )
         )
 
-    def retrieve(self, request, *args, **kwargs):
-
-        try:
-
-            report = self.get_object()
-
-            serializer = self.get_serializer(report)
-
-            return Response(
-                {
-                    "success": True,
-                    "message": "Report retrieved successfully.",
-                    "data": serializer.data,
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        except Report.DoesNotExist:
-
-            return Response(
-                {
-                    "success": False,
-                    "message": "Report not found.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        except Exception as e:
-
-            logger.exception(e)
-
-            return Response(
-                {
-                    "success": False,
-                    "message": "Something went wrong.",
-                    "errors": {
-                        "detail": str(e)
-                    },
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-
-# admin report list
-import logging
-
-from rest_framework import generics, status
-from rest_framework.permissions import IsAdminUser
-from rest_framework.response import Response
-
-from .models import Report
-from .serializers import ReportSerializer
-
-logger = logging.getLogger(__name__)
-
-
 class AdminReportListAPIView(generics.ListAPIView):
 
+    permission_classes = [permissions.IsAdminUser]
+
     serializer_class = ReportSerializer
-    permission_classes = [IsAdminUser]
 
     queryset = (
         Report.objects.select_related(
-            "reporter",
-            "reported_user",
-            "booking",
+            "reporter__profile",
+            "reported_user__profile",
             "assigned_admin",
+            "booking",
+        )
+        .prefetch_related(
+            "evidence_files",
         )
         .order_by("-created_at")
     )
 
     def list(self, request, *args, **kwargs):
 
-        try:
-            queryset = self.get_queryset()
+        serializer = self.get_serializer(
+            self.get_queryset(),
+            many=True,
+        )
 
-            serializer = self.get_serializer(queryset, many=True)
-
-            return Response(
-                {
-                    "success": True,
-                    "message": "Reports retrieved successfully.",
-                    "count": queryset.count(),
-                    "results": serializer.data,
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        except Exception as e:
-
-            logger.exception(e)
-
-            return Response(
-                {
-                    "success": False,
-                    "message": "Failed to retrieve reports.",
-                    "errors": {
-                        "detail": str(e)
-                    },
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
+        return Response(
+            {
+                "success": True,
+                "message": "Reports retrieved successfully.",
+                "count": self.get_queryset().count(),
+                "data": serializer.data,
+            }
+        )
 
 class AdminReportDetailAPIView(generics.RetrieveAPIView):
 
-    serializer_class = ReportSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [permissions.IsAdminUser]
+
+    serializer_class = ReportDetailSerializer
+
+    lookup_field = "id"
 
     queryset = (
         Report.objects.select_related(
-            "reporter",
-            "reported_user",
-            "booking",
+            "reporter__profile",
+            "reported_user__profile",
             "assigned_admin",
+            "booking",
+        )
+        .prefetch_related(
+            "evidence_files",
         )
     )
 
-    def retrieve(self, request, *args, **kwargs):
+class AdminResolveReportAPIView(generics.GenericAPIView):
 
-        try:
-            report = self.get_object()
+    permission_classes = [permissions.IsAdminUser]
 
-            serializer = self.get_serializer(report)
+    serializer_class = AdminResolveReportSerializer
 
-            return Response(
-                {
-                    "success": True,
-                    "message": "Report retrieved successfully.",
-                    "data": serializer.data,
-                },
-                status=status.HTTP_200_OK,
+    queryset = Report.objects.select_related(
+        "reported_user",
+    )
+
+    lookup_field = "id"
+
+    @transaction.atomic
+    def patch(self, request, *args, **kwargs):
+
+        report = self.get_object()
+
+        serializer = self.get_serializer(
+            data=request.data,
+        )
+
+        serializer.is_valid(
+            raise_exception=True,
+        )
+
+        data = serializer.validated_data
+
+        moderation, _ = UserModerationProfile.objects.get_or_create(
+            user=report.reported_user,
+        )
+
+        report.status = data["status"]
+
+        report.is_valid = data["is_valid"]
+
+        report.action_taken = data["action_taken"]
+
+        report.admin_notes = data.get(
+            "admin_notes",
+            "",
+        )
+
+        report.assigned_admin = request.user
+
+        if report.status in [
+            ReportStatus.RESOLVED,
+            ReportStatus.REJECTED,
+        ]:
+            report.resolved_at = timezone.now()
+
+        if report.is_valid:
+
+            moderation.valid_reports += 1
+
+            moderation.trust_score = data.get(
+                "trust_score",
+                moderation.trust_score,
             )
 
-        except Report.DoesNotExist:
+            action = data["action_taken"]
 
-            return Response(
-                {
-                    "success": False,
-                    "message": "Report not found.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            if action == ActionTaken.WARNING:
 
-        except Exception as e:
+                moderation.warning_count += 1
 
-            logger.exception(e)
+            elif action == ActionTaken.SUSPEND:
 
-            return Response(
-                {
-                    "success": False,
-                    "message": "Failed to retrieve report.",
-                    "errors": {
-                        "detail": str(e)
-                    },
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+                days = data.get(
+                    "suspension_days",
+                    7,
+                )
+
+                moderation.is_suspended = True
+
+                moderation.suspended_until = (
+                    timezone.now() +
+                    timedelta(days=days)
+                )
+
+            elif action == ActionTaken.PERMANENT_BAN:
+
+                moderation.is_banned = True
+
+                moderation.banned_at = timezone.now()
+
+                moderation.ban_reason = data.get(
+                    "ban_reason",
+                    "",
+                )
+
+        moderation.save()
+
+        report.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Report updated successfully.",
+                "data": ReportDetailSerializer(report).data,
+            }
+        )
