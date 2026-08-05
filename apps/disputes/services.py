@@ -44,39 +44,59 @@ class DisputeService:
 
         return dispute
 
+
     @staticmethod
     @transaction.atomic
-    def create_dispute(booking_id, user, reason, description, disputed_amount) -> Dispute:
+    def create_dispute(
+        booking_id,
+        user,
+        reason,
+        description,
+        disputed_amount,
+        evidence_files=None,
+    ) -> Dispute:
         """
-        Initializes a formal dispute and sets an escrow protection lock on the underlying payment.
-        Validates timeline barriers and checks user permissions.
+        Creates a new dispute, freezes escrow workflow,
+        uploads any initial evidence, creates history,
+        and sends notifications.
         """
+
         try:
             booking = Booking.objects.select_for_update().get(id=booking_id)
         except Booking.DoesNotExist:
-            raise ValidationError("Target booking reference tracking point not found.")
+            raise ValidationError("Booking not found.")
 
-        # 1. Authority validation: Only the sender or traveler can open a dispute
-        if user != booking.sender and user != booking.traveler:
-            raise ValidationError("Permission Denied: You must be an explicit party to this booking contract to file a claim.")
+        # Only sender or traveler may open disputes
+        if user not in [booking.sender, booking.traveler]:
+            raise ValidationError(
+                "You are not allowed to create a dispute for this booking."
+            )
 
-        # 2. Check if a dispute already exists for this booking
+        # Prevent duplicate disputes
         if Dispute.objects.filter(booking=booking).exists():
-            raise ValidationError("Conflict Error: An open or resolved dispute case file already exists for this booking tracking allocation.")
+            raise ValidationError(
+                "A dispute already exists for this booking."
+            )
 
-        # 3. Check workflow eligibility: Ensure the payment is securely held in escrow
+        # Verify escrow payment
         try:
             payment = BookingPayment.objects.get(booking=booking)
         except BookingPayment.DoesNotExist:
-            raise ValidationError("Payment record tracing failed for the target transaction ledger.")
+            raise ValidationError(
+                "Booking payment not found."
+            )
 
         if payment.status != BookingPaymentStatus.AUTHORIZED:
-            raise ValidationError(f"Escrow Protection Violation: Cannot open a dispute if funds are not safely held. Current Status: {payment.status}")
+            raise ValidationError(
+                "Disputes can only be opened while funds are held in escrow."
+            )
 
-        # Determine the opposing party
-        against_user = booking.traveler if user == booking.sender else booking.sender
+        against_user = (
+            booking.traveler
+            if user == booking.sender
+            else booking.sender
+        )
 
-        # 4. Initialize the dispute record
         dispute = Dispute.objects.create(
             booking=booking,
             opened_by=user,
@@ -85,36 +105,45 @@ class DisputeService:
             description=description,
             disputed_amount=disputed_amount,
             status=DisputeStatus.OPEN,
-            last_updated_by=user
+            last_updated_by=user,
         )
 
-        # 5. Document structural timeline history record
+        # Upload initial evidence (optional)
+        if evidence_files:
+            for evidence in evidence_files:
+                DisputeEvidence.objects.create(
+                    dispute=dispute,
+                    uploaded_by=user,
+                    file_attachment=evidence,
+                )
+
+        # Create history
         DisputeHistory.objects.create(
             dispute=dispute,
             actor=user,
             action=DisputeHistoryAction.OPENED,
             status_from=DisputeStatus.OPEN,
             status_to=DisputeStatus.OPEN,
-            notes=f"Dispute opened autonomously by {user.email} due to: {dispute.get_reason_display()}."
+            notes=f"Dispute opened by {user.email}.",
         )
 
-        # 6. Log structured system event metrics
         logger.info(
-            "Dispute instance %s initiated for Booking %s",
+            "Dispute %s created.",
             dispute.id,
-            booking.id,
             extra={
+                "booking": str(booking.id),
                 "opened_by": str(user.id),
-                "against_user": str(against_user.id),
-                "amount": str(disputed_amount)
-            }
+            },
         )
 
-        # 7. Dispatch asynchronous background notifications
-        transaction.on_commit(lambda: notify_dispute_opened(user=against_user, dispute=dispute))
+        transaction.on_commit(
+            lambda: notify_dispute_opened(
+                user=against_user,
+                dispute=dispute,
+            )
+        )
 
         return dispute
-
     @staticmethod
     @transaction.atomic
     def add_message(dispute_id, sender, message_text) -> DisputeMessage:

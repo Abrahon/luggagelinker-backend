@@ -31,8 +31,17 @@ from .serializers import (
     DisputeEvidenceSerializer,
     AdminDisputeSerializer
 )
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Q
+from rest_framework import generics, status
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
+
 
 
 class DisputeErrorFormatMixin:
@@ -49,12 +58,22 @@ class DisputeErrorFormatMixin:
 # 👤 STANDARD USER ENDPOINTS (Senders & Travelers)
 # ==============================================================================
 
+
+
+
+# ==============================================================================
+# 👤 STANDARD USER ENDPOINTS (Senders & Travelers)
+# ==============================================================================
+
 class DisputeListCreateAPIView(DisputeErrorFormatMixin, generics.ListCreateAPIView):
     """
     GET: List all disputes the current user is involved in.
-    POST: Initialize a brand-new dispute filing.
+    POST: Initialize a brand-new dispute filing with optional multipart form-data evidence files.
     """
     permission_classes = [IsAuthenticated]
+    
+    # Enable Form-Data and File Upload Support alongside standard JSON
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         user = self.request.user
@@ -76,13 +95,17 @@ class DisputeListCreateAPIView(DisputeErrorFormatMixin, generics.ListCreateAPIVi
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        # Retrieve optional uploaded files (handles both 'evidence_files' and 'evidence' keys)
+        evidence_files = request.FILES.getlist('evidence_files') or request.FILES.getlist('evidence')
+
         try:
             dispute = DisputeService.create_dispute(
                 booking_id=serializer.validated_data["booking"].id,
                 user=request.user,
                 reason=serializer.validated_data["reason"],
                 description=serializer.validated_data.get("description", ""),
-                disputed_amount=serializer.validated_data["disputed_amount"]
+                disputed_amount=serializer.validated_data["disputed_amount"],
+                evidence_files=evidence_files  # Passed through to dispute service
             )
             
             output_serializer = DisputeSerializer(dispute, context=self.get_serializer_context())
@@ -99,6 +122,7 @@ class DisputeListCreateAPIView(DisputeErrorFormatMixin, generics.ListCreateAPIVi
             return Response({"detail": "Internal server error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+        
 class DisputeRetrieveAPIView(generics.RetrieveAPIView):
     """Retrieves full view tracking parameters for a specific dispute case file."""
     permission_classes = [IsAuthenticated]
@@ -151,12 +175,7 @@ class DisputeAddMessageAPIView(DisputeErrorFormatMixin, generics.CreateAPIView):
             return Response({"detail": "Internal server error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Q
-from rest_framework import generics, status
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
+
 
 class DisputeAddEvidenceAPIView(DisputeErrorFormatMixin, generics.CreateAPIView):
     """

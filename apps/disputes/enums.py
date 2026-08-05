@@ -41,8 +41,10 @@ class DisputeStatus(models.TextChoices):
 
 class DisputeReason(models.TextChoices):
     """Reason selected when opening a dispute."""
-    DAMAGED_CARGO = "DAMAGED_CARGO", "Items Damaged Upon Delivery"
-    MISSING_ITEMS = "MISSING_ITEMS", "Items Missing From Shipment"
+    DAMAGED_CARGO = "DAMAGED", "Items Damaged Upon Delivery"
+    LOST_PACKAGE = "LOST_PACKAGE", "Lost Package"
+    ITEM_MISSING = "ITEM_MISSING", "Missing Items"
+
     NO_SHOW = "NO_SHOW", "Traveler Failed to Meet/Deliver"
     DELAYED_DELIVERY = "DELAYED_DELIVERY", "Unacceptable Delivery Delay"
     OTHER = "OTHER", "Other Policy Violation"
