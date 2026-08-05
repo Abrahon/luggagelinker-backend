@@ -9,7 +9,24 @@ from .models import Review
 from .serializers import ReviewSerializer
 from django.db import transaction
 
+from datetime import timedelta
 import logging
+
+from django.db import transaction
+from django.utils import timezone
+from rest_framework import generics, permissions, status
+from rest_framework.response import Response
+
+from apps.notifications.services import (
+    notify_admin_new_report,
+    notify_report_resolved,
+    notify_user_warning,
+    notify_user_suspended,
+    notify_user_banned,
+)
+from .models import ActionTaken, Report, ReportStatus, UserModerationProfile
+
+
 from datetime import timedelta
 
 from django.db import transaction
@@ -129,141 +146,139 @@ class ReviewRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
 
 
 
-class ReportListCreateAPIView(generics.ListCreateAPIView):
 
+# ==========================================
+# USER REPORT VIEWS
+# ==========================================
+
+
+
+class ReportListCreateAPIView(generics.ListCreateAPIView):
+    """
+    GET  /api/reports/            -> List reports submitted by current user
+    POST /api/reports/            -> Submit a new report and notify admins
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-
         return (
-            Report.objects.filter(
-                reporter=self.request.user,
-            )
+            Report.objects.filter(reporter=self.request.user)
             .select_related(
                 "reporter__profile",
                 "reported_user__profile",
                 "assigned_admin",
                 "booking",
             )
-            .prefetch_related(
-                "evidence_files",
-            )
+            .prefetch_related("evidence_files")
             .order_by("-created_at")
         )
 
     def get_serializer_class(self):
-
         if self.request.method == "POST":
             return CreateReportSerializer
-
         return ReportSerializer
 
     def list(self, request, *args, **kwargs):
-
-        serializer = self.get_serializer(
-            self.get_queryset(),
-            many=True,
-        )
-
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
         return Response(
             {
                 "success": True,
                 "message": "Reports retrieved successfully.",
-                "count": self.get_queryset().count(),
+                "count": queryset.count(),
                 "data": serializer.data,
-            }
+            },
+            status=status.HTTP_200_OK,
         )
 
     def create(self, request, *args, **kwargs):
-
         serializer = self.get_serializer(
             data=request.data,
-            context={
-                "request": request,
-            },
+            context={"request": request},
         )
-
-        serializer.is_valid(
-            raise_exception=True,
-        )
-
+        serializer.is_valid(raise_exception=True)
         report = serializer.save()
+
+        # Trigger bulk admin notification (DB entry + WebSockets)
+        try:
+            notify_admin_new_report(report)
+        except Exception as e:
+            logger.error(f"Failed to send admin notification for report {report.id}: {str(e)}")
 
         return Response(
             {
                 "success": True,
                 "message": "Report submitted successfully.",
-                "data": ReportDetailSerializer(report).data,
+                "data": ReportDetailSerializer(report, context={"request": request}).data,
             },
             status=status.HTTP_201_CREATED,
         )
 
+
 class ReportDetailAPIView(generics.RetrieveAPIView):
-
+    """
+    GET /api/reports/<uuid:id>/ -> Fetch details of a report submitted by current user
+    """
     permission_classes = [permissions.IsAuthenticated]
-
     serializer_class = ReportDetailSerializer
-
     lookup_field = "id"
 
     def get_queryset(self):
-
         return (
-            Report.objects.filter(
-                reporter=self.request.user,
-            )
+            Report.objects.filter(reporter=self.request.user)
             .select_related(
                 "reporter__profile",
                 "reported_user__profile",
                 "assigned_admin",
                 "booking",
             )
-            .prefetch_related(
-                "evidence_files",
-            )
+            .prefetch_related("evidence_files")
         )
+
+
+# ==========================================
+# ADMIN REPORT VIEWS
+# ==========================================
 
 class AdminReportListAPIView(generics.ListAPIView):
-
+    """
+    GET /api/admin/reports/ -> List all reports
+    """
     permission_classes = [permissions.IsAdminUser]
-
     serializer_class = ReportSerializer
 
-    queryset = (
-        Report.objects.select_related(
-            "reporter__profile",
-            "reported_user__profile",
-            "assigned_admin",
-            "booking",
+    def get_queryset(self):
+        return (
+            Report.objects.select_related(
+                "reporter__profile",
+                "reported_user__profile",
+                "assigned_admin",
+                "booking",
+            )
+            .prefetch_related("evidence_files")
+            .order_by("-created_at")
         )
-        .prefetch_related(
-            "evidence_files",
-        )
-        .order_by("-created_at")
-    )
 
     def list(self, request, *args, **kwargs):
-
-        serializer = self.get_serializer(
-            self.get_queryset(),
-            many=True,
-        )
-
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
         return Response(
             {
                 "success": True,
                 "message": "Reports retrieved successfully.",
-                "count": self.get_queryset().count(),
+                "count": queryset.count(),
                 "data": serializer.data,
-            }
+            },
+            status=status.HTTP_200_OK,
         )
 
+
 class AdminReportDetailAPIView(generics.RetrieveAPIView):
-
+    """
+    GET /api/admin/reports/<uuid:id>/ -> Fetch report details for admins
+    """
     permission_classes = [permissions.IsAdminUser]
-
     serializer_class = ReportDetailSerializer
-
     lookup_field = "id"
 
     queryset = (
@@ -273,109 +288,101 @@ class AdminReportDetailAPIView(generics.RetrieveAPIView):
             "assigned_admin",
             "booking",
         )
-        .prefetch_related(
-            "evidence_files",
-        )
+        .prefetch_related("evidence_files")
     )
+
 
 class AdminResolveReportAPIView(generics.GenericAPIView):
-
+    """
+    PATCH /api/admin/reports/<uuid:id>/resolve/
+    Resolves/rejects report, applies moderation actions, and triggers notification alerts.
+    """
     permission_classes = [permissions.IsAdminUser]
-
     serializer_class = AdminResolveReportSerializer
-
-    queryset = Report.objects.select_related(
-        "reported_user",
-    )
-
     lookup_field = "id"
+
+    def get_queryset(self):
+        return Report.objects.select_related("reported_user", "reporter")
 
     @transaction.atomic
     def patch(self, request, *args, **kwargs):
-
         report = self.get_object()
-
-        serializer = self.get_serializer(
-            data=request.data,
-        )
-
-        serializer.is_valid(
-            raise_exception=True,
-        )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
         data = serializer.validated_data
-
-        moderation, _ = UserModerationProfile.objects.get_or_create(
-            user=report.reported_user,
+        moderation, _ = UserModerationProfile.objects.select_for_update().get_or_create(
+            user=report.reported_user
         )
 
+        # 1. Update report state
         report.status = data["status"]
-
         report.is_valid = data["is_valid"]
-
         report.action_taken = data["action_taken"]
-
-        report.admin_notes = data.get(
-            "admin_notes",
-            "",
-        )
-
+        report.admin_notes = data.get("admin_notes", "")
         report.assigned_admin = request.user
 
-        if report.status in [
-            ReportStatus.RESOLVED,
-            ReportStatus.REJECTED,
-        ]:
+        if report.status in [ReportStatus.RESOLVED, ReportStatus.REJECTED]:
             report.resolved_at = timezone.now()
 
-        if report.is_valid:
+        suspension_days = None
 
+        # 2. Update target user moderation metrics if report is valid
+        if report.is_valid:
             moderation.valid_reports += 1
 
-            moderation.trust_score = data.get(
-                "trust_score",
-                moderation.trust_score,
-            )
+            if "trust_score" in data:
+                moderation.trust_score = data["trust_score"]
 
             action = data["action_taken"]
 
             if action == ActionTaken.WARNING:
-
                 moderation.warning_count += 1
 
             elif action == ActionTaken.SUSPEND:
-
-                days = data.get(
-                    "suspension_days",
-                    7,
-                )
-
+                suspension_days = data.get("suspension_days", 7)
                 moderation.is_suspended = True
-
-                moderation.suspended_until = (
-                    timezone.now() +
-                    timedelta(days=days)
-                )
+                moderation.suspended_until = timezone.now() + timedelta(days=suspension_days)
 
             elif action == ActionTaken.PERMANENT_BAN:
-
                 moderation.is_banned = True
-
                 moderation.banned_at = timezone.now()
+                moderation.ban_reason = data.get("ban_reason", "")
 
-                moderation.ban_reason = data.get(
-                    "ban_reason",
-                    "",
-                )
+                # Revoke user access immediately
+                report.reported_user.is_active = False
+                report.reported_user.save(update_fields=["is_active"])
 
         moderation.save()
-
         report.save()
+
+        # 3. Dispatch Notifications
+        try:
+            # Notify reporter of review decision
+            if report.status in [ReportStatus.RESOLVED, ReportStatus.REJECTED]:
+                notify_report_resolved(report)
+
+            # Notify reported user based on action taken
+            if report.is_valid:
+                action = report.action_taken
+
+                if action == ActionTaken.WARNING:
+                    notify_user_warning(report)
+
+                elif action == ActionTaken.SUSPEND:
+                    notify_user_suspended(report, days=suspension_days or 7)
+
+                elif action == ActionTaken.PERMANENT_BAN:
+                    notify_user_banned(report)
+
+        except Exception as e:
+            logger.error(f"Error dispatching notifications for report {report.id}: {str(e)}")
 
         return Response(
             {
                 "success": True,
                 "message": "Report updated successfully.",
-                "data": ReportDetailSerializer(report).data,
-            }
+                "data": ReportDetailSerializer(report, context={"request": request}).data,
+            },
+            status=status.HTTP_200_OK,
         )

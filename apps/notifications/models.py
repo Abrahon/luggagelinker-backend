@@ -17,6 +17,8 @@ class NotificationType(models.TextChoices):
     WALLET = "WALLET", "Wallet"
     REVIEW = "REVIEW", "Review"
     CHAT = "CHAT", "Chat"
+    REPORT = "REPORT", "Report"
+    MODERATION = "MODERATION", "Moderation"
     SYSTEM = "SYSTEM", "System"
 
 

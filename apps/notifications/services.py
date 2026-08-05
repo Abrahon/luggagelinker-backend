@@ -1,4 +1,3 @@
-
 """
 ==========================================================
 NOTIFICATION SERVICES
@@ -10,20 +9,21 @@ Every module uses this service to ensure uniform message distribution.
 
 import logging
 from django.db import transaction
-from .models import Notification, NotificationType
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.contrib.auth import get_user_model
 
+from .models import Notification, NotificationType
+
+User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-
-# live notification using  websocket
+# Live notification using WebSocket
 def send_notification_ws(notification):
     """
     Sends notification to the user's websocket.
     """
-
     channel_layer = get_channel_layer()
 
     async_to_sync(channel_layer.group_send)(
@@ -47,6 +47,7 @@ def send_notification_ws(notification):
         },
     )
 
+
 # ==========================================================
 # CREATE SINGLE NOTIFICATION
 # ==========================================================
@@ -61,9 +62,8 @@ def create_notification(
     action_url=None,
 ):
     """
-    Create a database-backed notification entry.
+    Create a database-backed notification entry and send WebSocket message.
     """
-
     notification = Notification.objects.create(
         user=user,
         title=title,
@@ -83,10 +83,10 @@ def create_notification(
 
     return notification
 
+
 # ==========================================================
 # CREATE BULK NOTIFICATIONS
 # ==========================================================
-
 @transaction.atomic
 def create_bulk_notifications(
     *,
@@ -100,7 +100,6 @@ def create_bulk_notifications(
     """
     Create notifications optimized for multiple users simultaneously.
     """
-
     notifications = [
         Notification(
             user=user,
@@ -115,7 +114,7 @@ def create_bulk_notifications(
 
     Notification.objects.bulk_create(notifications)
 
-    # Refresh objects so they contain generated IDs (recommended)
+    # Refresh objects to obtain generated IDs
     notifications = list(
         Notification.objects.filter(
             user__in=users,
@@ -136,19 +135,10 @@ def create_bulk_notifications(
 
 
 # ==========================================================
-# CREATE Chat NOTIFICATIONS
-# ==========================================================
-
-
-
-# ==========================================================
 # MARK AS READ
 # ==========================================================
 @transaction.atomic
 def mark_notification_as_read(notification):
-    """
-    Mark a targeted notification instance as read.
-    """
     if notification.is_read:
         return notification
 
@@ -159,14 +149,8 @@ def mark_notification_as_read(notification):
     return notification
 
 
-# ==========================================================
-# MARK ALL AS READ
-# ==========================================================
 @transaction.atomic
 def mark_all_notifications_as_read(user):
-    """
-    Mark all unread active notifications for a specific user as read.
-    """
     updated = Notification.objects.filter(
         user=user,
         is_active=True,
@@ -178,11 +162,9 @@ def mark_all_notifications_as_read(user):
 
 
 # ==========================================================
-# DISPUTE MODULE INTEGRATIONS ⚖️ (Standalone Functions)
+# DISPUTE MODULE INTEGRATIONS ⚖️
 # ==========================================================
-
 def notify_dispute_opened(*, user, dispute):
-    """Notifies a user that a dispute case file has been formally logged against them."""
     return create_notification(
         user=user,
         title="Dispute Case File Opened ⚠️",
@@ -194,7 +176,6 @@ def notify_dispute_opened(*, user, dispute):
 
 
 def notify_dispute_evidence_requested(*, user, dispute):
-    """Alerts a sender or traveler that administration needs documents or upload proofs."""
     return create_notification(
         user=user,
         title="Evidence Action Required 📋",
@@ -206,7 +187,6 @@ def notify_dispute_evidence_requested(*, user, dispute):
 
 
 def notify_dispute_resolved(*, user, dispute, resolution_type):
-    """Dispatches formal notice detailing the final arbitration decision on a claim."""
     return create_notification(
         user=user,
         title="Dispute Verdict Rendered ⚖️",
@@ -218,15 +198,14 @@ def notify_dispute_resolved(*, user, dispute, resolution_type):
 
 
 def notify_dispute_resolution(dispute):
-    """
-    New function: Dispatches resolution alerts to both parties at the same time.
-    Perfect for clean importing within AdminDisputeService.
-    """
     booking = dispute.booking
-    resolution_label = dispute.get_resolution_display() if hasattr(dispute, 'get_resolution_display') else dispute.resolution
+    resolution_label = (
+        dispute.get_resolution_display()
+        if hasattr(dispute, "get_resolution_display")
+        else dispute.resolution
+    )
     message_text = f"Dispute case #{dispute.id} has been resolved via: {resolution_label}."
 
-    # Notify Payer / Sender
     create_notification(
         user=booking.sender,
         title="Dispute Verdict Rendered ⚖️",
@@ -235,7 +214,6 @@ def notify_dispute_resolution(dispute):
         object_id=dispute.id,
         action_url=f"/disputes/{dispute.id}/",
     )
-    # Notify Receiver / Traveler
     return create_notification(
         user=booking.traveler,
         title="Dispute Verdict Rendered ⚖️",
@@ -247,10 +225,10 @@ def notify_dispute_resolution(dispute):
 
 
 # ==========================================================
-# WALLET CREDITED
+# WALLET & WITHDRAWALS
 # ==========================================================
 def notify_wallet_credited(*, user, booking, amount):
-    tracking = getattr(booking, 'tracking_number', booking.id)
+    tracking = getattr(booking, "tracking_number", booking.id)
     return create_notification(
         user=user,
         title="Wallet Credited",
@@ -261,9 +239,6 @@ def notify_wallet_credited(*, user, booking, amount):
     )
 
 
-# ==========================================================
-# WITHDRAWAL PIPELINES
-# ==========================================================
 def notify_withdrawal_requested(*, user, withdrawal):
     return create_notification(
         user=user,
@@ -297,11 +272,8 @@ def notify_withdrawal_rejected(*, user, withdrawal):
     )
 
 
-# ==========================================================
-# REFUND COMPLETED
-# ==========================================================
 def notify_refund_completed(*, user, booking, amount):
-    tracking = getattr(booking, 'tracking_number', booking.id)
+    tracking = getattr(booking, "tracking_number", booking.id)
     return create_notification(
         user=user,
         title="Refund Completed",
@@ -313,17 +285,18 @@ def notify_refund_completed(*, user, booking, amount):
 
 
 # ==========================================================
-# REVIEW RECEIVED
+# REVIEWS & REPORTS 🚨
 # ==========================================================
 @transaction.atomic
 def notify_review_received(*, user, review):
-    """
-    Notify traveler that a new review has been received.
-    """
     sender = review.sender
-    sender_name = f"{sender.get_full_name()}".strip() if hasattr(sender, 'get_full_name') else ""
+    sender_name = (
+        f"{sender.get_full_name()}".strip()
+        if hasattr(sender, "get_full_name")
+        else ""
+    )
     if not sender_name:
-        sender_name = getattr(sender, 'username', sender.email)
+        sender_name = getattr(sender, "username", sender.email)
 
     return create_notification(
         user=user,
@@ -335,3 +308,75 @@ def notify_review_received(*, user, review):
     )
 
 
+def notify_admin_new_report(report):
+    """
+    Notify every active staff/admin when a new user report is submitted.
+    """
+    admins = User.objects.filter(is_staff=True, is_active=True)
+    if not admins.exists():
+        return []
+
+    return create_bulk_notifications(
+        users=admins,
+        title="New User Report 🚨",
+        message=f"{report.reporter.email} reported {report.reported_user.email}.",
+        notification_type=NotificationType.REPORT,
+        object_id=report.id,
+        action_url=f"/admin/reports/{report.id}",
+    )
+
+
+def notify_report_resolved(report):
+    """
+    Notify the reporter when admin reviews/resolves their report.
+    """
+    return create_notification(
+        user=report.reporter,
+        title="Report Updated",
+        message=f"Your report against {report.reported_user.email} has been reviewed.",
+        notification_type=NotificationType.REPORT,
+        object_id=report.id,
+        action_url=f"/reports/{report.id}",
+    )
+
+
+def notify_user_warning(report):
+    """
+    Notify the reported user if a warning was issued to their account.
+    """
+    return create_notification(
+        user=report.reported_user,
+        title="Warning Issued ⚠️",
+        message="A warning has been issued to your account after reviewing a report.",
+        notification_type=NotificationType.REPORT,
+        object_id=report.id,
+        action_url="/profile",
+    )
+
+
+def notify_user_suspended(report, days):
+    """
+    Notify the reported user about account suspension.
+    """
+    return create_notification(
+        user=report.reported_user,
+        title="Account Suspended 🛑",
+        message=f"Your account has been suspended for {days} days.",
+        notification_type=NotificationType.REPORT,
+        object_id=report.id,
+        action_url="/profile",
+    )
+
+
+def notify_user_banned(report):
+    """
+    Notify the reported user about permanent ban.
+    """
+    return create_notification(
+        user=report.reported_user,
+        title="Account Permanently Banned ❌",
+        message="Your account has been permanently banned for violating platform policies.",
+        notification_type=NotificationType.REPORT,
+        object_id=report.id,
+        action_url="/support",
+    )
