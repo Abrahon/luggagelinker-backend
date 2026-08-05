@@ -73,50 +73,30 @@ def update_traveler_rating(
 # RECALCULATE TRAVELER RATING
 # ==========================================================
 
+from django.db.models import Avg, Count, Sum
+
 @transaction.atomic
-def recalculate_traveler_rating(
-    *,
-    traveler,
-):
+def recalculate_traveler_rating(*, traveler):
     """
-    Recalculate rating from database.
-
-    Useful if:
-        - Review updated
-        - Review deleted
-        - Admin moderation
+    Recalculate rating from database using DB aggregates.
     """
-
     from .models import Review
 
     profile = traveler.profile
 
-    reviews = Review.objects.filter(
-        traveler=traveler,
+    stats = Review.objects.filter(traveler=traveler).aggregate(
+        total_reviews=Count("id"),
+        total_rating=Sum("rating"),
+        avg_rating=Avg("rating"),
     )
 
-    total_reviews = reviews.count()
+    total_reviews = stats["total_reviews"] or 0
+    total_rating = stats["total_rating"] or 0
+    avg_rating = stats["avg_rating"] or 0.0
 
-    if total_reviews == 0:
-
-        profile.total_reviews = 0
-        profile.total_rating = 0
-        profile.average_rating = Decimal("0.00")
-
-    else:
-
-        total_rating = sum(
-            review.rating
-            for review in reviews
-        )
-
-        profile.total_reviews = total_reviews
-        profile.total_rating = total_rating
-        profile.average_rating = round(
-            Decimal(total_rating) /
-            Decimal(total_reviews),
-            2,
-        )
+    profile.total_reviews = total_reviews
+    profile.total_rating = total_rating
+    profile.average_rating = round(Decimal(str(avg_rating)), 2)
 
     profile.save(
         update_fields=[
@@ -126,13 +106,9 @@ def recalculate_traveler_rating(
         ]
     )
 
-    logger.info(
-        f"Traveler rating recalculated | "
-        f"Traveler={traveler.id}"
-    )
+    logger.info(f"Traveler rating recalculated | Traveler={traveler.id}")
 
     return profile
-
 
 # ==========================================================
 # GET RATING SUMMARY

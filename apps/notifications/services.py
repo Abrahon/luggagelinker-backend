@@ -308,6 +308,32 @@ def notify_review_received(*, user, review):
     )
 
 
+
+
+@transaction.atomic
+def notify_review_updated(*, user, review):
+    """
+    Notify traveler that an existing review was edited by the sender.
+    """
+    sender = review.sender
+    sender_name = (
+        f"{sender.get_full_name()}".strip()
+        if hasattr(sender, "get_full_name")
+        else ""
+    )
+    if not sender_name:
+        sender_name = getattr(sender, "username", sender.email)
+
+    return create_notification(
+        user=user,
+        title="Review Updated 📝",
+        message=f"{sender_name} updated their review score to {review.rating}★.",
+        notification_type=NotificationType.REVIEW,
+        object_id=str(review.id),
+        action_url=f"/reviews/{review.id}/",
+    )
+
+
 def notify_admin_new_report(report):
     """
     Notify every active staff/admin when a new user report is submitted.
