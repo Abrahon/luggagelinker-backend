@@ -101,7 +101,7 @@ class ReviewSerializer(serializers.ModelSerializer):
 
 
 
-from .models import ReportEvidence
+
 
 
 class ReportEvidenceSerializer(serializers.ModelSerializer):
@@ -122,9 +122,7 @@ class ReportEvidenceSerializer(serializers.ModelSerializer):
         return None
 
 
-from rest_framework import serializers
 
-from .models import UserModerationProfile
 
 
 class UserModerationProfileSerializer(serializers.ModelSerializer):
@@ -148,8 +146,6 @@ class UserModerationProfileSerializer(serializers.ModelSerializer):
 
 
 
-
-
 class CreateReportSerializer(serializers.ModelSerializer):
 
     evidence_files = serializers.ListField(
@@ -170,7 +166,6 @@ class CreateReportSerializer(serializers.ModelSerializer):
         ]
 
     def validate_description(self, value):
-
         value = value.strip()
 
         if len(value) < 15:
@@ -181,33 +176,24 @@ class CreateReportSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-
         request = self.context["request"]
-
         reporter = request.user
-
         booking = attrs.get("booking")
-
         reported_user = attrs["reported_user"]
 
         if reporter == reported_user:
             raise serializers.ValidationError(
-                {
-                    "reported_user":
-                    "You cannot report yourself."
-                }
+                {"reported_user": "You cannot report yourself."}
             )
 
         if booking:
-
             if booking.status not in [
                 BookingStatus.DELIVERED,
                 BookingStatus.COMPLETED,
             ]:
                 raise serializers.ValidationError(
                     {
-                        "booking":
-                        "Reports can only be submitted after the package has been delivered."
+                        "booking": "Reports can only be submitted after the package has been delivered."
                     }
                 )
 
@@ -216,10 +202,7 @@ class CreateReportSerializer(serializers.ModelSerializer):
                 booking.traveler,
             ]:
                 raise serializers.ValidationError(
-                    {
-                        "booking":
-                        "You are not associated with this booking."
-                    }
+                    {"booking": "You are not associated with this booking."}
                 )
 
             if reported_user not in [
@@ -228,33 +211,18 @@ class CreateReportSerializer(serializers.ModelSerializer):
             ]:
                 raise serializers.ValidationError(
                     {
-                        "reported_user":
-                        "Reported user is not associated with this booking."
+                        "reported_user": "Reported user is not associated with this booking."
                     }
                 )
 
-            if (
-                reporter == booking.sender
-                and
-                reported_user != booking.traveler
-            ):
+            if reporter == booking.sender and reported_user != booking.traveler:
                 raise serializers.ValidationError(
-                    {
-                        "reported_user":
-                        "You can only report the assigned traveler."
-                    }
+                    {"reported_user": "You can only report the assigned traveler."}
                 )
 
-            if (
-                reporter == booking.traveler
-                and
-                reported_user != booking.sender
-            ):
+            if reporter == booking.traveler and reported_user != booking.sender:
                 raise serializers.ValidationError(
-                    {
-                        "reported_user":
-                        "You can only report the package sender."
-                    }
+                    {"reported_user": "You can only report the package sender."}
                 )
 
         exists = Report.objects.filter(
@@ -272,36 +240,40 @@ class CreateReportSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        # 1. Pop validated files if DRF parsed them
+        files = validated_data.pop("evidence_files", [])
 
-        files = validated_data.pop(
-            "evidence_files",
-            [],
-        )
+        # 2. FALLBACK: If 'files' is empty, extract directly from request.FILES
+        request = self.context.get("request")
+        if not files and request and hasattr(request, "FILES"):
+            files = request.FILES.getlist("evidence_files")
 
-        reporter = self.context["request"].user
+        reporter = request.user
 
         report = Report.objects.create(
             reporter=reporter,
             **validated_data,
         )
 
-        for file in files:
-
-            ReportEvidence.objects.create(
+        # 3. Create evidence objects
+        evidence_objects = [
+            ReportEvidence(
                 report=report,
                 file=file,
             )
+            for file in files
+        ]
+        
+        if evidence_objects:
+            ReportEvidence.objects.bulk_create(evidence_objects)
 
-        moderation, _ = (
-            UserModerationProfile.objects.get_or_create(
-                user=report.reported_user,
-            )
+        # 4. Update moderation profile
+        moderation, _ = UserModerationProfile.objects.get_or_create(
+            user=report.reported_user,
         )
 
         moderation.reports_received += 1
-
         moderation.last_reported_at = timezone.now()
-
         moderation.save(
             update_fields=[
                 "reports_received",
@@ -310,10 +282,6 @@ class CreateReportSerializer(serializers.ModelSerializer):
         )
 
         return report
-
-
-
-
 
 
 class ReportSerializer(serializers.ModelSerializer):
@@ -340,6 +308,8 @@ class ReportSerializer(serializers.ModelSerializer):
             "reported_user_name",
             "created_at",
         ]
+
+
 
 class ReportDetailSerializer(serializers.ModelSerializer):
 

@@ -1198,7 +1198,6 @@ class SenderRecentBookingSerializer(serializers.ModelSerializer):
 # delivery history
 
 
-
 class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
     tracking_number = serializers.CharField(read_only=True)
 
@@ -1206,6 +1205,8 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
         source="package.title",
         read_only=True,
     )
+
+    traveler = serializers.PrimaryKeyRelatedField(read_only=True)  # Exposes traveler ID
 
     traveler_name = serializers.SerializerMethodField()
 
@@ -1222,6 +1223,7 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
             "id",
             "tracking_number",
             "package_title",
+            "traveler",           # <--- ADD THIS HERE
             "traveler_name",
             "status",
             "payment_status",
@@ -1233,6 +1235,9 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
         ]
 
     def get_traveler_name(self, obj):
+        if not obj.traveler:
+            return "N/A"
+
         profile = getattr(obj.traveler, "profile", None)
 
         if profile and profile.full_name:
@@ -1246,12 +1251,12 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
         ).first()
 
         if image:
-            return image.image
+            return image.image.url if hasattr(image.image, 'url') else str(image.image)
 
         image = obj.package.images.first()
 
         if image:
-            return image.image
+            return image.image.url if hasattr(image.image, 'url') else str(image.image)
 
         return None
 
@@ -1266,8 +1271,6 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
 
     def get_escrow_status(self, obj):
         return WalletService.get_escrow_status(obj)
-
-
 
 
 class SenderBookingStatsSerializer(serializers.Serializer):

@@ -145,6 +145,7 @@ class ReviewRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
 # ==========================================
 
 
+from rest_framework.parsers import MultiPartParser, FormParser
 
 class ReportListCreateAPIView(generics.ListCreateAPIView):
     """
@@ -152,6 +153,7 @@ class ReportListCreateAPIView(generics.ListCreateAPIView):
     POST /api/reports/            -> Submit a new report and notify admins
     """
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
         return (
@@ -209,9 +211,7 @@ class ReportListCreateAPIView(generics.ListCreateAPIView):
 
 
 class ReportDetailAPIView(generics.RetrieveAPIView):
-    """
-    GET /api/reports/<uuid:id>/ -> Fetch details of a report submitted by current user
-    """
+
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = ReportDetailSerializer
     lookup_field = "id"
