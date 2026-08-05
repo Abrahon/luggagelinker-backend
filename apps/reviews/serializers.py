@@ -1,5 +1,21 @@
 from rest_framework import serializers
 from .models import Review
+
+from django.db import transaction
+from django.utils import timezone
+from .models import (
+    ReportStatus,
+    ActionTaken,
+)
+
+
+from apps.bookings.models import BookingStatus
+
+from .models import (
+    Report,
+    ReportEvidence,
+    UserModerationProfile,
+)
 # Assuming your Booking model is accessible like this, adjust if necessary
 # from bookings.models import Booking 
 
@@ -82,70 +98,76 @@ class ReviewSerializer(serializers.ModelSerializer):
 
 
 
+
 from rest_framework import serializers
-from django.utils import timezone
 
-from .models import Report
-from apps.bookings.models import Booking
+from .models import ReportEvidence
 
 
-class ReportSerializer(serializers.ModelSerializer):
-    reporter_email = serializers.ReadOnlyField(source="reporter.email")
-    reported_user_email = serializers.ReadOnlyField(source="reported_user.email")
-    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
+class ReportEvidenceSerializer(serializers.ModelSerializer):
+
+    file = serializers.SerializerMethodField()
 
     class Meta:
-        model = Report
+        model = ReportEvidence
         fields = [
             "id",
-            "reporter",
-            "reporter_email",
-            "reported_user",
-            "reported_user_email",
-            "booking",
-            "reason",
-            "reason_display",
-            "description",
-            "status",
-            "status_display",
-            "assigned_admin",
-            "admin_notes",
-            "resolved_at",
-            "created_at",
-            "updated_at",
+            "file",
+            "uploaded_at",
         ]
-        read_only_fields = (
-            "id",
-            "reporter",
-            "status",
-            "assigned_admin",
-            "admin_notes",
-            "resolved_at",
-            "created_at",
-            "updated_at",
-        )
+
+    def get_file(self, obj):
+        if obj.file:
+            return obj.file.url
+        return None
+
+
+from rest_framework import serializers
+
+from .models import UserModerationProfile
+
+
+class UserModerationProfileSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = UserModerationProfile
+
+        fields = [
+            "reports_received",
+            "valid_reports",
+            "warning_count",
+            "trust_score",
+            "is_suspended",
+            "suspended_until",
+            "is_banned",
+            "banned_at",
+            "ban_reason",
+        ]
+
+        read_only_fields = fields
 
 
 
-from apps.bookings.models import BookingStatus
-from .models import Report
 
 
 class CreateReportSerializer(serializers.ModelSerializer):
 
+    evidence_files = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+        write_only=True,
+    )
+
     class Meta:
         model = Report
-        fields = (
+
+        fields = [
             "reported_user",
             "booking",
             "reason",
             "description",
-        )
-
-    # -----------------------------------------------------
-    # Description Validation
-    # -----------------------------------------------------
+            "evidence_files",
+        ]
 
     def validate_description(self, value):
 
@@ -153,122 +175,255 @@ class CreateReportSerializer(serializers.ModelSerializer):
 
         if len(value) < 15:
             raise serializers.ValidationError(
-                "Please provide a detailed description (minimum 15 characters)."
+                "Please provide at least 15 characters."
             )
 
         return value
-
-    # -----------------------------------------------------
-    # Main Validation
-    # -----------------------------------------------------
 
     def validate(self, attrs):
 
         request = self.context["request"]
 
         reporter = request.user
-        reported_user = attrs["reported_user"]
+
         booking = attrs.get("booking")
 
-        # ------------------------------------------
-        # Cannot report yourself
-        # ------------------------------------------
+        reported_user = attrs["reported_user"]
 
         if reporter == reported_user:
             raise serializers.ValidationError(
                 {
-                    "reported_user": "You cannot report yourself."
+                    "reported_user":
+                    "You cannot report yourself."
                 }
             )
 
-        # ------------------------------------------
-        # Booking validations
-        # ------------------------------------------
-
         if booking:
 
-            # Prevent reports only for pending bookings
-            if booking.status == BookingStatus.PENDING:
+            if booking.status not in [
+                BookingStatus.DELIVERED,
+                BookingStatus.COMPLETED,
+            ]:
                 raise serializers.ValidationError(
                     {
-                        "booking": (
-                            "You can report this booking only after it has been accepted."
-                        )
+                        "booking":
+                        "Reports can only be submitted after the package has been delivered."
                     }
                 )
 
-            # Reporter must belong to booking
-            if reporter not in [booking.sender, booking.traveler]:
+            if reporter not in [
+                booking.sender,
+                booking.traveler,
+            ]:
                 raise serializers.ValidationError(
                     {
-                        "booking": (
-                            "You are not associated with this booking."
-                        )
+                        "booking":
+                        "You are not associated with this booking."
                     }
                 )
 
-            # Reported user must belong to booking
             if reported_user not in [
                 booking.sender,
                 booking.traveler,
             ]:
                 raise serializers.ValidationError(
                     {
-                        "reported_user": (
-                            "Reported user is not part of this booking."
-                        )
+                        "reported_user":
+                        "Reported user is not associated with this booking."
                     }
                 )
 
-            # Sender can report only traveler
             if (
                 reporter == booking.sender
-                and reported_user != booking.traveler
+                and
+                reported_user != booking.traveler
             ):
                 raise serializers.ValidationError(
                     {
-                        "reported_user": (
-                            "You can only report the assigned traveler."
-                        )
+                        "reported_user":
+                        "You can only report the assigned traveler."
                     }
                 )
 
-            # Traveler can report only sender
             if (
                 reporter == booking.traveler
-                and reported_user != booking.sender
+                and
+                reported_user != booking.sender
             ):
                 raise serializers.ValidationError(
                     {
-                        "reported_user": (
-                            "You can only report the package sender."
-                        )
+                        "reported_user":
+                        "You can only report the package sender."
                     }
                 )
 
-        # ------------------------------------------
-        # Duplicate report check
-        # ------------------------------------------
-
-        already_exists = Report.objects.filter(
+        exists = Report.objects.filter(
             reporter=reporter,
             reported_user=reported_user,
             booking=booking,
         ).exists()
 
-        if already_exists:
+        if exists:
             raise serializers.ValidationError(
                 "You have already submitted a report for this booking."
             )
 
         return attrs
 
-    # -----------------------------------------------------
-    # Create
-    # -----------------------------------------------------
-
+    @transaction.atomic
     def create(self, validated_data):
 
-        validated_data["reporter"] = self.context["request"].user
+        files = validated_data.pop(
+            "evidence_files",
+            [],
+        )
 
-        return super().create(validated_data)
+        reporter = self.context["request"].user
+
+        report = Report.objects.create(
+            reporter=reporter,
+            **validated_data,
+        )
+
+        for file in files:
+
+            ReportEvidence.objects.create(
+                report=report,
+                file=file,
+            )
+
+        moderation, _ = (
+            UserModerationProfile.objects.get_or_create(
+                user=report.reported_user,
+            )
+        )
+
+        moderation.reports_received += 1
+
+        moderation.last_reported_at = timezone.now()
+
+        moderation.save(
+            update_fields=[
+                "reports_received",
+                "last_reported_at",
+            ]
+        )
+
+        return report
+
+
+
+
+
+
+class ReportSerializer(serializers.ModelSerializer):
+
+    reporter_name = serializers.CharField(
+        source="reporter.profile.full_name",
+        read_only=True,
+    )
+
+    reported_user_name = serializers.CharField(
+        source="reported_user.profile.full_name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = Report
+
+        fields = [
+            "id",
+            "reason",
+            "status",
+            "action_taken",
+            "reporter_name",
+            "reported_user_name",
+            "created_at",
+        ]
+
+class ReportDetailSerializer(serializers.ModelSerializer):
+
+    reporter_name = serializers.CharField(
+        source="reporter.profile.full_name",
+        read_only=True,
+    )
+
+    reported_user_name = serializers.CharField(
+        source="reported_user.profile.full_name",
+        read_only=True,
+    )
+
+    evidence_files = ReportEvidenceSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    moderation = UserModerationProfileSerializer(
+        source="reported_user.moderation_profile",
+        read_only=True,
+    )
+
+    class Meta:
+
+        model = Report
+
+        fields = [
+            "id",
+            "reporter_name",
+            "reported_user_name",
+            "booking",
+            "reason",
+            "description",
+            "status",
+            "is_valid",
+            "action_taken",
+            "admin_notes",
+            "evidence_files",
+            "moderation",
+            "resolved_at",
+            "created_at",
+            "updated_at",
+        ]
+
+
+
+
+
+class AdminResolveReportSerializer(serializers.Serializer):
+
+    status = serializers.ChoiceField(
+        choices=[
+            ReportStatus.UNDER_REVIEW,
+            ReportStatus.RESOLVED,
+            ReportStatus.REJECTED,
+            ReportStatus.ESCALATED,
+        ]
+    )
+
+    is_valid = serializers.BooleanField()
+
+    action_taken = serializers.ChoiceField(
+        choices=ActionTaken.choices,
+        default=ActionTaken.NONE,
+    )
+
+    trust_score = serializers.IntegerField(
+        required=False,
+        min_value=0,
+        max_value=100,
+    )
+
+    suspension_days = serializers.IntegerField(
+        required=False,
+        min_value=1,
+    )
+
+    admin_notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+
+    ban_reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
