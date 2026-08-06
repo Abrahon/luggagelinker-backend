@@ -1,28 +1,3 @@
-# from django.core.mail import send_mail
-# from django.conf import settings
-
-
-# def send_pickup_pin_email(user_email, booking, pickup_pin):
-#     subject = "Your Booking is Confirmed - Pickup PIN"
-    
-#     message = f"""
-# Your booking is confirmed.
-
-# Booking ID: {booking.tracking_number}
-# Pickup PIN: {pickup_pin}
-
-# Give this PIN to the traveler during handover.
-# """
-
-#     send_mail(
-#         subject,
-#         message,
-#         settings.DEFAULT_FROM_EMAIL,
-#         [user_email],
-#         fail_silently=False,
-#     )
-
-
 import logging
 from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
@@ -30,14 +5,23 @@ from django.utils.html import strip_tags
 
 logger = logging.getLogger(__name__)
 
+
 def send_pickup_pin_email(user_email, booking, pickup_pin):
     """
     Sends a high-converting, professional transactional HTML email containing 
     the security verification PIN to the booking sender.
     """
     subject = f"🔒 Booking Confirmed - Pickup PIN for #{booking.tracking_number}"
-    from_email = settings.DEFAULT_FROM_EMAIL
+    from_email = f"Luggage Linker <{settings.DEFAULT_FROM_EMAIL}>"
     to_emails = [user_email]
+
+    # Resolve personalized greeting name with fallback
+    recipient = booking.sender
+    recipient_name = (
+        getattr(recipient, "first_name", "").strip() 
+        or getattr(recipient, "get_full_name", lambda: "")().strip() 
+        or "there"
+    )
 
     # --- HTML Visual Component Template Layout ---
     html_content = f"""
@@ -61,7 +45,7 @@ def send_pickup_pin_email(user_email, booking, pickup_pin):
                         <tr>
                             <td style="padding: 30px 40px;">
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
-                                    Hello,
+                                    Hello {recipient_name},
                                 </p>
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
                                     Great news! Your escrow security payment was successfully cleared. Your delivery routing is officially locked and active.
@@ -126,8 +110,10 @@ def send_withdrawal_approved_email(user, withdrawal):
     approved by administration and is now processing via the Stripe settlement systems.
     """
     subject = f"💸 Withdrawal Approved & Initiated - Request #{withdrawal.id}"
-    from_email = settings.DEFAULT_FROM_EMAIL
+    from_email = f"Luggage Linker <{settings.DEFAULT_FROM_EMAIL}>"
     to_emails = [user.email]
+
+    user_name = getattr(user, "first_name", "").strip() or "there"
 
     html_content = f"""
     <!DOCTYPE html>
@@ -150,7 +136,7 @@ def send_withdrawal_approved_email(user, withdrawal):
                         <tr>
                             <td style="padding: 30px 40px;">
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
-                                    Hello {user.first_name or "there"},
+                                    Hello {user_name},
                                 </p>
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
                                     Great news! Your request to withdraw funds has been approved by our administration team and has been initiated via Stripe Connect.
@@ -221,9 +207,10 @@ def send_withdrawal_completed_email(user, withdrawal):
     that the payout funds have successfully cleared bank network settlement routing.
     """
     subject = f"✅ Funds Cleared Safely - Withdrawal #{withdrawal.id} Complete"
-    from_email = settings.DEFAULT_FROM_EMAIL
+    from_email = f"Luggage Linker <{settings.DEFAULT_FROM_EMAIL}>"
     to_emails = [user.email]
 
+    user_name = getattr(user, "first_name", "").strip() or "there"
     completed_time = withdrawal.completed_at.strftime("%b %d, %Y %H:%M") if withdrawal.completed_at else "Recently"
 
     html_content = f"""
@@ -247,7 +234,7 @@ def send_withdrawal_completed_email(user, withdrawal):
                         <tr>
                             <td style="padding: 30px 40px;">
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
-                                    Hello {user.first_name or "there"},
+                                    Hello {user_name},
                                 </p>
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
                                     Stripe has successfully confirmed clearing parameters with your banking network. Your funds are now officially delivered!
@@ -307,6 +294,7 @@ def send_withdrawal_completed_email(user, withdrawal):
     except Exception as e:
         logger.error(f"Failed to transmit withdrawal completed mail to user {user.email}: {str(e)}", exc_info=True)
 
+
 # send delivery pin email to receiver
 def send_delivery_pin_email(user_email, booking, delivery_pin):
     """
@@ -314,8 +302,16 @@ def send_delivery_pin_email(user_email, booking, delivery_pin):
     the security verification PIN to the booking receiver or sender for delivery confirmation.
     """
     subject = f"🔒 Package Arriving - Delivery PIN for #{booking.tracking_number}"
-    from_email = settings.DEFAULT_FROM_EMAIL
+    from_email = f"Luggage Linker <{settings.DEFAULT_FROM_EMAIL}>"
     to_emails = [user_email]
+
+    # Resolve personalized greeting name with fallback
+    recipient = booking.sender
+    recipient_name = (
+        getattr(recipient, "first_name", "").strip() 
+        or getattr(recipient, "get_full_name", lambda: "")().strip() 
+        or "there"
+    )
 
     # --- HTML Visual Component Template Layout ---
     html_content = f"""
@@ -339,7 +335,7 @@ def send_delivery_pin_email(user_email, booking, delivery_pin):
                         <tr>
                             <td style="padding: 30px 40px;">
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
-                                    Hello,
+                                    Hello {recipient_name},
                                 </p>
                                 <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
                                     Your package is officially on its way! The traveler has confirmed pickup and started transit. Here is your secure delivery pin required to claim your luggage.
@@ -362,7 +358,7 @@ def send_delivery_pin_email(user_email, booking, delivery_pin):
                                 <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #e8eaed; padding-top: 20px;">
                                     <tr>
                                         <td style="font-size: 13px; line-height: 20px; color: #70757a;">
-                                            <strong style="color: #d93025;">⚠️ Secure Collection Rule:</strong> Provide this PIN to your traveler **only** when they are handovers the physical luggage to you at the destination.
+                                            <strong style="color: #d93025;">⚠️ Secure Collection Rule:</strong> Provide this PIN to your traveler <strong>only</strong> when they are handing over the physical luggage to you at the destination.
                                         </td>
                                     </tr>
                                 </table>
@@ -397,5 +393,3 @@ def send_delivery_pin_email(user_email, booking, delivery_pin):
         logger.info(f"Successfully sent delivery pin notification to {user_email} for booking {booking.id}")
     except Exception as e:
         logger.error(f"Failed to transmit Delivery PIN mail to user {user_email}: {str(e)}", exc_info=True)
-
-

@@ -376,8 +376,6 @@ class CreateDisputeSerializer(serializers.ModelSerializer):
 # PLATFORM ADMINISTRATIVE MODERATION DISPUTE SERIALIZER
 # ==============================================================================
 
-
-
 class AdminDisputeSerializer(serializers.ModelSerializer):
     """
     Production serializer for Admin Dispute Management.

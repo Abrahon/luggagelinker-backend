@@ -218,14 +218,73 @@ class BookingService:
 
 class BookingLifecycleService:
 
+    # @classmethod
+    # def verify_and_execute_pickup(cls, booking: Booking) -> Booking:
+    #     """
+    #     Executes atomic business transitions for package pickup.
+    #     """
+
+    #     with transaction.atomic():
+
+    #         booking = Booking.objects.select_for_update().get(id=booking.id)
+
+    #         if booking.status == BookingStatus.PICKED_UP:
+    #             return booking
+
+    #         if booking.status != BookingStatus.CONFIRMED:
+    #             raise DjangoValidationError(
+    #                 f"Cannot execute pickup from status: {booking.status}"
+    #             )
+
+    #         booking.status = BookingStatus.PICKED_UP
+    #         booking.picked_up_at = timezone.now()
+    #         booking.save(update_fields=["status", "picked_up_at"])
+
+    #         create_notification(
+    #             user=booking.sender,
+    #             title="Package Picked Up",
+    #             message=(
+    #                 f"Traveler successfully picked up your package "
+    #                 f"({booking.tracking_number}). "
+    #                 "Delivery is now in progress."
+    #             ),
+    #             notification_type=NotificationType.BOOKING,
+    #             object_id=booking.id,
+    #             action_url=f"/bookings/{booking.id}/",
+    #         )
+
+    #         create_notification(
+    #             user=booking.traveler,
+    #             title="Pickup Confirmed",
+    #             message=(
+    #                 f"You successfully picked up package "
+    #                 f"{booking.tracking_number}. "
+    #                 "Please deliver it to the destination."
+    #             ),
+    #             notification_type=NotificationType.BOOKING,
+    #             object_id=booking.id,
+    #             action_url=f"/bookings/{booking.id}/",
+    #         )
+
+    #         send_delivery_pin_email(
+    #             user_email=booking.sender.email,
+    #             booking=booking,
+    #             delivery_pin=booking.delivery_verification_pin,
+    #         )
+
+    #         logger.info(
+    #             "Booking %s successfully transitioned to PICKED_UP.",
+    #             booking.id,
+    #         )
+
+    #         return booking
+
     @classmethod
     def verify_and_execute_pickup(cls, booking: Booking) -> Booking:
         """
         Executes atomic business transitions for package pickup.
         """
-
         with transaction.atomic():
-
             booking = Booking.objects.select_for_update().get(id=booking.id)
 
             if booking.status == BookingStatus.PICKED_UP:
@@ -245,8 +304,7 @@ class BookingLifecycleService:
                 title="Package Picked Up",
                 message=(
                     f"Traveler successfully picked up your package "
-                    f"({booking.tracking_number}). "
-                    "Delivery is now in progress."
+                    f"({booking.tracking_number})."
                 ),
                 notification_type=NotificationType.BOOKING,
                 object_id=booking.id,
@@ -258,19 +316,14 @@ class BookingLifecycleService:
                 title="Pickup Confirmed",
                 message=(
                     f"You successfully picked up package "
-                    f"{booking.tracking_number}. "
-                    "Please deliver it to the destination."
+                    f"{booking.tracking_number}."
                 ),
                 notification_type=NotificationType.BOOKING,
                 object_id=booking.id,
                 action_url=f"/bookings/{booking.id}/",
             )
 
-            send_delivery_pin_email(
-                user_email=booking.sender.email,
-                booking=booking,
-                delivery_pin=booking.delivery_verification_pin,
-            )
+            # 🟢 Delivery PIN email moved from here to execute_start_transit
 
             logger.info(
                 "Booking %s successfully transitioned to PICKED_UP.",
@@ -278,7 +331,6 @@ class BookingLifecycleService:
             )
 
             return booking
-
         
 
     @classmethod
@@ -361,22 +413,24 @@ class BookingLifecycleService:
             return booking
         
         
+ 
     @classmethod
     def execute_start_transit(cls, booking: Booking) -> Booking:
         """
         Executes atomic business transitions for beginning the shipment journey.
-        Updates state, stamps timing logs, and registers sender notifications.
+        Updates state, stamps timing logs, registers sender notifications, 
+        and dispatches the delivery verification PIN.
         """
         with transaction.atomic():
             # Re-fetch with a row lock to guarantee absolute concurrency protection
             booking = Booking.objects.select_for_update().get(id=booking.id)
             
-            # 🟢 Set status and the requested timestamp
+            # 🟢 Set status and timestamp
             booking.status = BookingStatus.IN_TRANSIT
             booking.in_transit_at = timezone.now()
             booking.save(update_fields=["status", "in_transit_at"])
 
-            # 🟢 Dispatch automated notifications from the service layer
+            # 🟢 Dispatch automated notifications
             Notification.objects.create(
                 user=booking.sender,
                 title="Package In Transit",
@@ -386,11 +440,20 @@ class BookingLifecycleService:
                 action_url=f"/bookings/{booking.id}/"
             )
 
-            logger.info(f"Booking {booking.id} successfully transitioned to IN_TRANSIT by service orchestration.")
+            # 🟢 Dispatch Delivery PIN email ONLY after successful DB commit
+            transaction.on_commit(
+                lambda: send_delivery_pin_email(
+                    user_email=booking.sender.email,
+                    booking=booking,
+                    delivery_pin=booking.delivery_verification_pin,
+                )
+            )
+
+            logger.info(
+                "Booking %s successfully transitioned to IN_TRANSIT by service orchestration.",
+                booking.id,
+            )
             return booking
-
-
-
 
 
 
