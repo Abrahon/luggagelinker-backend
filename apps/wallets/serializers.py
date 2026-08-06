@@ -7,7 +7,7 @@ from apps.bookings.models import Booking
 
 import logging
 from decimal import Decimal
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, models
 from rest_framework import serializers
 from .models import (
     Wallet, 
@@ -871,3 +871,119 @@ class TravelerWalletCardSerializer(serializers.ModelSerializer):
             "expiry_date": "08/28",
             "cvv": "349",
         }
+
+
+# apps/wallets/serializers.py
+
+
+from decimal import Decimal
+from django.db import models
+from django.db.models import Sum
+from django.db.models.functions import Coalesce
+from rest_framework import serializers
+
+from .models import Wallet
+
+
+class SenderWalletDashboardSerializer(serializers.ModelSerializer):
+    total_spent = serializers.SerializerMethodField()
+    total_refunded = serializers.SerializerMethodField()
+    active_escrow = serializers.SerializerMethodField()
+    completed_transactions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Wallet
+        fields = [
+            "available_balance",
+            "pending_balance",
+            "total_spent",
+            "total_refunded",
+            "active_escrow",
+            "completed_transactions",
+        ]
+
+    def get_total_spent(self, obj) -> Decimal:
+        spent = (
+            obj.transactions.filter(
+                type="ESCROW_HOLD",
+                status="COMPLETED",
+            )
+            .aggregate(
+                total=Coalesce(
+                    Sum("amount"),
+                    Decimal("0.00"),
+                    output_field=models.DecimalField(),
+                )
+            )
+            .get("total")
+        )
+        return abs(spent)
+
+    def get_total_refunded(self, obj) -> Decimal:
+        return (
+            obj.transactions.filter(
+                type__in=[
+                    "REFUND",
+                    "DISPUTE_REFUND",
+                ],
+                status="COMPLETED",
+            )
+            .aggregate(
+                total=Coalesce(
+                    Sum("amount"),
+                    Decimal("0.00"),
+                    output_field=models.DecimalField(),
+                )
+            )
+            .get("total")
+        )
+
+    def get_active_escrow(self, obj) -> Decimal:
+        return obj.pending_balance or Decimal("0.00")
+
+    def get_completed_transactions(self, obj) -> int:
+        return obj.transactions.filter(status="COMPLETED").count()
+
+
+
+# apps/wallets/serializers.py
+
+
+
+class SenderWalletTransactionSerializer(serializers.ModelSerializer):
+    transaction_type = serializers.CharField(
+        source="get_type_display",
+        read_only=True
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True
+    )
+
+    booking_id = serializers.UUIDField(
+        source="booking.id",
+        read_only=True
+    )
+
+    booking_tracking_number = serializers.CharField(
+        source="booking.tracking_number",
+        read_only=True
+    )
+
+    class Meta:
+        model = WalletTransaction
+        fields = [
+            "id",
+            "booking_id",
+            "booking_tracking_number",
+            "type",
+            "transaction_type",
+            "amount",
+            "status",
+            "status_display",
+            "description",
+            "balance_before",
+            "balance_after",
+            "created_at",
+        ]

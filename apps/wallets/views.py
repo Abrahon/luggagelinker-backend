@@ -1241,3 +1241,22 @@ class TravelerWalletCardView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+# sender
+# apps/wallets/views.py
+
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+
+from .models import Wallet
+from .serializers import SenderWalletDashboardSerializer
+
+
+class SenderWalletDashboardAPIView(generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SenderWalletDashboardSerializer
+
+    def get_object(self):
+        wallet, _ = Wallet.objects.get_or_create(user=self.request.user)
+        return wallet
