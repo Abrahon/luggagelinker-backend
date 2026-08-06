@@ -742,3 +742,150 @@ class AdminWithdrawalService:
         return withdrawal
 
 
+ 
+
+# apps/wallets/services.py
+
+import logging
+from decimal import Decimal
+import stripe
+
+from django.conf import settings
+from django.db import transaction
+from django.core.exceptions import ValidationError
+
+from apps.wallets.models import Wallet, WalletTransaction
+from apps.notifications.services import notify_wallet_topup_success
+
+logger = logging.getLogger(__name__)
+
+
+class WalletPaymentService:
+
+    @classmethod
+    def create_topup_checkout(cls, user, amount):
+        """
+        Creates a Stripe Checkout Session for wallet top-up.
+        """
+        success_url = getattr(
+            settings,
+            "STRIPE_TOPUP_SUCCESS_URL",
+            "http://localhost:3000/wallet/topup/success",
+        )
+        cancel_url = getattr(
+            settings,
+            "STRIPE_TOPUP_CANCEL_URL",
+            "http://localhost:3000/wallet/topup/cancel",
+        )
+
+        try:
+            session = stripe.checkout.Session.create(
+                mode="payment",
+                payment_method_types=["card"],
+                customer_email=user.email,
+                success_url=success_url,
+                cancel_url=cancel_url,
+                metadata={
+                    "payment_type": "wallet_topup",
+                    "user_id": str(user.id),
+                    "amount": str(amount),
+                },
+                line_items=[
+                    {
+                        "price_data": {
+                            "currency": "usd",
+                            "unit_amount": int(amount * 100),
+                            "product_data": {
+                                "name": "Wallet Top-up",
+                                "description": f"Wallet funding for {user.email}",
+                            },
+                        },
+                        "quantity": 1,
+                    }
+                ],
+            )
+            return session
+
+        except stripe.error.StripeError as e:
+            logger.error("Stripe Checkout creation failed for user %s: %s", user.id, str(e))
+            raise ValidationError(f"Stripe could not create a top-up session: {str(e)}")
+
+    # -------------------------------------------------------------------------
+    # 🆕 ADD THIS METHOD BELOW
+    # -------------------------------------------------------------------------
+
+
+    @classmethod
+    def process_topup(cls, event):
+        """
+        Processes completed wallet top-up checkout session from Stripe Webhook.
+        Ensures idempotent wallet balance updates.
+        """
+        # 1. Safely extract session data dictionary
+        if isinstance(event, dict):
+            session_data = event.get("data", {}).get("object", {})
+        else:
+            session_obj = getattr(event.data, "object", {})
+            session_data = session_obj.to_dict() if hasattr(session_obj, "to_dict") else session_obj
+
+        session_id = session_data.get("id")
+        
+        # 2. Extract metadata safely
+        metadata = session_data.get("metadata") or {}
+        if hasattr(metadata, "to_dict"):
+            metadata = metadata.to_dict()
+
+        user_id = metadata.get("user_id")
+        amount_str = metadata.get("amount")
+
+        if not user_id or not amount_str:
+            logger.error("Missing metadata (user_id/amount) in top-up session: %s", session_id)
+            return
+
+        amount = Decimal(str(amount_str))
+
+        with transaction.atomic():
+            # 3. Idempotency Check: Prevent double crediting
+            if WalletTransaction.objects.filter(reference=session_id).exists():
+                logger.info("Top-up session %s was already processed.", session_id)
+                return
+
+            try:
+                wallet = Wallet.objects.select_for_update().get(user_id=user_id)
+            except Wallet.DoesNotExist:
+                logger.error("Wallet not found for user ID %s during top-up processing.", user_id)
+                return
+
+            # 4. Credit the available balance
+            wallet.available_balance += amount
+            wallet.save(update_fields=["available_balance"])
+
+            # 5. Determine Transaction Type Enum
+            transaction_type = getattr(
+                WalletTransaction.TransactionType,
+                "TOPUP",
+                getattr(WalletTransaction.TransactionType, "DEPOSIT", "TOPUP"),
+            )
+
+            # 6. Create historical ledger entry
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                type=transaction_type,
+                amount=amount,
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+                reference=session_id,
+                description=f"Wallet top-up via Stripe (${amount:.2f}).",
+            )
+
+            # 7. Trigger Notification safely after DB commit
+            user = wallet.user
+            transaction.on_commit(
+                lambda: notify_wallet_topup_success(
+                    user=user,
+                    amount=amount,
+                    reference=session_id,
+                )
+            )
+
+            logger.info("Successfully processed wallet top-up of $%s for user %s.", amount, user_id)
+

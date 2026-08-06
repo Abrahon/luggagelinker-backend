@@ -1250,7 +1250,7 @@ from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 
 from .models import Wallet
-from .serializers import SenderWalletDashboardSerializer,SenderWalletTransactionSerializer
+from .serializers import SenderWalletDashboardSerializer,WalletTopupSerializer
 
 
 class SenderWalletDashboardAPIView(generics.RetrieveAPIView):
@@ -1262,9 +1262,14 @@ class SenderWalletDashboardAPIView(generics.RetrieveAPIView):
         return wallet
 
 
+
 # apps/wallets/views.py
 
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
 
+from .models import WalletTransaction
+from .serializers import SenderWalletTransactionSerializer
 
 
 class SenderWalletTransactionAPIView(generics.ListAPIView):
@@ -1290,3 +1295,80 @@ class SenderWalletTransactionAPIView(generics.ListAPIView):
             queryset = queryset.filter(status=status)
 
         return queryset
+
+
+# apps/wallets/views.py
+
+
+
+
+import logging
+from rest_framework import status
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.core.exceptions import ValidationError as DjangoValidationError
+
+from .serializers import WalletTopupSerializer
+from .services import WalletPaymentService
+
+logger = logging.getLogger(__name__)
+
+
+class SenderWalletTopupAPIView(APIView):
+    """
+    API endpoint to initiate a Stripe Checkout Session for topping up user wallet.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = WalletTopupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            checkout = WalletPaymentService.create_topup_checkout(
+                user=request.user,
+                amount=serializer.validated_data["amount"],
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Wallet top-up session created successfully.",
+                    "data": {
+                        "checkout_url": checkout.url,
+                        "session_id": checkout.id,
+                    },
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except DjangoValidationError as e:
+            logger.warning(
+                "Wallet top-up validation failed for user %s: %s",
+                request.user.id,
+                str(e),
+            )
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e),
+                    "code": "TOPUP_VALIDATION_FAILED",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        except Exception:
+            logger.exception(
+                "Wallet top-up session creation failed for user %s",
+                request.user.id,
+            )
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to create wallet top-up session. Please try again later.",
+                    "code": "TOPUP_SESSION_FAILED",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

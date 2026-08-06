@@ -987,3 +987,42 @@ class SenderWalletTransactionSerializer(serializers.ModelSerializer):
             "balance_after",
             "created_at",
         ]
+
+
+
+
+# add money on the wallet
+from decimal import Decimal
+from rest_framework import serializers
+
+
+class WalletTopupSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=Decimal("5.00"),
+        max_value=Decimal("10000.00"),
+    )
+
+    def validate_amount(self, value: Decimal) -> Decimal:
+        if value <= Decimal("0.00"):
+            raise serializers.ValidationError(
+                "Top-up amount must be greater than $0.00."
+            )
+
+        if value < Decimal("5.00"):
+            raise serializers.ValidationError(
+                "Minimum wallet top-up amount is $5.00."
+            )
+
+        if value > Decimal("10000.00"):
+            raise serializers.ValidationError(
+                "Maximum wallet top-up amount is $10,000.00."
+            )
+
+        if value.quantize(Decimal("0.01")) != value:
+            raise serializers.ValidationError(
+                "Amount must contain no more than two decimal places."
+            )
+
+        return value

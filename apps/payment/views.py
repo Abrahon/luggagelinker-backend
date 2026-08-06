@@ -27,6 +27,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.core.exceptions import ValidationError as DjangoValidationError
 import json
+
+from apps.wallets.services import WalletPaymentService
 from .serializers import AdminPaymentListSerializer
 from django.conf import settings
 from django.http import HttpResponse
@@ -255,6 +257,10 @@ def stripe_webhook(request):
                 BookingPaymentService.process_webhook(event, raw_json=request.data)
             elif payment_type == "subscription":
                 SubscriptionWebhookService.process(event)
+
+            elif payment_type == "wallet_topup":
+                WalletPaymentService.process_topup(event)
+                
             else:
                 logger.warning("Unknown payment_type received: %s", payment_type)
 

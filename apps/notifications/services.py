@@ -406,3 +406,26 @@ def notify_user_banned(report):
         object_id=report.id,
         action_url="/support",
     )
+
+
+# ==========================================================
+# WALLET MODULE INTEGRATIONS 💳
+# ==========================================================
+def notify_wallet_topup_success(*, user, amount, reference=None):
+    """
+    Sends notification when a user successfully tops up their wallet.
+    """
+    # Safely select NotificationType (WALLET -> PAYMENT -> SYSTEM)
+    notif_type = getattr(
+        NotificationType,
+        "WALLET",
+        getattr(NotificationType, "PAYMENT", getattr(NotificationType, "SYSTEM", "WALLET")),
+    )
+
+    return create_bulk_notifications(
+        users=[user],
+        title="Wallet Top-up Successful",
+        message=f"Your wallet has been successfully credited with ${amount:.2f}.",
+        notification_type=notif_type,
+        action_url="/wallet/",
+    )
