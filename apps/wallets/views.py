@@ -22,7 +22,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 
 from apps.accounts.permissions import IsUserAllowed
-from .serializers import MonthlyWithdrawalSerializer
+from .serializers import MonthlyWithdrawalSerializer, SenderWalletTransactionSerializer
 from apps.bookings.models import Booking, BookingStatus, PaymentStatus
 from apps.wallets.services import WalletService
 from .serializers import RecentCompletedBookingSerializer
@@ -1250,7 +1250,7 @@ from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 
 from .models import Wallet
-from .serializers import SenderWalletDashboardSerializer
+from .serializers import SenderWalletDashboardSerializer,SenderWalletTransactionSerializer
 
 
 class SenderWalletDashboardAPIView(generics.RetrieveAPIView):
@@ -1260,3 +1260,33 @@ class SenderWalletDashboardAPIView(generics.RetrieveAPIView):
     def get_object(self):
         wallet, _ = Wallet.objects.get_or_create(user=self.request.user)
         return wallet
+
+
+# apps/wallets/views.py
+
+
+
+
+class SenderWalletTransactionAPIView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SenderWalletTransactionSerializer
+
+    def get_queryset(self):
+        wallet = self.request.user.wallet
+
+        queryset = WalletTransaction.objects.filter(
+            wallet=wallet
+        ).select_related(
+            "booking"
+        ).order_by("-created_at")
+
+        transaction_type = self.request.query_params.get("type")
+        status = self.request.query_params.get("status")
+
+        if transaction_type:
+            queryset = queryset.filter(type=transaction_type)
+
+        if status:
+            queryset = queryset.filter(status=status)
+
+        return queryset

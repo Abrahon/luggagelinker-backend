@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     SenderWalletDashboardAPIView,
+    SenderWalletTransactionAPIView,
     TravelerWalletCardView,
     WalletViewSet,
     WalletTransactionListView,
@@ -212,6 +213,11 @@ urlpatterns = [
         SenderWalletDashboardAPIView.as_view(),
         name="sender-wallet-dashboard",
     ),
+    path(
+        "sender/wallet/transactions/",
+        SenderWalletTransactionAPIView.as_view(),
+        name="sender-wallet-transactions",
+ ),
 
 
 ]
