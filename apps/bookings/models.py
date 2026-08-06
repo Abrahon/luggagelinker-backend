@@ -26,11 +26,17 @@ class BookingStatus(models.TextChoices):
     CANCELLED = "CANCELLED", "Cancelled"
     EXPIRED = "EXPIRED", "Expired"
 
+
 class PaymentStatus(models.TextChoices):
     UNPAID = "UNPAID", "Unpaid"
     PENDING = "PENDING", "Pending"
     PAID = "PAID", "Paid"
+    AUTHORIZED = "AUTHORIZED", "Authorized"
+    CAPTURED = "CAPTURED", "Captured"
     REFUNDED = "REFUNDED", "Refunded"
+    PARTIAL_REFUND = "PARTIAL_REFUND", "Partially Refunded"  
+    FAILED = "FAILED", "Failed"
+    DISPUTED = "DISPUTED", "Disputed"
     
 
 class Booking(models.Model):

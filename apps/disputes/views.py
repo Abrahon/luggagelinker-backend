@@ -416,8 +416,11 @@ class AdminDisputeRequestEvidenceAPIView(
         
 
 
-class AdminDisputeResolveAPIView(DisputeErrorFormatMixin, generics.GenericAPIView):
-    """Applies the final arbitration verdict and updates billing/booking states."""
+
+class AdminDisputeResolveAPIView(
+    DisputeErrorFormatMixin,
+    generics.GenericAPIView
+):
     permission_classes = [IsAdminUser]
     serializer_class = AdminResolveDisputeSerializer
     queryset = Dispute.objects.all()
@@ -426,50 +429,94 @@ class AdminDisputeResolveAPIView(DisputeErrorFormatMixin, generics.GenericAPIVie
     def post(self, request, *args, **kwargs):
         dispute = self.get_object()
 
-        # 🟢 1. Validate payload using DRF Serializer
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Retrieve validated attributes with safe key lookups
-        resolution = serializer.validated_data.get("resolution") or serializer.validated_data.get("resolution_type")
-        admin_notes = serializer.validated_data.get("admin_notes", "")
-        refund_ratio = serializer.validated_data.get("refund_ratio", "1.00")
+        resolution = serializer.validated_data["resolution_type"]
+        refund_ratio = serializer.validated_data["refund_ratio"]
+        admin_notes = serializer.validated_data["admin_notes"]
 
         try:
-            # 🟢 2. Execute resolution service atomic transaction
+
             updated_dispute = AdminDisputeService.resolve(
                 dispute_id=dispute.id,
                 admin_user=request.user,
                 resolution_type=resolution,
-                admin_notes=admin_notes,
                 refund_ratio=refund_ratio,
+                admin_notes=admin_notes,
             )
 
-            # 🟢 3. Serialize response data
-            output = AdminDisputeSerializer(updated_dispute, context=self.get_serializer_context())
+            total_amount = updated_dispute.disputed_amount
+
+            sender_refund = (
+                total_amount * refund_ratio
+            ).quantize(Decimal("0.01"))
+
+            traveler_payout = (
+                total_amount - sender_refund
+            ).quantize(Decimal("0.01"))
 
             return Response(
                 {
                     "success": True,
                     "message": "Dispute resolved successfully.",
-                    "data": output.data,
+
+                    "data": {
+                        "id": str(updated_dispute.id),
+
+                        "status": updated_dispute.status,
+                        "status_display": updated_dispute.get_status_display(),
+
+                        "resolution": updated_dispute.resolution,
+                        "resolution_display": updated_dispute.get_resolution_display(),
+
+                        "refund_ratio": str(refund_ratio),
+
+                        "total_amount": str(total_amount),
+
+                        "sender_refund": str(sender_refund),
+
+                        "traveler_payout": str(traveler_payout),
+
+                        "resolved_at": updated_dispute.resolved_at,
+
+                        "resolved_by": {
+                            "id": str(request.user.id),
+                            "email": request.user.email,
+                            "full_name": request.user.get_full_name(),
+                        },
+
+                        "booking": {
+                            "id": str(updated_dispute.booking.id),
+                            "tracking_number": updated_dispute.booking.tracking_number,
+                            "status": updated_dispute.booking.status,
+                            "payment_status": updated_dispute.booking.payment_status,
+                        },
+                    }
                 },
                 status=status.HTTP_200_OK,
             )
 
         except DjangoValidationError as e:
-            logger.warning("Dispute resolution rejected for dispute %s: %s", dispute.id, e)
-            return Response(self._format_error(e), status=status.HTTP_400_BAD_REQUEST)
-
-        except Exception as e:
-            logger.exception("Unexpected exception during dispute resolution for dispute %s: %s", dispute.id, e)
+            logger.warning(
+                "Dispute resolution rejected: %s",
+                e
+            )
             return Response(
-                {"detail": "Internal server error."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                self._format_error(e),
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-
-
+        except Exception:
+            logger.exception(
+                "Unexpected dispute resolution failure."
+            )
+            return Response(
+                {
+                    "detail": "Internal server error."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class DisputeWithdrawAPIView(APIView):

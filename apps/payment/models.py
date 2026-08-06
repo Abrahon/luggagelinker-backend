@@ -14,8 +14,10 @@ class PaymentMethod(models.TextChoices):
 class PaymentStatus(models.TextChoices):
     PENDING = "PENDING", "Pending"
     SUCCEEDED = "SUCCEEDED", "Succeeded"
+    PARTIAL_REFUND = "PARTIAL_REFUND", "Partially Refunded"
     FAILED = "FAILED", "Failed"
     CANCELLED = "CANCELLED", "Cancelled"
+    DISPUTED = "DISPUTED", "Disputed"
     REFUNDED = "REFUNDED", "Refunded"
 
 

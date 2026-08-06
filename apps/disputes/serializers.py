@@ -375,59 +375,182 @@ class CreateDisputeSerializer(serializers.ModelSerializer):
 # ==============================================================================
 # PLATFORM ADMINISTRATIVE MODERATION DISPUTE SERIALIZER
 # ==============================================================================
-class AdminDisputeSerializer(serializers.ModelSerializer):
-    """Full-visibility management serializer tailored for administrative back-office panels."""
 
-    # 🟢 1. Nested user profiles for full administrative visibility
+
+
+class AdminDisputeSerializer(serializers.ModelSerializer):
+    """
+    Production serializer for Admin Dispute Management.
+    """
+
+    # ------------------------------------------------------------------
+    # Parties
+    # ------------------------------------------------------------------
     opened_by = UserBriefSerializer(read_only=True)
     against_user = UserBriefSerializer(read_only=True)
     assigned_admin = UserBriefSerializer(read_only=True)
     resolved_by = UserBriefSerializer(read_only=True)
-    last_updated_by = UserBriefSerializer(read_only=True)
 
-    # 🟢 2. Human-readable choices display
-    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    resolution_display = serializers.CharField(source="get_resolution_display", read_only=True)
+    # ------------------------------------------------------------------
+    # Booking Summary
+    # ------------------------------------------------------------------
+    booking = serializers.SerializerMethodField()
 
-    # 🟢 3. Embedded relational feeds (messages, evidence, and audit logs)
-    messages = DisputeMessageSerializer(many=True, read_only=True)
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
-    history = DisputeHistorySerializer(many=True, read_only=True)
+    # ------------------------------------------------------------------
+    # Human Readable Choices
+    # ------------------------------------------------------------------
+    reason_display = serializers.CharField(
+        source="get_reason_display",
+        read_only=True
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True
+    )
+
+    resolution_display = serializers.CharField(
+        source="get_resolution_display",
+        read_only=True
+    )
+
+    # ------------------------------------------------------------------
+    # Settlement Summary
+    # ------------------------------------------------------------------
+    settlement = serializers.SerializerMethodField()
+
+    # ------------------------------------------------------------------
+    # Timeline
+    # ------------------------------------------------------------------
+    timeline = serializers.SerializerMethodField()
+
+    # ------------------------------------------------------------------
+    # Related Data
+    # ------------------------------------------------------------------
+    evidence = DisputeEvidenceSerializer(
+        many=True,
+        read_only=True
+    )
+
+    messages = DisputeMessageSerializer(
+        many=True,
+        read_only=True
+    )
+
+    history = DisputeHistorySerializer(
+        many=True,
+        read_only=True
+    )
 
     class Meta:
         model = Dispute
+
         fields = [
             "id",
+
             "booking",
+
             "opened_by",
             "against_user",
             "assigned_admin",
             "resolved_by",
-            "last_updated_by",
+
             "reason",
             "reason_display",
+
             "description",
+
             "disputed_amount",
+
             "status",
             "status_display",
+
             "resolution",
             "resolution_display",
+
             "admin_notes",
-            "is_reopened",
-            "sender_notified",
-            "traveler_notified",
-            "messages",
+
+            "settlement",
+
+            "timeline",
+
             "evidence",
+            "messages",
             "history",
-            "created_at",
-            "updated_at",
-            "resolved_at",
         ]
+
         read_only_fields = fields
 
+    # ============================================================
+    # BOOKING SUMMARY
+    # ============================================================
 
+    def get_booking(self, obj):
+        booking = obj.booking
 
+        return {
+            "id": str(booking.id),
+            "tracking_number": booking.tracking_number,
+            "status": booking.status,
+            "payment_status": booking.payment_status,
+        }
+
+    # ============================================================
+    # SETTLEMENT SUMMARY
+    # ============================================================
+
+    def get_settlement(self, obj):
+
+        total = obj.disputed_amount or Decimal("0.00")
+
+        refund_ratio = Decimal("0.00")
+
+        if obj.resolution == "FULL_REFUND":
+            refund_ratio = Decimal("1.00")
+
+        elif obj.resolution == "PARTIAL_REFUND":
+            refund_ratio = getattr(
+                obj,
+                "refund_ratio",
+                Decimal("0.50")
+            )
+
+        sender_refund = (
+            total * refund_ratio
+        ).quantize(Decimal("0.01"))
+
+        traveler_payout = (
+            total - sender_refund
+        ).quantize(Decimal("0.01"))
+
+        return {
+            "currency": "USD",
+            "total_amount": str(total),
+            "refund_ratio": str(refund_ratio),
+            "sender_refund": str(sender_refund),
+            "traveler_payout": str(traveler_payout),
+        }
+
+    # ============================================================
+    # TIMELINE
+    # ============================================================
+
+    def get_timeline(self, obj):
+
+        assigned = None
+
+        history = obj.history.filter(
+            action="ASSIGNED"
+        ).order_by("created_at").first()
+
+        if history:
+            assigned = history.created_at
+
+        return {
+            "opened_at": obj.created_at,
+            "assigned_at": assigned,
+            "resolved_at": obj.resolved_at,
+        }
 
 
 class AdminDisputeAssignSerializer(serializers.ModelSerializer):
@@ -477,7 +600,10 @@ class AdminResolveDisputeSerializer(serializers.Serializer):
     refund_ratio = serializers.DecimalField(
         max_digits=3,
         decimal_places=2,
-        default=Decimal("1.00")
+        required=False,
+        default=Decimal("1.00"),
+        min_value=Decimal("0.00"),
+        max_value=Decimal("1.00")
     )
 
     def validate(self, attrs):
@@ -487,19 +613,22 @@ class AdminResolveDisputeSerializer(serializers.Serializer):
         if resolution == ResolutionType.RELEASE_ESCROW:
             if refund_ratio != Decimal("0.00"):
                 raise serializers.ValidationError({
-                    "refund_ratio": "Release Escrow requires refund_ratio = 0.00"
+                    "refund_ratio": "Release Escrow requires refund_ratio = 0.00."
                 })
 
         elif resolution == ResolutionType.FULL_REFUND:
             if refund_ratio != Decimal("1.00"):
                 raise serializers.ValidationError({
-                    "refund_ratio": "Full Refund requires refund_ratio = 1.00"
+                    "refund_ratio": "Full Refund requires refund_ratio = 1.00."
                 })
 
         elif resolution == ResolutionType.PARTIAL_REFUND:
             if not Decimal("0.01") <= refund_ratio <= Decimal("0.99"):
                 raise serializers.ValidationError({
-                    "refund_ratio": "Must be between 0.01 and 0.99"
+                    "refund_ratio": "Partial Refund requires a value between 0.01 and 0.99."
                 })
+
+        elif resolution == ResolutionType.NO_ACTION:
+            attrs["refund_ratio"] = Decimal("0.00")
 
         return attrs
