@@ -393,3 +393,108 @@ def send_delivery_pin_email(user_email, booking, delivery_pin):
         logger.info(f"Successfully sent delivery pin notification to {user_email} for booking {booking.id}")
     except Exception as e:
         logger.error(f"Failed to transmit Delivery PIN mail to user {user_email}: {str(e)}", exc_info=True)
+
+
+# apps/notifications/utils/email.py
+# apps/notifications/utils/email.py
+
+# apps/notifications/utils/email.py
+def send_wallet_topup_email(user, amount, balance_after, reference):
+    """
+    Sends a high-converting, professional transactional HTML email confirming 
+    a successful wallet top-up to the user.
+    """
+    subject = f"💳 Wallet Credited - ${amount:.2f} Top-Up Successful"
+    from_email = f"Luggage Linker <{settings.DEFAULT_FROM_EMAIL}>"
+    to_emails = [user.email]
+
+    # Resolve personalized greeting name using Profile model with fallback
+    user_name = user.email
+    if hasattr(user, "profile") and user.profile:
+        user_name = (
+            getattr(user.profile, "first_name", "").strip() 
+            or getattr(user.profile, "full_name", "").strip() 
+            or user.email
+        )
+
+    # --- HTML Visual Component Template Layout ---
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Wallet Top-Up Successful</title>
+    </head>
+    <body style="margin: 0; padding: 0; background-color: #f4f6f8; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout: fixed;">
+            <tr>
+                <td align="center" style="padding: 40px 0 20px 0; background-color: #f4f6f8;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="500" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+                        <tr>
+                            <td align="center" style="background-color: #10b981; padding: 30px 20px;">
+                                <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">LuggageLinker</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 30px 40px;">
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 16px 0;">
+                                    Hello {user_name},
+                                </p>
+                                <p style="font-size: 16px; line-height: 24px; color: #3c4043; margin: 0 0 24px 0;">
+                                    Great news! Your wallet top-up payment was processed successfully. Your updated balance is now available for booking and platform services.
+                                </p>
+                                
+                                <div style="border: 1px solid #a7f3d0; background-color: #ecfdf5; border-radius: 8px; padding: 24px; text-align: center; margin-bottom: 24px;">
+                                    <div style="font-size: 32px; font-weight: 700; color: #059669; line-height: 1; margin-bottom: 4px;">+${amount:.2f}</div>
+                                    <div style="font-size: 13px; font-weight: 600; color: #059669; text-transform: uppercase; letter-spacing: 0.5px;">Wallet Credited</div>
+                                </div>
+
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-size: 14px; color: #3c4043; margin-bottom: 24px;">
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Transaction Reference</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 500; font-family: monospace; font-size: 12px; color: #1f2937;">{reference}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">Amount Credited</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 600; color: #059669;">+${amount:.2f}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; color: #697386;">New Available Balance</td>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #f0f2f5; text-align: right; font-weight: 700; color: #111827;">${balance_after:.2f}</td>
+                                    </tr>
+                                </table>
+
+                                <p style="font-size: 13px; line-height: 20px; color: #70757a; margin: 16px 0 0 0;">
+                                    If you did not authorize this transaction, please contact our support team immediately to secure your account.
+                                </p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td align="center" style="background-color: #f8f9fa; padding: 20px; font-size: 12px; color: #70757a; border-top: 1px solid #e8eaed;">
+                                This is an automated secure operational notification. Please do not reply directly to this mail.<br>
+                                © 2026 LuggageLinker Logistics Framework.
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    text_content = strip_tags(html_content)
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_content,
+            from_email=from_email,
+            to=to_emails
+        )
+        email.attach_alternative(html_content, "text/html")
+        email.send(fail_silently=False)
+        logger.info(f"Successfully sent wallet top-up email to {user.email} for reference {reference}")
+    except Exception as e:
+        logger.error(f"Failed to transmit wallet top-up mail to user {user.email}: {str(e)}", exc_info=True)

@@ -756,6 +756,7 @@ from django.core.exceptions import ValidationError
 
 from apps.wallets.models import Wallet, WalletTransaction
 from apps.notifications.services import notify_wallet_topup_success
+from apps.notifications.utils.email import send_wallet_topup_email
 
 logger = logging.getLogger(__name__)
 
@@ -815,11 +816,13 @@ class WalletPaymentService:
     # -------------------------------------------------------------------------
 
 
+# apps/wallets/services.py
+
     @classmethod
     def process_topup(cls, event):
         """
         Processes completed wallet top-up checkout session from Stripe Webhook.
-        Ensures idempotent wallet balance updates.
+        Ensures idempotent wallet balance updates and records running balances.
         """
         # 1. Safely extract session data dictionary
         if isinstance(event, dict):
@@ -856,18 +859,23 @@ class WalletPaymentService:
                 logger.error("Wallet not found for user ID %s during top-up processing.", user_id)
                 return
 
-            # 4. Credit the available balance
+            # -----------------------------------------------------------------
+            # 🆕 RECORD RUNNING BALANCES
+            # -----------------------------------------------------------------
+            balance_before = wallet.available_balance
             wallet.available_balance += amount
             wallet.save(update_fields=["available_balance"])
+            balance_after = wallet.available_balance
+            # -----------------------------------------------------------------
 
-            # 5. Determine Transaction Type Enum
+             # 4. Determine Transaction Type Enum
             transaction_type = getattr(
                 WalletTransaction.TransactionType,
                 "TOPUP",
                 getattr(WalletTransaction.TransactionType, "DEPOSIT", "TOPUP"),
             )
 
-            # 6. Create historical ledger entry
+            # 5. Create historical ledger entry with running balances
             WalletTransaction.objects.create(
                 wallet=wallet,
                 type=transaction_type,
@@ -875,17 +883,35 @@ class WalletPaymentService:
                 status=WalletTransaction.TransactionStatus.COMPLETED,
                 reference=session_id,
                 description=f"Wallet top-up via Stripe (${amount:.2f}).",
+                balance_before=balance_before,
+                balance_after=balance_after,
             )
 
-            # 7. Trigger Notification safely after DB commit
+            # 6. Trigger Notifications & Emails after DB commit
             user = wallet.user
-            transaction.on_commit(
-                lambda: notify_wallet_topup_success(
+
+            def send_topup_alerts():
+                # Trigger in-app / WebSocket notification
+                notify_wallet_topup_success(
                     user=user,
                     amount=amount,
                     reference=session_id,
                 )
-            )
+                
+                # 🆕 ADDED HERE: Trigger Email delivery pipeline
+                try:
+                    from apps.notifications.utils.email import send_wallet_topup_email
+                    send_wallet_topup_email(
+                        user=user,
+                        amount=amount,
+                        balance_after=balance_after,
+                        reference=session_id,
+                    )
+                except ImportError:
+                    logger.warning("send_wallet_topup_email function not found.")
+                except Exception as e:
+                    logger.error("Failed to trigger top-up email: %s", str(e))
+
+            transaction.on_commit(send_topup_alerts)
 
             logger.info("Successfully processed wallet top-up of $%s for user %s.", amount, user_id)
-
