@@ -9,13 +9,20 @@ from apps.payment.models import PlatformSetting
 import secrets
 from apps import payment
 from apps.notifications.utils.email import send_pickup_pin_email  
-# Adjust these imports according to your exact app paths
+import decimal
+import logging
+import secrets
+import stripe
+from django.db import transaction
+from django.utils import timezone
+
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType 
 from .models import BookingPayment, BookingPaymentGateway, BookingPaymentStatus,Payment,PaymentStatus,StripeEventLog
 from apps.bookings.models import BookingStatus,PaymentStatus
 from datetime import timedelta
-# Replace these import paths with your actual project structure
+
+from decimal import Decimal
 from apps.subscriptions.models import (
     Subscription, 
     SubscriptionStatus, 
@@ -177,9 +184,167 @@ class BookingPaymentService:
 
 
 
+    # @classmethod
+    # def process_webhook(cls, event, raw_json=None):
+    #     """
+    #     Processes verified Stripe checkout webhook parameters to safely lock down 
+    #     escrow balances, generate secure verification codes, and trigger customer alerts.
+    #     """
+    #     from apps.wallets.services import WalletService 
+
+    #     event_id = event["id"]
+    #     event_type = event["type"]
+    #     event_data = event["data"]["object"].to_dict()
+
+    #     metadata = event_data.get("metadata", {})
+    #     booking_payment_id = metadata.get("booking_payment_id")
+    #     booking_id = metadata.get("booking_id")
+
+    #     if not booking_payment_id or not booking_id:
+    #         logger.warning("Stripe payload skipped: Missing transaction identifier signatures.")
+    #         return
+
+    #     # =====================================================================
+    #     # 🟢 CHECKOUT SUCCESS (Escrow Funds Locked Natively)
+    #     # =====================================================================
+    #     if event_type == "checkout.session.completed":
+    #         booking = None
+    #         secure_pin = None
+
+    #         with transaction.atomic():
+    #             if StripeEventLog.objects.select_for_update().filter(event_id=event_id).exists():
+    #                 logger.info("Stripe event %s already processed. Bypassing execution.", event_id)
+    #                 return
+                
+    #             try:
+    #                 payment_record = BookingPayment.objects.select_for_update().get(id=booking_payment_id)
+    #                 booking = Booking.objects.select_for_update().get(id=booking_id)
+
+    #                 if payment_record.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
+    #                     return
+
+    #                 # Log the Stripe event record trace
+    #                 StripeEventLog.objects.create(
+    #                     event_id=event_id,
+    #                     event_type=event_type,
+    #                     raw_payload=raw_json if raw_json else {}
+    #                 )
+
+    #                 # ---------------------------------------------------------
+    #                 # Trigger Centralized Wallet Escrow (Hold allocations)
+    #                 # ---------------------------------------------------------
+    #                 WalletService.hold_escrow(booking)
+
+    #                 # ---------------------------------------------------------
+    #                 # 🟢 FIX: SAVE STRIPE PAYMENTINTENT IDENTIFIERS
+    #                 # ---------------------------------------------------------
+    #                 payment_intent_id = event_data.get("payment_intent")
+                    
+    #                 payment_record.transaction_id = payment_intent_id
+    #                 payment_record.provider_payment_id = payment_intent_id
+    #                 if hasattr(payment_record, "checkout_session_id"):
+    #                     payment_record.checkout_session_id = event_data.get("id")
+
+    #                 # 1. ESCROW LEDGER RECORD STATUS: Set to AUTHORIZED (Locked on Hold)
+    #                 payment_record.status = BookingPaymentStatus.AUTHORIZED
+    #                 payment_record.authorized_at = timezone.now() 
+                    
+    #                 update_fields = ["status", "authorized_at", "transaction_id", "provider_payment_id"]
+    #                 if hasattr(payment_record, "checkout_session_id"):
+    #                     update_fields.append("checkout_session_id")
+
+    #                 payment_record.save(update_fields=update_fields)
+
+    #                 # 2. SENDER CONTRACT WORKFLOW STATES: Mark as PAID and CONFIRMED
+    #                 booking.status = BookingStatus.CONFIRMED  
+    #                 booking.payment_status = PaymentStatus.PAID  
+
+    #                 # ---------------------------------------------------------
+    #                 # GENERATE PIN HERE (Only if it doesn't already exist)
+    #                 # ---------------------------------------------------------
+    #                 if not getattr(booking, "pickup_verification_pin", None):
+    #                     secure_pin = str(secrets.randbelow(900000) + 100000)
+    #                     booking.pickup_verification_pin = secure_pin
+    #                 else:
+    #                     secure_pin = booking.pickup_verification_pin
+
+    #                 # ---------------------------------------------------------
+    #                 # SAVE BOOKING STATES (Added payment_status to explicit track)
+    #                 # ---------------------------------------------------------
+    #                 booking.save(update_fields=["status", "payment_status", "pickup_verification_pin"])
+    #                 logger.info(
+    #                     "Escrow secured, Stripe intent %s stored, and PIN assigned for booking #%s",
+    #                     payment_intent_id,
+    #                     booking.tracking_number
+    #                 )
+
+    #             except BookingPayment.DoesNotExist:
+    #                 logger.error("BookingPayment ledger row ID %s was not found.", booking_payment_id)
+    #                 return
+    #             except Booking.DoesNotExist:
+    #                 logger.error("Base Booking entity match ID %s went missing.", booking_id)
+    #                 return
+
+    #         # ---------------------------------------------------------
+    #         # SEND EMAIL TO SENDER (Outside open row transaction locks)
+    #         # ---------------------------------------------------------
+    #         if booking and secure_pin:
+    #             try:
+    #                 send_pickup_pin_email(
+    #                     user_email=booking.sender.email,
+    #                     booking=booking,
+    #                     pickup_pin=secure_pin
+    #                 )
+    #             except Exception:
+    #                 logger.error("Database updates saved successfully, but notification dispatch failed.", exc_info=True)
+
+    #     # =====================================================================
+    #     # HANDLING CARD FALLBACK / EXPIRED CHECKOUTS
+    #     # =====================================================================
+    #     elif event_type in ["payment_intent.payment_failed", "checkout.session.expired"]:
+    #         with transaction.atomic():
+    #             try:
+    #                 payment_record = BookingPayment.objects.select_for_update().get(id=booking_payment_id)
+    #                 booking = Booking.objects.select_for_update().get(id=booking_id)
+                    
+    #                 if payment_record.status == BookingPaymentStatus.FAILED:
+    #                     return
+                    
+    #                 payment_record.status = BookingPaymentStatus.FAILED
+    #                 payment_record.failure_reason = event_data.get("last_payment_error", {}).get("message", "Session checkout expired.")
+    #                 payment_record.provider_payment_id = None
+    #                 payment_record.checkout_url = None
+    #                 payment_record.save(update_fields=["status", "failure_reason", "provider_payment_id", "checkout_url"])
+                    
+    #                 booking.status = BookingStatus.FAILED
+    #                 booking.save(update_fields=["status"])
+    #                 logger.warning("Payment cleared as FAILED for tracker reference %s. Form state reset.", payment_record.id)
+
+    #             except BookingPayment.DoesNotExist:
+    #                 pass
+    #             except Booking.DoesNotExist:
+    #                 pass
+
+
+
+    @staticmethod
+    def _safe_send_pickup_pin_email(user_email: str, booking, pickup_pin: str) -> None:
+        """Helper function to dispatch pickup pin email safely inside transaction.on_commit."""
+        try:
+            send_pickup_pin_email(
+                user_email=user_email,
+                booking=booking,
+                pickup_pin=pickup_pin
+            )
+        except Exception:
+            logger.error(
+                "Transaction committed successfully, but notification dispatch failed for booking %s.", 
+                booking.id, 
+                exc_info=True
+            )
 
     @classmethod
-    def process_webhook(cls, event, raw_json=None):
+    def process_webhook(cls, event: dict, raw_json: dict = None) -> None:
         """
         Processes verified Stripe checkout webhook parameters to safely lock down 
         escrow balances, generate secure verification codes, and trigger customer alerts.
@@ -191,21 +356,50 @@ class BookingPaymentService:
         event_data = event["data"]["object"].to_dict()
 
         metadata = event_data.get("metadata", {})
-        booking_payment_id = metadata.get("booking_payment_id")
+        booking_payment_id = metadata.get("booking_payment_id") or metadata.get("payment_id")
         booking_id = metadata.get("booking_id")
 
         if not booking_payment_id or not booking_id:
-            logger.warning("Stripe payload skipped: Missing transaction identifier signatures.")
+            logger.warning("Stripe payload skipped: Missing transaction identifier signatures in metadata.")
             return
 
         # =====================================================================
         # 🟢 CHECKOUT SUCCESS (Escrow Funds Locked Natively)
         # =====================================================================
         if event_type == "checkout.session.completed":
-            booking = None
-            secure_pin = None
+
+            # ---------------------------------------------------------
+            # 1. RETRIEVE EXPANDED SESSION & STRICTLY EXTRACT IDS
+            # ---------------------------------------------------------
+            try:
+                session = stripe.checkout.Session.retrieve(
+                    event_data["id"],
+                    expand=["payment_intent"]
+                )
+            except stripe.error.StripeError as e:
+                logger.error(
+                    "Failed to retrieve expanded Checkout Session %s from Stripe: %s", 
+                    event_data.get("id"), e, exc_info=True
+                )
+                raise e
+
+            payment_intent_obj = session.payment_intent
+            payment_intent_id = None
+            charge_id = None
+
+            if isinstance(payment_intent_obj, stripe.PaymentIntent):
+                payment_intent_id = payment_intent_obj.id
+                latest_charge = getattr(payment_intent_obj, "latest_charge", None)
+                charge_id = latest_charge.id if hasattr(latest_charge, "id") else latest_charge
+            elif isinstance(payment_intent_obj, str):
+                payment_intent_id = payment_intent_obj
+
+            if not payment_intent_id:
+                logger.error("Stripe Checkout Session %s completed without a valid PaymentIntent ID.", session.id)
+                raise ValueError(f"Checkout Session {session.id} did not yield a valid PaymentIntent ID.")
 
             with transaction.atomic():
+                # Check event idempotency
                 if StripeEventLog.objects.select_for_update().filter(event_id=event_id).exists():
                     logger.info("Stripe event %s already processed. Bypassing execution.", event_id)
                     return
@@ -214,10 +408,47 @@ class BookingPaymentService:
                     payment_record = BookingPayment.objects.select_for_update().get(id=booking_payment_id)
                     booking = Booking.objects.select_for_update().get(id=booking_id)
 
+                    # Early exit if already in a finalized/authorized state
                     if payment_record.status in [BookingPaymentStatus.AUTHORIZED, BookingPaymentStatus.CAPTURED]:
                         return
 
-                    # Log the Stripe event record trace
+                    # ---------------------------------------------------------
+                    # 2. HANDLE AMOUNT & FEE DIFFERENCE SAFELY
+                    # ---------------------------------------------------------
+                    expected_amount_cents = int(payment_record.amount * decimal.Decimal("100"))
+                    stripe_charged_cents = session.amount_total
+                    charged_amount_decimal = decimal.Decimal(stripe_charged_cents) / decimal.Decimal("100")
+
+                    update_fields = ["status", "authorized_at", "transaction_id", "provider_payment_id"]
+
+                    if stripe_charged_cents != expected_amount_cents:
+                        fee_cents = stripe_charged_cents - expected_amount_cents
+                        fee_decimal = decimal.Decimal(fee_cents) / decimal.Decimal("100")
+
+                        logger.info(
+                            "Payment fee/percentage detected for Payment #%s. "
+                            "DB Base: $%s (%s cents) | Stripe Charged: $%s (%s cents) | Added Fee: $%s",
+                            payment_record.id,
+                            payment_record.amount,
+                            expected_amount_cents,
+                            charged_amount_decimal,
+                            stripe_charged_cents,
+                            fee_decimal
+                        )
+
+                        # Sync DB record to actual charged total
+                        payment_record.amount = charged_amount_decimal
+                        update_fields.append("amount")
+
+                        if hasattr(payment_record, "total_amount"):
+                            payment_record.total_amount = charged_amount_decimal
+                            update_fields.append("total_amount")
+
+                        if hasattr(payment_record, "fee_amount"):
+                            payment_record.fee_amount = fee_decimal
+                            update_fields.append("fee_amount")
+
+                    # Audit trail log
                     StripeEventLog.objects.create(
                         event_id=event_id,
                         event_type=event_type,
@@ -225,36 +456,61 @@ class BookingPaymentService:
                     )
 
                     # ---------------------------------------------------------
-                    # Trigger Centralized Wallet Escrow (Hold allocations)
+                    # 3. SAVE PAYMENT INTENT & CHARGE IDS
                     # ---------------------------------------------------------
-                    WalletService.hold_escrow(booking)
+                    payment_record.transaction_id = payment_intent_id
+                    payment_record.provider_payment_id = payment_intent_id
 
-                    # ---------------------------------------------------------
-                    # 🟢 FIX: SEPARATION OF CONCERNS FIELD STATUS UPDATES
-                    # ---------------------------------------------------------
-                    # 1. ESCROW LEDGER RECORD STATUS: Set to AUTHORIZED (Locked on Hold)
+                    if charge_id:
+                        if hasattr(payment_record, "stripe_charge_id"):
+                            payment_record.stripe_charge_id = charge_id
+                            update_fields.append("stripe_charge_id")
+                        elif hasattr(payment_record, "charge_id"):
+                            payment_record.charge_id = charge_id
+                            update_fields.append("charge_id")
+
+                    if hasattr(payment_record, "checkout_session_id"):
+                        payment_record.checkout_session_id = session.id
+                        update_fields.append("checkout_session_id")
+
+                    # ESCROW LEDGER RECORD STATUS: Set to AUTHORIZED
                     payment_record.status = BookingPaymentStatus.AUTHORIZED
-                    payment_record.authorized_at = timezone.now() 
-                    payment_record.save(update_fields=["status", "authorized_at"])
+                    payment_record.authorized_at = timezone.now()
+                    payment_record.save(update_fields=update_fields)
 
-                    # 2. SENDER CONTRACT WORKFLOW STATES: Mark as PAID and CONFIRMED
+                    # ---------------------------------------------------------
+                    # 4. WALLET ESCROW HOLD (Matches WalletService.hold_escrow(booking))
+                    # ---------------------------------------------------------
+                    escrow_tx = WalletService.hold_escrow(booking)
+                    logger.info("Escrow transaction %s created for booking #%s", escrow_tx.id, booking.id)
+
+                    # CONTRACT WORKFLOW STATES: Mark as CONFIRMED and PAID
                     booking.status = BookingStatus.CONFIRMED  
                     booking.payment_status = PaymentStatus.PAID  
 
-                    # ---------------------------------------------------------
-                    # GENERATE PIN HERE (Only if it doesn't already exist)
-                    # ---------------------------------------------------------
+                    # Generate pickup PIN if missing
                     if not getattr(booking, "pickup_verification_pin", None):
                         secure_pin = str(secrets.randbelow(900000) + 100000)
                         booking.pickup_verification_pin = secure_pin
                     else:
                         secure_pin = booking.pickup_verification_pin
 
-                    # ---------------------------------------------------------
-                    # SAVE BOOKING STATES (Added payment_status to explicit track)
-                    # ---------------------------------------------------------
                     booking.save(update_fields=["status", "payment_status", "pickup_verification_pin"])
-                    logger.info("Escrow secured and PIN assigned for booking #%s", booking.tracking_number)
+
+                    # ---------------------------------------------------------
+                    # 5. NOTIFICATIONS & EMAILS ON COMMIT
+                    # ---------------------------------------------------------
+                    user_email = booking.sender.email
+                    transaction.on_commit(
+                        lambda: cls._safe_send_pickup_pin_email(user_email, booking, secure_pin)
+                    )
+
+                    logger.info(
+                        "Escrow secured, PaymentIntent %s (Charge: %s) saved, and PIN assigned for booking #%s",
+                        payment_intent_id,
+                        charge_id,
+                        booking.tracking_number
+                    )
 
                 except BookingPayment.DoesNotExist:
                     logger.error("BookingPayment ledger row ID %s was not found.", booking_payment_id)
@@ -263,21 +519,8 @@ class BookingPaymentService:
                     logger.error("Base Booking entity match ID %s went missing.", booking_id)
                     return
 
-            # ---------------------------------------------------------
-            # SEND EMAIL TO SENDER (Outside open row transaction locks)
-            # ---------------------------------------------------------
-            if booking and secure_pin:
-                try:
-                    send_pickup_pin_email(
-                        user_email=booking.sender.email,
-                        booking=booking,
-                        pickup_pin=secure_pin
-                    )
-                except Exception:
-                    logger.error("Database updates saved successfully, but notification dispatch failed.", exc_info=True)
-
         # =====================================================================
-        # HANDLING CARD FALLBACK / EXPIRED CHEKOUTS
+        # 🔴 FAILURE PATH: PAYMENT FAILED / SESSION EXPIRED
         # =====================================================================
         elif event_type in ["payment_intent.payment_failed", "checkout.session.expired"]:
             with transaction.atomic():
@@ -289,21 +532,23 @@ class BookingPaymentService:
                         return
                     
                     payment_record.status = BookingPaymentStatus.FAILED
-                    payment_record.failure_reason = event_data.get("last_payment_error", {}).get("message", "Session checkout expired.")
-                    payment_record.provider_payment_id = None
+                    payment_record.failure_reason = event_data.get("last_payment_error", {}).get(
+                        "message", "Session checkout expired."
+                    )
+                    
                     payment_record.checkout_url = None
-                    payment_record.save(update_fields=["status", "failure_reason", "provider_payment_id", "checkout_url"])
+                    payment_record.save(update_fields=["status", "failure_reason", "checkout_url"])
                     
                     booking.status = BookingStatus.FAILED
                     booking.save(update_fields=["status"])
-                    logger.warning("Payment cleared as FAILED for tracker reference %s. Form state reset.", payment_record.id)
+                    logger.warning("Payment cleared as FAILED for payment ID %s.", payment_record.id)
 
                 except BookingPayment.DoesNotExist:
-                    pass
+                    logger.error("Failure path error: BookingPayment %s not found.", booking_payment_id)
                 except Booking.DoesNotExist:
-                    pass
-
-
+                    logger.error("Failure path error: Booking %s not found.", booking_id)
+                except Exception as e:
+                    logger.exception("Unexpected exception in failure path for booking %s: %s", booking_id, e)
 
     @classmethod
     def verify_checkout(cls, payment: BookingPayment, provider_session_id: str, final_transaction_id: str) -> BookingPayment:
@@ -457,41 +702,115 @@ class BookingPaymentService:
             return payment
 
     @classmethod
-    def partial_refund(cls, payment: BookingPayment, refund_to_sender: decimal.Decimal, payout_to_traveler: decimal.Decimal) -> BookingPayment:
-        # ✨ ADD THIS NEW METHOD HERE at the bottom of the class!
+    def partial_refund(
+        cls, 
+        payment: BookingPayment, 
+        refund_to_sender: decimal.Decimal, 
+        payout_to_traveler: decimal.Decimal
+    ) -> BookingPayment:
         if payment.status != BookingPaymentStatus.AUTHORIZED:
-            raise DjangoValidationError("Only payments securely held in authorized escrow status bounds can be partially refunded.")
+            raise DjangoValidationError(
+                "Only payments securely held in authorized escrow status bounds can be partially refunded."
+            )
 
         with transaction.atomic():
-            payment = BookingPayment.objects.select_related("booking__trip").select_for_update().get(id=payment.id)
+            payment = (
+                BookingPayment.objects.select_related("booking__trip")
+                .select_for_update()
+                .get(id=payment.id)
+            )
             booking = payment.booking
-            trip = booking.trip
+            trip = getattr(booking, "trip", None)
 
             if payment.gateway == BookingPaymentGateway.STRIPE:
-                try:
-                    refund_amount_cents = int(refund_to_sender * decimal.Decimal("100"))
-                    stripe.Refund.create(
-                        payment_intent=payment.transaction_id,
-                        amount=refund_amount_cents
+                # 🟢 1. Retrieve transaction ID safely
+                intent_id = payment.transaction_id or getattr(payment, "stripe_payment_intent_id", None)
+
+                if not intent_id:
+                    raise DjangoValidationError(
+                        "Cannot process refund: Payment record is missing a valid Stripe PaymentIntent transaction ID."
                     )
-                except stripe.error.StripeError as e:
-                    logger.error(f"Stripe execution partial refund failure: {str(e)}", exc_info=True)
-                    raise DjangoValidationError(f"Stripe partial refund backend declined: {str(e)}")
 
-            payment.status = BookingPaymentStatus.REFUNDED
+                requested_cents = int(refund_to_sender * decimal.Decimal("100"))
+
+                if requested_cents > 0:
+                    try:
+                        # 🟢 2. Fetch actual remaining unrefunded balance from Stripe
+                        unrefunded_cents = 0
+                        if intent_id.startswith("pi_"):
+                            pi = stripe.PaymentIntent.retrieve(intent_id)
+                            latest_charge = getattr(pi, "latest_charge", None)
+                            charge_id = latest_charge.id if hasattr(latest_charge, "id") else latest_charge
+                            if charge_id:
+                                charge = stripe.Charge.retrieve(charge_id)
+                                unrefunded_cents = charge.amount - charge.amount_refunded
+                            else:
+                                unrefunded_cents = getattr(pi, "amount", requested_cents)
+                        elif intent_id.startswith("ch_"):
+                            charge = stripe.Charge.retrieve(intent_id)
+                            unrefunded_cents = charge.amount - charge.amount_refunded
+                        else:
+                            unrefunded_cents = requested_cents
+
+                        # 🟢 3. Cap the refund to what is actually available on Stripe
+                        cents_to_refund = min(requested_cents, unrefunded_cents)
+
+                        if cents_to_refund > 0:
+                            refund_kwargs = {
+                                "amount": cents_to_refund,
+                                "metadata": {
+                                    "booking_payment_id": str(payment.id),
+                                    "reason": "dispute_partial_refund",
+                                }
+                            }
+                            if intent_id.startswith("pi_"):
+                                refund_kwargs["payment_intent"] = intent_id
+                            else:
+                                refund_kwargs["charge"] = intent_id
+
+                            stripe.Refund.create(**refund_kwargs)
+                            logger.info(
+                                "Stripe partial refund completed for Payment #%s. Requested: %s cents, Issued: %s cents",
+                                payment.id, requested_cents, cents_to_refund
+                            )
+                        else:
+                            logger.info(
+                                "Stripe transaction %s for Payment #%s has $0 unrefunded balance left. Skipping Stripe API call.",
+                                intent_id, payment.id
+                            )
+
+                    except stripe.error.InvalidRequestError as e:
+                        # If charge was already partially/fully refunded directly on Stripe, log warning and let DB/Wallet updates complete
+                        logger.warning(
+                            "Stripe partial refund skipped or declined for Payment #%s: %s. Proceeding with DB/Wallet updates.",
+                            payment.id, str(e)
+                        )
+                    except stripe.error.StripeError as e:
+                        logger.error(
+                            "Stripe execution partial refund failure for Payment #%s: %s", 
+                            payment.id, str(e), exc_info=True
+                        )
+                        raise DjangoValidationError(
+                            f"Stripe partial refund backend declined: {str(e)}"
+                        )
+
+            # Update local payment record
+            payment.status = getattr(BookingPaymentStatus, "PARTIAL_REFUND", BookingPaymentStatus.REFUNDED)
             payment.refunded_at = timezone.now()
-            payment.save(update_fields=["status", "refunded_at"])
 
+            update_fields = ["status", "refunded_at"]
+            if hasattr(payment, "updated_at"):
+                update_fields.append("updated_at")
+
+            payment.save(update_fields=update_fields)
+
+            # Restructure trip capacity
             booking_weight = getattr(booking, "agreed_weight_kg", decimal.Decimal("0.00"))
             if trip and hasattr(trip, "available_weight_kg"):
                 trip.available_weight_kg += booking_weight
                 trip.save(update_fields=["available_weight_kg"])
 
             return payment
-
-
-
-from decimal import Decimal
 
 
 class SubscriptionWebhookService:

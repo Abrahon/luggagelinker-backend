@@ -44,7 +44,7 @@ from decimal import Decimal
 from django.db.models import Sum
 from django.db.models.functions import Coalesce
 
-
+import decimal
 from .serializers import AdminPaymentStatsSerializer
 from django.conf import settings
 from django.http import HttpResponse
@@ -69,108 +69,105 @@ User = get_user_model()
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
-
-
 class CreateCheckoutSessionView(APIView):
-
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-
         try:
             plan_id = request.data.get("plan")
 
             if not plan_id:
                 return Response(
-                    {
-                        "success": False,
-                        "message": "Plan is required."
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"success": False, "message": "Plan is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             # ---------------------------
-            # VALIDATE PLAN
+            # 1. VALIDATE PLAN
             # ---------------------------
             try:
                 plan = Plan.objects.get(id=plan_id, is_active=True)
             except Plan.DoesNotExist:
                 return Response(
-                    {
-                        "success": False,
-                        "message": "Invalid or inactive plan."
-                    },
-                    status=status.HTTP_404_NOT_FOUND
+                    {"success": False, "message": "Invalid or inactive plan."},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
 
-            # ---------------------------
-            # CHECK STRIPE PRICE
-            # ---------------------------
             if not plan.stripe_price_id:
                 return Response(
-                    {
-                        "success": False,
-                        "message": "This plan is not configured for payments."
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"success": False, "message": "This plan is not configured for payments."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             # ---------------------------
-            # OPTIONAL: Prevent duplicate active subscription
+            # 2. PREVENT DUPLICATE SUBSCRIPTIONS
             # ---------------------------
             active_subscription = getattr(request.user, "subscription", None)
-
-            if active_subscription and active_subscription.is_current:
+            if active_subscription and getattr(active_subscription, "is_current", False):
                 return Response(
-                    {
-                        "success": False,
-                        "message": "You already have an active subscription."
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"success": False, "message": "You already have an active subscription."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            with transaction.atomic():
-
-                # ---------------------------
-                # CREATE PAYMENT (PENDING)
-                # ---------------------------
-                payment = Payment.objects.create(
-                    user=request.user,
-                    plan=plan,
-                    amount=plan.price,
-                    currency=plan.currency,
-                    status=PaymentStatus.PENDING,
+            # ---------------------------
+            # 3. VERIFY ACTUAL STRIPE PRICE AMOUNT (Fixes Amount Mismatch)
+            # ---------------------------
+            try:
+                stripe_price = stripe.Price.retrieve(plan.stripe_price_id)
+                # Convert Stripe unit_amount (cents) to Decimal dollars
+                actual_price_amount = decimal.Decimal(stripe_price.unit_amount) / decimal.Decimal("100")
+            except stripe.error.StripeError as e:
+                return Response(
+                    {"success": False, "message": f"Could not verify price on Stripe: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
-                # ---------------------------
-                # CREATE STRIPE CHECKOUT SESSION
-                # ---------------------------
-                checkout_session = stripe.checkout.Session.create(
-                    payment_method_types=["card"],
-                    mode="subscription",
-                    customer_email=request.user.email,
-                    line_items=[
-                        {
-                            "price": plan.stripe_price_id,
-                            "quantity": 1,
-                        }
-                    ],
-                    metadata={
-                        "payment_type": "subscription",
-                        "payment_id": str(payment.id),
-                        "user_id": str(request.user.id),
-                        "plan_id": str(plan.id),
-                    },
-                    # UPDATED HERE: Plural /payments/ and /payments/failure
-                    success_url=f"{settings.FRONTEND_URL}/payments/success?session_id={{CHECKOUT_SESSION_ID}}",
-                    cancel_url=f"{settings.FRONTEND_URL}/payments/failure",
-                )
+            # ---------------------------
+            # 4. CREATE PENDING PAYMENT IN DB
+            # ---------------------------
+            # Sync DB payment amount to actual_price_amount fetched from Stripe
+            payment = Payment.objects.create(
+                user=request.user,
+                plan=plan,
+                amount=actual_price_amount,  # Guaranteed to match Stripe's price
+                currency=plan.currency or stripe_price.currency.upper(),
+                status=PaymentStatus.PENDING,
+            )
 
-                # ---------------------------
-                # UPDATE PAYMENT WITH SESSION ID
-                # ---------------------------
-                payment.stripe_checkout_session_id = checkout_session.id
-                payment.save()
+            # ---------------------------
+            # 5. REUSE OR CREATE STRIPE CUSTOMER
+            # ---------------------------
+            customer_id = getattr(request.user, "stripe_customer_id", None)
+            session_kwargs = {
+                "payment_method_types": ["card"],
+                "mode": "subscription",
+                "line_items": [{"price": plan.stripe_price_id, "quantity": 1}],
+                "metadata": {
+                    "payment_type": "subscription",
+                    "payment_id": str(payment.id),
+                    "booking_payment_id": str(payment.id),  # Unified key for webhook backwards-compatibility
+                    "user_id": str(request.user.id),
+                    "plan_id": str(plan.id),
+                },
+                "success_url": f"{settings.FRONTEND_URL}/payments/success?session_id={{CHECKOUT_SESSION_ID}}",
+                "cancel_url": f"{settings.FRONTEND_URL}/payments/failure",
+            }
+
+            if customer_id:
+                session_kwargs["customer"] = customer_id
+            else:
+                session_kwargs["customer_email"] = request.user.email
+
+            # ---------------------------
+            # 6. CREATE CHECKOUT SESSION (Outside DB atomic lock)
+            # ---------------------------
+            checkout_session = stripe.checkout.Session.create(**session_kwargs)
+
+            # Save session details back to payment record
+            payment.stripe_checkout_session_id = checkout_session.id
+            if hasattr(payment, "checkout_url"):
+                payment.checkout_url = checkout_session.url
+            payment.save(update_fields=["stripe_checkout_session_id"] + (["checkout_url"] if hasattr(payment, "checkout_url") else []))
 
             return Response(
                 {
@@ -179,7 +176,7 @@ class CreateCheckoutSessionView(APIView):
                     "checkout_url": checkout_session.url,
                     "session_id": checkout_session.id,
                 },
-                status=status.HTTP_201_CREATED
+                status=status.HTTP_201_CREATED,
             )
 
         except stripe.error.StripeError as e:
@@ -187,9 +184,9 @@ class CreateCheckoutSessionView(APIView):
                 {
                     "success": False,
                     "message": "Stripe error occurred.",
-                    "error": str(e)
+                    "error": str(e),
                 },
-                status=status.HTTP_502_BAD_GATEWAY
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
         except Exception as e:
@@ -197,12 +194,11 @@ class CreateCheckoutSessionView(APIView):
                 {
                     "success": False,
                     "message": "Something went wrong while creating checkout session.",
-                    "error": str(e)
+                    "error": str(e),
                 },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-
+        
 
 # new webhook view for booking payments
 

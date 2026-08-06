@@ -365,3 +365,44 @@ class MonthlyRevenueItemSerializer(serializers.Serializer):
     platform_fee_revenue = serializers.FloatField()
     transaction_count = serializers.IntegerField()
     paying_users = serializers.IntegerField()
+
+
+
+
+
+class UserBriefSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "full_name",
+            "profile_picture",
+        ]
+
+    def get_full_name(self, obj):
+        profile = getattr(obj, "profile", None)
+
+        if profile:
+            return " ".join(
+                filter(
+                    None,
+                    [
+                        profile.first_name,
+                        profile.last_name,
+                    ],
+                )
+            )
+
+        return obj.email
+
+    def get_profile_picture(self, obj):
+        profile = getattr(obj, "profile", None)
+
+        if profile and profile.profile_picture:
+            return profile.profile_picture.url
+
+        return None

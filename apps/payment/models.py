@@ -166,6 +166,7 @@ class BookingPaymentStatus(models.TextChoices):
     INITIALIZED = "INITIALIZED", _("Gateway Session Created")
     AUTHORIZED = "AUTHORIZED", _("Authorized / Held in Escrow")
     CAPTURED = "CAPTURED", _("Captured / Released to Traveler")
+    PARTIAL_REFUND = "PARTIAL_REFUND", "Partially Refunded"
     REFUNDED = "REFUNDED", _("Refunded to Sender")
     FAILED = "FAILED", _("Failed")
 

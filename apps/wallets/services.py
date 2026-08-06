@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import logging
 import stripe
 from decimal import Decimal
@@ -7,6 +8,11 @@ from django.core.exceptions import ValidationError
 from django.conf import settings
 import hashlib
 import random
+import secrets
+from decimal import Decimal
+import logging
+from django.db import transaction
+from django.core.exceptions import ValidationError
 
 # Top-level Imports matching instructions 5 & 14
 from apps.wallets.models import (
@@ -349,37 +355,50 @@ class WalletService:
             description=f"User terminated processing for Withdrawal ID #{withdrawal.id}. Funds re-credited."
         )
         return withdrawal
+    @staticmethod
+    def _calculate_luhn_check_digit(number_15_digits: str) -> str:
+        """Calculates the 16th check digit using the Luhn Algorithm."""
+        digits = [int(d) for d in number_15_digits]
+        for i in range(len(digits) - 1, -1, -2):
+            digits[i] *= 2
+            if digits[i] > 9:
+                digits[i] -= 9
+        total_sum = sum(digits)
+        check_digit = (10 - (total_sum % 10)) % 10
+        return str(check_digit)
 
+    @classmethod
+    def generate_virtual_card_number(cls) -> str:
+        """
+        Generates a 16-digit Visa card number (BIN: 4829) passing the Luhn algorithm.
+        Uses cryptographically secure random digits instead of predictable user IDs.
+        """
+        # 4-digit BIN + 11 secure random digits = 15 digits
+        random_payload = "".join(str(secrets.randbelow(10)) for _ in range(11))
+        fifteen_digits = f"4829{random_payload}"
+        
+        # Calculate 16th digit
+        check_digit = cls._calculate_luhn_check_digit(fifteen_digits)
+        return f"{fifteen_digits}{check_digit}"
 
+    @staticmethod
+    def generate_masked_card(card_number: str) -> str:
+        """Masks a given card number safely."""
+        if not card_number or len(card_number) < 16:
+            return "•••• •••• •••• ••••"
+        return f"{card_number[:4]} •••• •••• {card_number[-4:]}"
 
+    @staticmethod
+    def generate_virtual_cvv() -> str:
+        """Generates a secure 3-digit CVV (100–999)."""
+        return str(secrets.randbelow(900) + 100)
 
+    @staticmethod
+    def generate_expiry(years_valid: int = 3) -> str:
+        """Dynamically calculates expiry date relative to today."""
+        expiry_date = datetime.now() + timedelta(days=365 * years_valid)
+        return expiry_date.strftime("%m/%y")
 
-
-        @staticmethod
-        def generate_virtual_card_number(user):
-            seed = hashlib.sha256(str(user.id).encode()).hexdigest()
-
-            digits = "".join(str(int(c, 16) % 10) for c in seed[:12])
-
-            return f"4829{digits}"
-
-        @staticmethod
-        def generate_masked_card(user):
-            number = WalletService.generate_virtual_card_number(user)
-
-            return (
-                f"{number[:4]} •••• •••• {number[-4:]}"
-            )
-
-        @staticmethod
-        def generate_virtual_cvv(user):
-            seed = hashlib.md5(str(user.id).encode()).hexdigest()
-
-            return str(int(seed[:6], 16) % 900 + 100)
-
-        @staticmethod
-        def generate_expiry():
-            return "08/28"
 
     @classmethod
     @transaction.atomic
@@ -413,6 +432,95 @@ class WalletService:
             description=f"Admin Adjustment by {admin_user.email}. Context Notes: {reason}"
         )
         return tx
+
+
+
+
+    @classmethod
+    @transaction.atomic
+    def split_partial_escrow(cls, booking, sender_amt, traveler_amt):
+        """
+        Splits held escrow funds between Sender (partial refund) and Traveler/Carrier (partial payout)
+        during dispute resolution.
+        """
+        sender_amt = Decimal(str(sender_amt or "0.00"))
+        traveler_amt = Decimal(str(traveler_amt or "0.00"))
+
+        if sender_amt < Decimal("0.00") or traveler_amt < Decimal("0.00"):
+            raise ValidationError("Split amounts must be non-negative.")
+
+        total_split = sender_amt + traveler_amt
+        if total_split <= Decimal("0.00"):
+            raise ValidationError("Total dispute settlement amount must be greater than zero.")
+
+        # 1. Fetch & lock Sender Wallet
+        sender = booking.sender
+        sender_wallet, _ = Wallet.objects.get_or_create(
+            user=sender,
+            defaults={"available_balance": Decimal("0.00"), "pending_balance": Decimal("0.00")}
+        )
+        sender_wallet = Wallet.objects.select_for_update().get(id=sender_wallet.id)
+
+        # ---------------------------------------------------------
+        # 2. PROCESS SENDER REFUND (DISPUTE_REFUND)
+        # ---------------------------------------------------------
+        if sender_amt > Decimal("0.00"):
+            sender_wallet.pending_balance -= sender_amt
+            sender_wallet.available_balance += sender_amt
+
+            WalletTransaction.objects.create(
+                wallet=sender_wallet,
+                booking=booking,
+                type=WalletTransaction.TransactionType.DISPUTE_REFUND,  # 🟢 Clearly marked
+                amount=sender_amt,
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+                balance_before=sender_wallet.available_balance - sender_amt,
+                balance_after=sender_wallet.available_balance,
+                description=f"Dispute Partial Refund for Booking: {booking.tracking_number}"
+            )
+
+        # ---------------------------------------------------------
+        # 3. DEDUCT REMAINING ESCROW FROM SENDER
+        # ---------------------------------------------------------
+        if traveler_amt > Decimal("0.00"):
+            sender_wallet.pending_balance -= traveler_amt
+
+        sender_wallet.save(update_fields=["available_balance", "pending_balance"])
+
+        # ---------------------------------------------------------
+        # 4. PROCESS TRAVELER PAYOUT (DISPUTE_PAYOUT)
+        # ---------------------------------------------------------
+        if traveler_amt > Decimal("0.00"):
+            traveler = getattr(booking, "traveler", None) or getattr(booking, "carrier", None)
+            if not traveler:
+                raise ValidationError("Cannot issue traveler payout: No traveler/carrier assigned to this booking.")
+
+            traveler_wallet, _ = Wallet.objects.get_or_create(
+                user=traveler,
+                defaults={"available_balance": Decimal("0.00"), "pending_balance": Decimal("0.00")}
+            )
+            traveler_wallet = Wallet.objects.select_for_update().get(id=traveler_wallet.id)
+
+            balance_before = traveler_wallet.available_balance
+            traveler_wallet.available_balance += traveler_amt
+            
+            update_fields = ["available_balance"]
+            if hasattr(traveler_wallet, "total_earned"):
+                traveler_wallet.total_earned += traveler_amt
+                update_fields.append("total_earned")
+
+            traveler_wallet.save(update_fields=update_fields)
+
+            WalletTransaction.objects.create(
+                wallet=traveler_wallet,
+                booking=booking,
+                type=WalletTransaction.TransactionType.DISPUTE_PAYOUT,  # 🟢 Clearly marked
+                amount=traveler_amt,
+                status=WalletTransaction.TransactionStatus.COMPLETED,
+                balance_before=balance_before,
+                balance_after=traveler_wallet.available_balance,
+                description=f"Dispute Settlement Payout for Booking: {booking.tracking_number}"
+            )
 
 
 class AdminWithdrawalService:
@@ -632,3 +740,5 @@ class AdminWithdrawalService:
 
         logger.info(f"Admin {admin_user.email} marked withdrawal {withdrawal.id} as physically paid.")
         return withdrawal
+
+

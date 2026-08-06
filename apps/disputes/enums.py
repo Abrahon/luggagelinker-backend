@@ -55,10 +55,9 @@ class DisputeReason(models.TextChoices):
 # ==============================================================================
 
 class ResolutionType(models.TextChoices):
-    """Final resolution applied by an administrator."""
-    REFUND = "REFUND", "Refund Sender"
-    RELEASE_ESCROW = "RELEASE_ESCROW", "Release Escrow"
+    FULL_REFUND = "FULL_REFUND", "Full Refund to Sender"
     PARTIAL_REFUND = "PARTIAL_REFUND", "Partial Refund"
+    RELEASE_ESCROW = "RELEASE_PAYMENT", "Release Escrow to Traveler"
     NO_ACTION = "NO_ACTION", "No Action"
 
 

@@ -52,6 +52,8 @@ class WalletTransaction(models.Model):
     class TransactionType(models.TextChoices):
         ESCROW_HOLD = "ESCROW_HOLD", "Escrow Hold"
         ESCROW_RELEASE = "ESCROW_RELEASE", "Escrow Release"
+        DISPUTE_PAYOUT = "DISPUTE_PAYOUT", "Dispute Payout"       
+        DISPUTE_REFUND = "DISPUTE_REFUND", "Dispute Refund"
         WITHDRAWAL = "WITHDRAWAL", "Withdrawal"
         WITHDRAWAL_CANCEL = "WITHDRAWAL_CANCEL", "Withdrawal Cancel"
         REFUND = "REFUND", "Refund"

@@ -9,11 +9,11 @@ from rest_framework import serializers
 from apps.bookings.models import Booking
 from .models import DisputeEvidence
 from .enums import EvidenceType, DisputeStatus
-# 🟢 Add this right at the top of apps/disputes/serializers.py
+from apps.disputes.enums import ResolutionType
 from decimal import Decimal
-# Near the top of apps/disputes/serializers.py
+from apps.accounts.serializers import UserBriefSerializer
 
-# 🟢 Add the model imports from your payment app
+
 from apps.payment.models import BookingPayment, BookingPaymentStatus
 
 User = get_user_model()
@@ -91,6 +91,9 @@ class DisputeEvidenceSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+
+    
 # ==============================================================================
 # 2. DISPUTE MESSAGE SERIALIZER (Handles Conversation Threads)
 # ==============================================================================
@@ -115,113 +118,99 @@ class DisputeMessageSerializer(serializers.ModelSerializer):
 # ==============================================================================
 # 3. USER DISPUTE SERIALIZER (For Senders & Travelers)
 # ==============================================================================
+
+
 class DisputeSerializer(serializers.ModelSerializer):
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
+    """Clean data view optimized for client-side presentation layers (Senders & Travelers)."""
+
+    # 🟢 1. Explicitly nest user details instead of outputting raw UUIDs
+    opened_by = UserBriefSerializer(read_only=True)
+    against_user = UserBriefSerializer(read_only=True)
+    assigned_admin = UserBriefSerializer(read_only=True)
+
+    # 🟢 2. Human-readable choices display
+    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    resolution_display = serializers.CharField(source="get_resolution_display", read_only=True)
+    
+    # 🟢 3. Embedded relations
     messages = DisputeMessageSerializer(many=True, read_only=True)
-    opened_by_email = serializers.ReadOnlyField(source='opened_by.email')
-    against_user_email = serializers.ReadOnlyField(source='against_user.email')
+    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
 
     class Meta:
         model = Dispute
         fields = [
-            'id', 'booking', 'opened_by', 'opened_by_email', 'against_user', 'against_user_email',
-            'reason', 'status', 'description', 'disputed_amount', 'is_reopened', 
-            'created_at', 'updated_at', 'evidence', 'messages'
+            "id",
+            "booking",
+            "opened_by",
+            "against_user",
+            "assigned_admin",
+            "reason",
+            "reason_display",
+            "description",
+            "disputed_amount",
+            "status",
+            "status_display",
+            "resolution",
+            "resolution_display",
+            "is_reopened",
+            "messages",
+            "evidence",
+            "created_at",
+            "updated_at",
+            "resolved_at",  # 🟢 4. Restored missing field
         ]
-        read_only_fields = [
-            'id', 'opened_by', 'against_user', 'status', 'is_reopened', 'created_at', 'updated_at'
-        ]
+        # All user mutations go through discrete action endpoints
+        read_only_fields = fields
+
+        read_only_fields = fields
 
     def validate(self, attrs):
-        request = self.context.get('request')
-        if not request or not request.user:
-            raise serializers.ValidationError("Authentication application context is missing.")
+        request = self.context["request"]
+
+        booking = attrs["booking"]
 
         user = request.user
-        booking = attrs.get('booking')
 
-        # 1. Guard Rail: Ensure user belongs to the transaction
-        if user != booking.sender and user != booking.traveler:
+        if user not in [booking.sender, booking.traveler]:
             raise serializers.ValidationError(
-                {"booking": "Authorization Error: You must be an active party to this booking to open a dispute."}
+                {
+                    "booking": "You are not a participant of this booking."
+                }
             )
 
-        # 2. Guard Rail: Prevent redundant ticketing channels
         if Dispute.objects.filter(booking=booking).exists():
             raise serializers.ValidationError(
-                {"booking": "Conflict Error: An active dispute hold is already linked to this transaction record."}
+                {
+                    "booking": "A dispute already exists for this booking."
+                }
             )
 
-        # 3. Guard Rail: Verify appropriate booking transaction phase parameters
-        if booking.status in ["PENDING", "CANCELLED"]:
+        if booking.status in [
+            "PENDING",
+            "CANCELLED",
+        ]:
             raise serializers.ValidationError(
-                {"booking": f"Workflow Error: Cannot initiate disputes against bookings with active status: {booking.status}."}
+                {
+                    "booking": "This booking cannot be disputed."
+                }
             )
 
-        # Automate routing roles cleanly inside backend memory spaces
-        attrs['opened_by'] = user
-        attrs['against_user'] = booking.traveler if user == booking.sender else booking.sender
-        attrs['last_updated_by'] = user
+        attrs["opened_by"] = user
+        attrs["against_user"] = (
+            booking.traveler
+            if user == booking.sender
+            else booking.sender
+        )
+        attrs["last_updated_by"] = user
+
         return attrs
 
     def create(self, validated_data):
-        try:
-            dispute = Dispute(**validated_data)
-            dispute.full_clean()
-            dispute.save()
-            return dispute
-        except DjangoValidationError as e:
-            raise serializers.ValidationError(serializers.as_serializer_error(e))
-
-
-# ==============================================================================
-# 4. ADMINISTRATIVE DISPUTE SERIALIZER (For Moderation Teams)
-# ==============================================================================
-class AdminDisputeSerializer(serializers.ModelSerializer):
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
-    messages = DisputeMessageSerializer(many=True, read_only=True)
-    opened_by_email = serializers.ReadOnlyField(source='opened_by.email')
-    against_user_email = serializers.ReadOnlyField(source='against_user.email')
-    assigned_admin_email = serializers.ReadOnlyField(source='assigned_admin.email')
-    resolved_by_email = serializers.ReadOnlyField(source='resolved_by.email')
-
-    class Meta:
-        model = Dispute
-        fields = [
-            'id', 'booking', 'opened_by', 'opened_by_email', 'against_user', 'against_user_email',
-            'assigned_admin', 'assigned_admin_email', 'resolved_by', 'resolved_by_email', 
-            'last_updated_by', 'reason', 'status', 'resolution', 'description', 'admin_notes', 
-            'disputed_amount', 'is_reopened', 'sender_notified', 'traveler_notified', 
-            'created_at', 'updated_at', 'resolved_at', 'evidence', 'messages'
-        ]
-        read_only_fields = ['id', 'booking', 'opened_by', 'against_user', 'created_at', 'updated_at']
-
-    def validate(self, attrs):
-        request = self.context.get('request')
-        if not request or not request.user:
-            raise serializers.ValidationError("Authentication validation context missing.")
-
-        admin = request.user
-        attrs['last_updated_by'] = admin
-
-        # Capture status transitions state machine rules
-        current_status = self.instance.status if self.instance else None
-        new_status = attrs.get('status', current_status)
-        new_resolution = attrs.get('resolution', self.instance.resolution if self.instance else "")
-
-        # 1. State Enforcement: If moving to RESOLVED, a structural Resolution Type MUST be selected.
-        if new_status == Dispute.DisputeStatus.RESOLVED and not new_resolution:
-            raise serializers.ValidationError(
-                {"resolution": "Workflow Constraint: A clear Resolution Type must be applied to execute a RESOLVED execution state."}
-            )
-
-        # 2. Automation: Log timestamp and administrator signatures when marking a ticket as finalized
-        if new_status in [Dispute.DisputeStatus.RESOLVED, Dispute.DisputeStatus.REJECTED] and current_status not in [Dispute.DisputeStatus.RESOLVED, Dispute.DisputeStatus.REJECTED]:
-            attrs['resolved_by'] = admin
-            attrs['resolved_at'] = timezone.now()
-
-        return attrs
-
+        dispute = Dispute(**validated_data)
+        dispute.full_clean()
+        dispute.save()
+        return dispute
 
 
 
@@ -269,24 +258,6 @@ class DisputeHistorySerializer(serializers.ModelSerializer):
         return actor.username if hasattr(actor, "username") else actor.email
 
 
-class AdminDisputeSerializer(serializers.ModelSerializer):
-    # 👇 Add this nested relationship line right here
-    history = DisputeHistorySerializer(many=True, read_only=True)
-    
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
-    messages = DisputeMessageSerializer(many=True, read_only=True)
-    # ... keep your existing attributes ...
-
-    class Meta:
-        model = Dispute
-        fields = [
-            'id', 'booking', 'opened_by', 'against_user', 'status',
-            'evidence', 'messages', 'history', # 👈 Make sure it's added here
-            # ... keep your remaining field declarations ...
-        ]
-
-
-
 
 
 # ==============================================================================
@@ -314,9 +285,7 @@ class DisputeHistorySerializer(serializers.ModelSerializer):
         return full_name if full_name else (getattr(actor, "username", "") or actor.email)
 
 
-# ==============================================================================
-# DISPUTE EVIDENCE SERIALIZER
-# ==============================================================================
+
 
 # ==============================================================================
 # DISPUTE CONVERSATION THREAD MESSAGE SERIALIZER
@@ -344,9 +313,6 @@ class DisputeMessageSerializer(serializers.ModelSerializer):
         return attrs
 
 
-# ==============================================================================
-# USER INITIALIZATION FIELD GENERATION SERIALIZER
-# ==============================================================================
 # ==============================================================================
 # USER INITIALIZATION FIELD GENERATION SERIALIZER
 # ==============================================================================
@@ -405,41 +371,26 @@ class CreateDisputeSerializer(serializers.ModelSerializer):
         return attrs
 
 
-# ==============================================================================
-# CLIENT STANDARD DATA PRESENTATION DISPUTE SERIALIZER
-# ==============================================================================
-class DisputeSerializer(serializers.ModelSerializer):
-    """Clean data view optimized for client-side presentation layers (Senders & Travelers)."""
-    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    resolution_display = serializers.CharField(source="get_resolution_display", read_only=True)
-    
-    messages = DisputeMessageSerializer(many=True, read_only=True)
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Dispute
-        fields = [
-            "id", "booking", "opened_by", "against_user", "reason", "reason_display",
-            "description", "disputed_amount", "status", "status_display",
-            "resolution", "resolution_display", "messages", "evidence", "created_at", "updated_at"
-        ]
-        read_only_fields = fields # All mutations for users go through discrete action endpoints
-
 
 # ==============================================================================
 # PLATFORM ADMINISTRATIVE MODERATION DISPUTE SERIALIZER
 # ==============================================================================
 class AdminDisputeSerializer(serializers.ModelSerializer):
     """Full-visibility management serializer tailored for administrative back-office panels."""
+
+    # 🟢 1. Nested user profiles for full administrative visibility
+    opened_by = UserBriefSerializer(read_only=True)
+    against_user = UserBriefSerializer(read_only=True)
+    assigned_admin = UserBriefSerializer(read_only=True)
+    resolved_by = UserBriefSerializer(read_only=True)
+    last_updated_by = UserBriefSerializer(read_only=True)
+
+    # 🟢 2. Human-readable choices display
     reason_display = serializers.CharField(source="get_reason_display", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     resolution_display = serializers.CharField(source="get_resolution_display", read_only=True)
-    
-    opened_by_email = serializers.ReadOnlyField(source="opened_by.email")
-    against_user_email = serializers.ReadOnlyField(source="against_user.email")
-    assigned_admin_email = serializers.ReadOnlyField(source="assigned_admin.email")
-    
+
+    # 🟢 3. Embedded relational feeds (messages, evidence, and audit logs)
     messages = DisputeMessageSerializer(many=True, read_only=True)
     evidence = DisputeEvidenceSerializer(many=True, read_only=True)
     history = DisputeHistorySerializer(many=True, read_only=True)
@@ -447,11 +398,108 @@ class AdminDisputeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Dispute
         fields = [
-            "id", "booking", "opened_by", "opened_by_email", "against_user", "against_user_email",
-            "assigned_admin", "assigned_admin_email", "reason", "reason_display", "description", 
-            "disputed_amount", "status", "status_display", "resolution", "resolution_display", 
-            "admin_notes", "resolved_by", "resolved_at", "messages", "evidence", "history", 
-            "created_at", "updated_at"
+            "id",
+            "booking",
+            "opened_by",
+            "against_user",
+            "assigned_admin",
+            "resolved_by",
+            "last_updated_by",
+            "reason",
+            "reason_display",
+            "description",
+            "disputed_amount",
+            "status",
+            "status_display",
+            "resolution",
+            "resolution_display",
+            "admin_notes",
+            "is_reopened",
+            "sender_notified",
+            "traveler_notified",
+            "messages",
+            "evidence",
+            "history",
+            "created_at",
+            "updated_at",
+            "resolved_at",
         ]
-        # Admin interfaces manipulate rows through deliberate class services, not raw model binding
-        read_only_fields = [f for f in fields if f not in ["admin_notes"]]
+        read_only_fields = fields
+
+
+
+
+
+class AdminDisputeAssignSerializer(serializers.ModelSerializer):
+    assigned_admin = UserBriefSerializer(read_only=True)
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = Dispute
+        fields = [
+            "id",
+            "status",
+            "status_display",
+            "assigned_admin",
+        ]
+
+
+
+
+class AdminRequestEvidenceSerializer(serializers.Serializer):
+    request_message = serializers.CharField(
+        max_length=1000,
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True,
+        help_text="Explain what additional evidence the user must provide.",
+    )
+
+
+
+
+
+class AdminResolveDisputeSerializer(serializers.Serializer):
+    resolution_type = serializers.ChoiceField(
+        choices=ResolutionType.choices
+    )
+
+    admin_notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default=""
+    )
+
+    refund_ratio = serializers.DecimalField(
+        max_digits=3,
+        decimal_places=2,
+        default=Decimal("1.00")
+    )
+
+    def validate(self, attrs):
+        resolution = attrs["resolution_type"]
+        refund_ratio = attrs["refund_ratio"]
+
+        if resolution == ResolutionType.RELEASE_ESCROW:
+            if refund_ratio != Decimal("0.00"):
+                raise serializers.ValidationError({
+                    "refund_ratio": "Release Escrow requires refund_ratio = 0.00"
+                })
+
+        elif resolution == ResolutionType.FULL_REFUND:
+            if refund_ratio != Decimal("1.00"):
+                raise serializers.ValidationError({
+                    "refund_ratio": "Full Refund requires refund_ratio = 1.00"
+                })
+
+        elif resolution == ResolutionType.PARTIAL_REFUND:
+            if not Decimal("0.01") <= refund_ratio <= Decimal("0.99"):
+                raise serializers.ValidationError({
+                    "refund_ratio": "Must be between 0.01 and 0.99"
+                })
+
+        return attrs

@@ -1,8 +1,9 @@
 import logging
+from django.db.migrations import serializer
 from django.db.models import Q
 from django.core.exceptions import ValidationError as DjangoValidationError
 
-from rest_framework import generics, status
+from rest_framework import generics, request, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -25,11 +26,15 @@ from .models import Dispute
 from .services import DisputeService
 from .admin_services import AdminDisputeService
 from .serializers import (
+    AdminRequestEvidenceSerializer,
+    AdminResolveDisputeSerializer,
     DisputeSerializer,
     CreateDisputeSerializer,
     DisputeMessageSerializer,
     DisputeEvidenceSerializer,
-    AdminDisputeSerializer
+    AdminDisputeSerializer,
+    AdminDisputeAssignSerializer
+
 )
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
@@ -58,12 +63,6 @@ class DisputeErrorFormatMixin:
 # 👤 STANDARD USER ENDPOINTS (Senders & Travelers)
 # ==============================================================================
 
-
-
-
-# ==============================================================================
-# 👤 STANDARD USER ENDPOINTS (Senders & Travelers)
-# ==============================================================================
 
 class DisputeListCreateAPIView(DisputeErrorFormatMixin, generics.ListCreateAPIView):
     """
@@ -100,14 +99,13 @@ class DisputeListCreateAPIView(DisputeErrorFormatMixin, generics.ListCreateAPIVi
 
         try:
             dispute = DisputeService.create_dispute(
-                booking_id=serializer.validated_data["booking"].id,
+                booking_id=serializer.validated_data["booking_id"],
                 user=request.user,
                 reason=serializer.validated_data["reason"],
-                description=serializer.validated_data.get("description", ""),
+                description=serializer.validated_data["description"],
                 disputed_amount=serializer.validated_data["disputed_amount"],
-                evidence_files=evidence_files  # Passed through to dispute service
+                evidence_files=serializer.validated_data.get("evidence_files", []),
             )
-            
             output_serializer = DisputeSerializer(dispute, context=self.get_serializer_context())
             return Response({
                 "message": "Dispute case file opened successfully and escrow protections activated.",
@@ -233,6 +231,8 @@ class DisputeAddEvidenceAPIView(DisputeErrorFormatMixin, generics.CreateAPIView)
                 {"detail": "Internal server error."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
 # ==============================================================================
 # 🛡️ ADMINISTRATIVE MANAGEMENT ENDPOINTS (Staff / Superusers Only)
 # ==============================================================================
@@ -267,108 +267,206 @@ class AdminDisputeRetrieveAPIView(generics.RetrieveAPIView):
             "history__actor"
         )
 
-
-class AdminDisputeAssignAPIView(DisputeErrorFormatMixin, generics.CreateAPIView):
-    """Assigns the target dispute file directly to the authenticated moderator agent."""
+class AdminDisputeAssignAPIView(
+    DisputeErrorFormatMixin,
+    generics.CreateAPIView,
+):
     permission_classes = [IsAdminUser]
-    serializer_class = AdminDisputeSerializer
+
+    serializer_class = AdminDisputeAssignSerializer
+
     lookup_field = "id"
 
     def get_queryset(self):
-        return Dispute.objects.all()
+        return Dispute.objects.select_related(
+            "assigned_admin",
+        )
 
     def create(self, request, *args, **kwargs):
+
         dispute = self.get_object()
+
         try:
+
             updated_dispute = AdminDisputeService.assign_admin(
                 dispute_id=dispute.id,
-                admin_user=request.user
+                admin_user=request.user,
             )
-            output = AdminDisputeSerializer(updated_dispute, context=self.get_serializer_context())
-            return Response({
-                "message": "Dispute file successfully assigned to your administrator account.",
-                "dispute": output.data
-            }, status=status.HTTP_200_OK)
+
+            serializer = self.get_serializer(
+                updated_dispute
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Dispute assigned successfully.",
+                    "data": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         except DjangoValidationError as e:
-            return Response(self._format_error(e), status=status.HTTP_400_BAD_REQUEST)
+
+            return Response(
+                self._format_error(e),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         except Exception:
-            logger.exception("Unexpected exception triggered during admin assignment trace for dispute %s", dispute.id)
-            return Response({"detail": "Internal server error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+            logger.exception(
+                "Unexpected exception triggered during admin assignment trace for dispute %s",
+                dispute.id,
+            )
 
-class AdminDisputeRequestEvidenceAPIView(DisputeErrorFormatMixin, generics.CreateAPIView):
-    """Dispatches a formal demand for additional supporting documentation to the users."""
+            return Response(
+                {
+                    "success": False,
+                    "message": "Internal server error.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+class AdminDisputeRequestEvidenceAPIView(
+    DisputeErrorFormatMixin,
+    generics.CreateAPIView,
+):
+    """
+    Request additional evidence from the sender/traveler.
+    """
+
     permission_classes = [IsAdminUser]
-    serializer_class = AdminDisputeSerializer
+
+    serializer_class = AdminRequestEvidenceSerializer
+
     lookup_field = "id"
 
     def get_queryset(self):
-        return Dispute.objects.all()
+        return Dispute.objects.select_related(
+            "booking",
+            "opened_by",
+            "against_user",
+            "assigned_admin",
+        )
 
     def create(self, request, *args, **kwargs):
-        dispute = self.get_object()
-        message_text = request.data.get("message_text")
 
-        if not message_text or not str(message_text).strip():
-            return Response({"message_text": ["This payload content field cannot be left blank."]}, status=status.HTTP_400_BAD_REQUEST)
+        dispute = self.get_object()
+
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(raise_exception=True)
 
         try:
-            updated_dispute = AdminDisputeService.request_more_evidence(
-                dispute_id=dispute.id,
-                admin_user=request.user,
-                message_text=message_text
+
+            updated_dispute = (
+                AdminDisputeService.request_more_evidence(
+                    dispute_id=dispute.id,
+                    admin_user=request.user,
+                    message_text=serializer.validated_data[
+                        "request_message"
+                    ],
+                )
             )
-            output = AdminDisputeSerializer(updated_dispute, context=self.get_serializer_context())
-            return Response({
-                "message": "Evidence request dispatched successfully. Target user tracking updated.",
-                "dispute": output.data
-            }, status=status.HTTP_200_OK)
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Evidence request sent successfully.",
+                    "data": {
+                        "id": updated_dispute.id,
+                        "status": updated_dispute.status,
+                        "status_display": updated_dispute.get_status_display(),
+                        "requested_evidence": serializer.validated_data[
+                            "request_message"
+                        ],
+                        "updated_at": updated_dispute.updated_at,
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
 
         except DjangoValidationError as e:
-            return Response(self._format_error(e), status=status.HTTP_400_BAD_REQUEST)
+
+            return Response(
+                self._format_error(e),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         except Exception:
-            logger.exception("Unexpected error encountered during evidence request execution on dispute %s", dispute.id)
-            return Response({"detail": "Internal server error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            logger.exception(
+                "Unexpected error while requesting evidence for dispute %s",
+                dispute.id,
+            )
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Failed to request additional evidence.",
+                    "errors": {
+                        "detail": "Internal server error.",
+                    },
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        
 
 
-class AdminDisputeResolveAPIView(DisputeErrorFormatMixin, generics.CreateAPIView):
+class AdminDisputeResolveAPIView(DisputeErrorFormatMixin, generics.GenericAPIView):
     """Applies the final arbitration verdict and updates billing/booking states."""
     permission_classes = [IsAdminUser]
-    serializer_class = AdminDisputeSerializer
+    serializer_class = AdminResolveDisputeSerializer
+    queryset = Dispute.objects.all()
     lookup_field = "id"
 
-    def get_queryset(self):
-        return Dispute.objects.all()
-
-    def create(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
         dispute = self.get_object()
-        resolution_type = request.data.get("resolution_type")
-        admin_notes = request.data.get("admin_notes", "")
-        refund_ratio = request.data.get("refund_ratio", "1.00")
 
-        if not resolution_type:
-            return Response({"resolution_type": ["This parameter field selection string is required."]}, status=status.HTTP_400_BAD_REQUEST)
+        # 🟢 1. Validate payload using DRF Serializer
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Retrieve validated attributes with safe key lookups
+        resolution = serializer.validated_data.get("resolution") or serializer.validated_data.get("resolution_type")
+        admin_notes = serializer.validated_data.get("admin_notes", "")
+        refund_ratio = serializer.validated_data.get("refund_ratio", "1.00")
 
         try:
+            # 🟢 2. Execute resolution service atomic transaction
             updated_dispute = AdminDisputeService.resolve(
                 dispute_id=dispute.id,
                 admin_user=request.user,
-                resolution_type=resolution_type,
+                resolution_type=resolution,
                 admin_notes=admin_notes,
-                refund_ratio=refund_ratio
+                refund_ratio=refund_ratio,
             )
+
+            # 🟢 3. Serialize response data
             output = AdminDisputeSerializer(updated_dispute, context=self.get_serializer_context())
-            return Response({
-                "message": f"Arbitration completed successfully. Verdict execution choice applied: {resolution_type}.",
-                "dispute": output.data
-            }, status=status.HTTP_200_OK)
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Dispute resolved successfully.",
+                    "data": output.data,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         except DjangoValidationError as e:
+            logger.warning("Dispute resolution rejected for dispute %s: %s", dispute.id, e)
             return Response(self._format_error(e), status=status.HTTP_400_BAD_REQUEST)
-        except Exception:
-            logger.exception("Unexpected crash inside system settlement execution framework path for dispute %s", dispute.id)
-            return Response({"detail": "Internal server error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        except Exception as e:
+            logger.exception("Unexpected exception during dispute resolution for dispute %s: %s", dispute.id, e)
+            return Response(
+                {"detail": "Internal server error."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 

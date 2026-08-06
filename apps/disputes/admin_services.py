@@ -3,7 +3,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-
+from apps.wallets.services import WalletService
 from .models import Dispute, DisputeHistory
 from .services import DisputeService
 from apps.disputes.enums import DisputeStatus, ResolutionType, DisputeHistoryAction
@@ -133,9 +133,9 @@ class AdminDisputeService:
             raise ValidationError("No active authorized escrow ledger record found for this disputed booking transaction.")
 
         # ─── RESOLUTION SELECTION ROUTING MATRIX ───
-        if resolution_type == ResolutionType.REFUND:
+        if resolution_type == ResolutionType.FULL_REFUND:
             dispute.status = DisputeStatus.RESOLVED
-            dispute.resolution = ResolutionType.REFUND
+            dispute.resolution = ResolutionType.FULL_REFUND
             
             # ✅ Fix #7: BookingPaymentService propagates errors natively; if Stripe fails, this transaction rolls back cleanly
             BookingPaymentService.refund(payment=payment)
@@ -170,7 +170,7 @@ class AdminDisputeService:
             BookingPaymentService.partial_refund(payment=payment, refund_to_sender=refund_to_sender, payout_to_traveler=payout_to_traveler)
             WalletService.split_partial_escrow(booking=booking, sender_amt=refund_to_sender, traveler_amt=payout_to_traveler)
             
-            booking.payment_status = BookingPaymentStatus.PARTIALLY_REFUNDED
+            booking.payment_status = BookingPaymentStatus.PARTIAL_REFUND
             booking.status = BookingStatus.COMPLETED
             booking.save(update_fields=["status", "payment_status"])
 
@@ -206,7 +206,7 @@ class AdminDisputeService:
         ])
 
         history_action_map = {
-            ResolutionType.REFUND: DisputeHistoryAction.RESOLVED_REFUND,
+            ResolutionType.FULL_REFUND: DisputeHistoryAction.RESOLVED_REFUND,
             ResolutionType.RELEASE_ESCROW: DisputeHistoryAction.RESOLVED_RELEASE,
             ResolutionType.PARTIAL_REFUND: DisputeHistoryAction.RESOLVED_PARTIAL,
             ResolutionType.NO_ACTION: DisputeHistoryAction.REJECTED
@@ -237,3 +237,5 @@ class AdminDisputeService:
         transaction.on_commit(lambda: notify_dispute_resolution(dispute))
 
         return dispute
+
+
