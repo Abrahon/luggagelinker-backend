@@ -103,15 +103,20 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 
 # Stripe Top-Up Redirect URLs
+import os
+
+# Stripe Top-Up Redirect URLs
+import os
+
+# Stripe Top-Up Redirect URLs
 STRIPE_TOPUP_SUCCESS_URL = os.getenv(
     "STRIPE_TOPUP_SUCCESS_URL",
-    "http://localhost:3600/wallet/topup/success?session_id={CHECKOUT_SESSION_ID}",
+    "http://localhost:3600/sender-wallet/topup/success?session_id={CHECKOUT_SESSION_ID}",
 )
 STRIPE_TOPUP_CANCEL_URL = os.getenv(
     "STRIPE_TOPUP_CANCEL_URL",
-    "http://localhost:3600/wallet/topup/cancel",
+    "http://localhost:3600/sender-wallet/topup/cancel",
 )
-
 # Add this setting to allow the Dev Tunnel header during CORS preflight:
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-tunnel-skip-antiphishing-page",

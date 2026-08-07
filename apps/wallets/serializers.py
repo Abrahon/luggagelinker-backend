@@ -989,7 +989,42 @@ class SenderWalletTransactionSerializer(serializers.ModelSerializer):
         ]
 
 
+class SenderWalletTransactionDetailSerializer(serializers.ModelSerializer):
 
+    transaction_type = serializers.CharField(source="get_type_display")
+
+    status_display = serializers.CharField(source="get_status_display")
+
+    booking_id = serializers.SerializerMethodField()
+
+    tracking_number = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WalletTransaction
+
+        fields = [
+            "id",
+            "transaction_type",
+            "type",
+            "amount",
+            "status",
+            "status_display",
+            "description",
+            "balance_before",
+            "balance_after",
+            "reference",
+            "booking_id",
+            "tracking_number",
+            "created_at",
+        ]
+
+    def get_booking_id(self, obj):
+        return str(obj.booking.id) if obj.booking else None
+
+    def get_tracking_number(self, obj):
+        return obj.booking.tracking_number if obj.booking else None
+
+    
 
 # add money on the wallet
 from decimal import Decimal

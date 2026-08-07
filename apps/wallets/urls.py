@@ -4,6 +4,7 @@ from .views import (
     SenderWalletDashboardAPIView,
     SenderWalletTopupAPIView,
     SenderWalletTransactionAPIView,
+    SenderWalletTransactionDetailAPIView,
     TravelerWalletCardView,
     WalletViewSet,
     WalletTransactionListView,
@@ -223,6 +224,11 @@ urlpatterns = [
         "sender/wallet/topup/",
         SenderWalletTopupAPIView.as_view(),
         name="sender-wallet-topup",
+    ),
+    path(
+        "sender/wallet/transactions/<uuid:id>/",
+        SenderWalletTransactionDetailAPIView.as_view(),
+        name="sender-wallet-transaction-detail",
     ),
 
 

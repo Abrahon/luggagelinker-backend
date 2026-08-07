@@ -1338,7 +1338,12 @@ class SenderRecentBookingView(generics.ListAPIView):
 
 
 
+from django.db.models import Q
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
 
+from apps.bookings.models import Booking, BookingStatus
+from .serializers import SenderDeliveryHistorySerializer
 
 
 class SenderDeliveryHistoryView(generics.ListAPIView):
@@ -1357,6 +1362,7 @@ class SenderDeliveryHistoryView(generics.ListAPIView):
                 "trip",
                 "traveler",
                 "traveler__profile",
+                "dispute",              # ✅ OneToOne Relation
             )
             .prefetch_related(
                 "package__images",
@@ -1386,7 +1392,6 @@ class SenderDeliveryHistoryView(generics.ListAPIView):
             )
 
         return queryset
-
 #
 from decimal import Decimal
 

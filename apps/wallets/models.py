@@ -50,6 +50,7 @@ class Wallet(models.Model):
 
 class WalletTransaction(models.Model):
     class TransactionType(models.TextChoices):
+        TOPUP = "TOPUP", "Wallet Top-up"
         ESCROW_HOLD = "ESCROW_HOLD", "Escrow Hold"
         ESCROW_RELEASE = "ESCROW_RELEASE", "Escrow Release"
         DISPUTE_PAYOUT = "DISPUTE_PAYOUT", "Dispute Payout"       

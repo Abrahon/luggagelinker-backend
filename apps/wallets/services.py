@@ -771,12 +771,12 @@ class WalletPaymentService:
         success_url = getattr(
             settings,
             "STRIPE_TOPUP_SUCCESS_URL",
-            "http://localhost:3000/wallet/topup/success",
+            "http://localhost:3600/sender-wallet/topup/success?session_id={CHECKOUT_SESSION_ID}",
         )
         cancel_url = getattr(
             settings,
             "STRIPE_TOPUP_CANCEL_URL",
-            "http://localhost:3000/wallet/topup/cancel",
+            "http://localhost:3600/sender-wallet/topup/cancel",
         )
 
         try:

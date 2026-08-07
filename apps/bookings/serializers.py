@@ -1196,9 +1196,14 @@ class SenderRecentBookingSerializer(serializers.ModelSerializer):
 
 
 # delivery history
+from rest_framework import serializers
+
+from apps.bookings.models import Booking
+from apps.wallets.services import WalletService
 
 
 class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
+
     tracking_number = serializers.CharField(read_only=True)
 
     package_title = serializers.CharField(
@@ -1206,7 +1211,7 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
-    traveler = serializers.PrimaryKeyRelatedField(read_only=True)  # Exposes traveler ID
+    traveler = serializers.PrimaryKeyRelatedField(read_only=True)
 
     traveler_name = serializers.SerializerMethodField()
 
@@ -1216,6 +1221,24 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
 
     completed_date = serializers.SerializerMethodField()
 
+    payment_status_display = serializers.CharField(
+        source="get_payment_status_display",
+        read_only=True,
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    has_dispute = serializers.SerializerMethodField()
+
+    dispute_id = serializers.SerializerMethodField()
+
+    dispute_status = serializers.SerializerMethodField()
+
+    dispute_status_display = serializers.SerializerMethodField()
+
     class Meta:
         model = Booking
 
@@ -1223,18 +1246,36 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
             "id",
             "tracking_number",
             "package_title",
-            "traveler",           # <--- ADD THIS HERE
+            "package_image",
+
+            "traveler",
             "traveler_name",
+
             "status",
+            "status_display",
+
             "payment_status",
+            "payment_status_display",
+
             "escrow_status",
+
             "currency",
             "agreed_reward",
+
             "completed_date",
-            "package_image",
+
+            "has_dispute",
+            "dispute_id",
+            "dispute_status",
+            "dispute_status_display",
         ]
 
+    # ----------------------------------------------------
+    # Traveler
+    # ----------------------------------------------------
+
     def get_traveler_name(self, obj):
+
         if not obj.traveler:
             return "N/A"
 
@@ -1245,22 +1286,30 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
 
         return obj.traveler.email
 
+    # ----------------------------------------------------
+    # Package Image
+    # ----------------------------------------------------
+
     def get_package_image(self, obj):
+
         image = obj.package.images.filter(
             is_primary=True
         ).first()
 
-        if image:
-            return image.image.url if hasattr(image.image, 'url') else str(image.image)
-
-        image = obj.package.images.first()
+        if not image:
+            image = obj.package.images.first()
 
         if image:
-            return image.image.url if hasattr(image.image, 'url') else str(image.image)
+            return image.image.url if hasattr(image.image, "url") else str(image.image)
 
         return None
 
+    # ----------------------------------------------------
+    # Completed Date
+    # ----------------------------------------------------
+
     def get_completed_date(self, obj):
+
         if obj.completed_at:
             return obj.completed_at.strftime("%Y-%m-%d")
 
@@ -1269,8 +1318,45 @@ class SenderDeliveryHistorySerializer(serializers.ModelSerializer):
 
         return None
 
+    # ----------------------------------------------------
+    # Escrow
+    # ----------------------------------------------------
+
     def get_escrow_status(self, obj):
         return WalletService.get_escrow_status(obj)
+
+    # ----------------------------------------------------
+    # Dispute Helpers
+    # ----------------------------------------------------
+
+    def _get_dispute(self, obj):
+        """
+        Booking -> OneToOne -> Dispute
+        """
+
+        return getattr(obj, "dispute", None)
+
+    def get_has_dispute(self, obj):
+
+        return self._get_dispute(obj) is not None
+
+    def get_dispute_id(self, obj):
+
+        dispute = self._get_dispute(obj)
+
+        return str(dispute.id) if dispute else None
+
+    def get_dispute_status(self, obj):
+
+        dispute = self._get_dispute(obj)
+
+        return dispute.status if dispute else None
+
+    def get_dispute_status_display(self, obj):
+
+        dispute = self._get_dispute(obj)
+
+        return dispute.get_status_display() if dispute else None
 
 
 class SenderBookingStatsSerializer(serializers.Serializer):

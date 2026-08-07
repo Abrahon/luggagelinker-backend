@@ -878,6 +878,11 @@ class SenderPaymentHistoryView(generics.ListAPIView):
                 "booking__package",
             )
             .filter(wallet__user=self.request.user)
-            .exclude(type="DEPOSIT")  # optional
+            .exclude(
+                type__in=[
+                    WalletTransaction.TransactionType.TOPUP,
+                    WalletTransaction.TransactionType.ADJUSTMENT,
+                ]
+            )
             .order_by("-created_at")
         )
