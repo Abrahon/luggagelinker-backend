@@ -582,15 +582,19 @@ class DisputeWithdrawAPIView(APIView):
 
 
 
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.permissions import IsAdminUser
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 
 class AdminDisputeStatusAPIView(APIView):
     permission_classes = [IsAdminUser]
 
     def patch(self, request, id):
-
         try:
             dispute = Dispute.objects.get(id=id)
-
         except Dispute.DoesNotExist:
             return Response(
                 {
@@ -602,6 +606,15 @@ class AdminDisputeStatusAPIView(APIView):
 
         new_status = request.data.get("status")
 
+        if not new_status:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Status is required.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if new_status not in DisputeStatus.values:
             return Response(
                 {
@@ -611,36 +624,76 @@ class AdminDisputeStatusAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        previous = dispute.status
+        previous_status = dispute.status
+
+        if previous_status == new_status:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Dispute is already in this status.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         dispute.status = new_status
         dispute.last_updated_by = request.user
 
-        if new_status in [
+        if new_status in (
             DisputeStatus.RESOLVED,
             DisputeStatus.REJECTED,
-        ]:
+            DisputeStatus.CLOSED,
+        ):
             dispute.resolved_at = timezone.now()
 
-        dispute.save()
+        dispute.save(
+            update_fields=[
+                "status",
+                "last_updated_by",
+                "resolved_at",
+                "updated_at",
+            ]
+        )
+
+        history_action = self._get_history_action(new_status)
 
         DisputeHistory.objects.create(
             dispute=dispute,
             actor=request.user,
-            action=DisputeHistoryAction.STATUS_CHANGED,
-            status_from=previous,
+            action=history_action,
+            status_from=previous_status,
             status_to=new_status,
-            notes=f"Status changed to {new_status}",
+            notes=f"Status changed from '{previous_status}' to '{new_status}'.",
         )
 
         return Response(
             {
                 "success": True,
                 "message": "Dispute status updated successfully.",
-            }
+                "data": {
+                    "id": str(dispute.id),
+                    "previous_status": previous_status,
+                    "current_status": dispute.status,
+                },
+            },
+            status=status.HTTP_200_OK,
         )
 
+    @staticmethod
+    def _get_history_action(status_value):
+        """
+        Maps dispute status to audit history action.
+        """
 
+        mapping = {
+            DisputeStatus.OPEN: DisputeHistoryAction.OPENED,
+            DisputeStatus.UNDER_REVIEW: DisputeHistoryAction.ASSIGNED,
+            DisputeStatus.WAITING_FOR_USER: DisputeHistoryAction.EVIDENCE_REQUESTED,
+            DisputeStatus.RESOLVED: DisputeHistoryAction.RESOLVED_RELEASE,
+            DisputeStatus.REJECTED: DisputeHistoryAction.REJECTED,
+            DisputeStatus.CLOSED: DisputeHistoryAction.CLOSED,
+        }
+
+        return mapping[status_value]
 
 
 class AdminDisputeNoteAPIView(APIView):

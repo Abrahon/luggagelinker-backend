@@ -6,7 +6,8 @@ from django.core.exceptions import ValidationError
 from apps.bookings.models import Booking, BookingStatus
 from apps.payment.models import BookingPayment, BookingPaymentStatus
 from apps.notifications.services import notify_dispute_opened
-
+from datetime import timedelta
+from django.utils import timezone
 from .models import Dispute, DisputeMessage, DisputeEvidence, DisputeHistory
 from apps.disputes.enums import DisputeStatus, DisputeHistoryAction
 # user disputes serializsrs
@@ -65,19 +66,48 @@ class DisputeService:
             booking = Booking.objects.select_for_update().get(id=booking_id)
         except Booking.DoesNotExist:
             raise ValidationError("Booking not found.")
-
         # Only sender or traveler may open disputes
         if user not in [booking.sender, booking.traveler]:
             raise ValidationError(
                 "You are not allowed to create a dispute for this booking."
             )
 
+        # ------------------------------------------------------------------
+        # Business Rule #1
+        # Only COMPLETED bookings can be disputed
+        # ------------------------------------------------------------------
+        if booking.status != BookingStatus.COMPLETED:
+            raise ValidationError(
+                "Disputes can only be opened for completed deliveries."
+            )
+
+        # ------------------------------------------------------------------
+        # Business Rule #2
+        # Booking must have a completion timestamp
+        # ------------------------------------------------------------------
+        if not booking.completed_at:
+            raise ValidationError(
+                "This booking has not been marked as completed yet."
+            )
+
+        # ------------------------------------------------------------------
+        # Business Rule #3
+        # Dispute must be created within 24 hours after completion
+        # ------------------------------------------------------------------
+        dispute_deadline = booking.completed_at + timedelta(hours=24)
+
+        if timezone.now() > dispute_deadline:
+            raise ValidationError(
+                "The dispute window has expired. Disputes must be opened within 24 hours after delivery."
+            )
+
+        # ------------------------------------------------------------------
         # Prevent duplicate disputes
+        # ------------------------------------------------------------------
         if Dispute.objects.filter(booking=booking).exists():
             raise ValidationError(
                 "A dispute already exists for this booking."
             )
-
         # Verify escrow payment
         try:
             payment = BookingPayment.objects.get(booking=booking)
@@ -144,6 +174,9 @@ class DisputeService:
         )
 
         return dispute
+
+
+
     @staticmethod
     @transaction.atomic
     def add_message(dispute_id, sender, message_text) -> DisputeMessage:
