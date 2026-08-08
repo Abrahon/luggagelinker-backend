@@ -121,24 +121,39 @@ class DisputeMessageSerializer(serializers.ModelSerializer):
 
 
 class DisputeSerializer(serializers.ModelSerializer):
-    """Clean data view optimized for client-side presentation layers (Senders & Travelers)."""
 
-    # 🟢 1. Explicitly nest user details instead of outputting raw UUIDs
     opened_by = UserBriefSerializer(read_only=True)
     against_user = UserBriefSerializer(read_only=True)
     assigned_admin = UserBriefSerializer(read_only=True)
 
-    # 🟢 2. Human-readable choices display
-    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    resolution_display = serializers.CharField(source="get_resolution_display", read_only=True)
-    
-    # 🟢 3. Embedded relations
-    messages = DisputeMessageSerializer(many=True, read_only=True)
-    evidence = DisputeEvidenceSerializer(many=True, read_only=True)
+    reason_display = serializers.CharField(
+        source="get_reason_display",
+        read_only=True,
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    resolution_display = serializers.CharField(
+        source="get_resolution_display",
+        read_only=True,
+    )
+
+    messages = DisputeMessageSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    evidence = DisputeEvidenceSerializer(
+        many=True,
+        read_only=True,
+    )
 
     class Meta:
         model = Dispute
+
         fields = [
             "id",
             "booking",
@@ -158,8 +173,10 @@ class DisputeSerializer(serializers.ModelSerializer):
             "evidence",
             "created_at",
             "updated_at",
-            "resolved_at",  # 🟢 4. Restored missing field
+            "resolved_at",
         ]
+
+        read_only_fields = fields
         # All user mutations go through discrete action endpoints
         read_only_fields = fields
 
@@ -290,29 +307,127 @@ class DisputeHistorySerializer(serializers.ModelSerializer):
 # ==============================================================================
 # DISPUTE CONVERSATION THREAD MESSAGE SERIALIZER
 # ==============================================================================
+
+
+
 class DisputeMessageSerializer(serializers.ModelSerializer):
-    """Transforms raw textual inputs into chronological dispute messaging feeds."""
-    sender_email = serializers.ReadOnlyField(source="sender.email")
+    """
+    Serializer for dispute conversation messages.
+
+    Client only provides:
+        message_text
+
+    Backend automatically determines:
+        dispute
+        sender
+        created_at
+    """
+
+    sender_email = serializers.ReadOnlyField(
+        source="sender.email"
+    )
+
     sender_name = serializers.SerializerMethodField()
+
+    sender_profile_picture = serializers.SerializerMethodField()
+
+    is_mine = serializers.SerializerMethodField()
 
     class Meta:
         model = DisputeMessage
-        fields = ["id", "dispute", "sender", "sender_email", "sender_name", "message_text", "created_at"]
-        read_only_fields = ["id", "sender", "created_at"]
+
+        fields = [
+            "id",
+            "dispute",
+            "sender",
+            "sender_email",
+            "sender_name",
+            "sender_profile_picture",
+            "message_text",
+            "is_mine",
+            "created_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "dispute",
+            "sender",
+            "sender_email",
+            "sender_name",
+            "sender_profile_picture",
+            "is_mine",
+            "created_at",
+        ]
 
     def get_sender_name(self, obj):
         sender = obj.sender
-        full_name = f"{sender.get_full_name()}".strip() if hasattr(sender, "get_full_name") else ""
-        return full_name if full_name else (getattr(sender, "username", "") or sender.email)
 
-    def validate(self, attrs):
-        """Enforces message thread restrictions on finalized archives."""
-        dispute = attrs.get("dispute")
-        if dispute and dispute.status in [DisputeStatus.RESOLVED, DisputeStatus.REJECTED]:
-            raise serializers.ValidationError("Thread Locked: Cannot transmit updates on a resolved dispute ledger.")
-        return attrs
+        if not sender:
+            return "Unknown User"
 
+        # Your project appears to use profile.full_name
+        profile = getattr(sender, "profile", None)
 
+        if profile and getattr(profile, "full_name", None):
+            return profile.full_name
+
+        # Fallback to Django full name
+        if hasattr(sender, "get_full_name"):
+            full_name = sender.get_full_name().strip()
+
+            if full_name:
+                return full_name
+
+        return (
+            getattr(sender, "username", None)
+            or getattr(sender, "email", None)
+            or "Unknown User"
+        )
+
+    def get_sender_profile_picture(self, obj):
+        sender = obj.sender
+
+        if not sender:
+            return None
+
+        profile = getattr(sender, "profile", None)
+
+        if not profile:
+            return None
+
+        picture = getattr(profile, "profile_picture", None)
+
+        if not picture:
+            return None
+
+        try:
+            return picture.url
+        except Exception:
+            return str(picture)
+
+    def get_is_mine(self, obj):
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            return False
+
+        return obj.sender_id == request.user.id
+
+    def validate_message_text(self, value):
+        value = value.strip()
+
+        if not value:
+            raise serializers.ValidationError(
+                "Message cannot be empty."
+            )
+
+        if len(value) > 5000:
+            raise serializers.ValidationError(
+                "Message cannot exceed 5000 characters."
+            )
+
+        return value
+    
 # ==============================================================================
 # USER INITIALIZATION FIELD GENERATION SERIALIZER
 # ==============================================================================

@@ -45,7 +45,6 @@ class DisputeService:
 
         return dispute
 
-
     @staticmethod
     @transaction.atomic
     def create_dispute(
@@ -55,78 +54,83 @@ class DisputeService:
         description,
         disputed_amount,
         evidence_files=None,
-    ) -> Dispute:
-        """
-        Creates a new dispute, freezes escrow workflow,
-        uploads any initial evidence, creates history,
-        and sends notifications.
-        """
-
+    ):
         try:
-            booking = Booking.objects.select_for_update().get(id=booking_id)
+            booking = (
+                Booking.objects
+                .select_for_update()
+                .select_related("sender", "traveler")
+                .get(id=booking_id)
+            )
         except Booking.DoesNotExist:
             raise ValidationError("Booking not found.")
-        # Only sender or traveler may open disputes
+
+        # --------------------------------------------------
+        # 1. PARTICIPANT CHECK
+        # --------------------------------------------------
         if user not in [booking.sender, booking.traveler]:
             raise ValidationError(
                 "You are not allowed to create a dispute for this booking."
             )
 
-        # ------------------------------------------------------------------
-        # Business Rule #1
-        # Only COMPLETED bookings can be disputed
-        # ------------------------------------------------------------------
+        # --------------------------------------------------
+        # 2. ONLY COMPLETED BOOKINGS CAN BE DISPUTED
+        # --------------------------------------------------
         if booking.status != BookingStatus.COMPLETED:
             raise ValidationError(
-                "Disputes can only be opened for completed deliveries."
+                "Disputes can only be opened for completed bookings."
             )
 
-        # ------------------------------------------------------------------
-        # Business Rule #2
-        # Booking must have a completion timestamp
-        # ------------------------------------------------------------------
+        # --------------------------------------------------
+        # 3. 24-HOUR DISPUTE WINDOW
+        # --------------------------------------------------
         if not booking.completed_at:
             raise ValidationError(
-                "This booking has not been marked as completed yet."
+                "This booking does not have a completion timestamp."
             )
 
-        # ------------------------------------------------------------------
-        # Business Rule #3
-        # Dispute must be created within 24 hours after completion
-        # ------------------------------------------------------------------
         dispute_deadline = booking.completed_at + timedelta(hours=24)
 
         if timezone.now() > dispute_deadline:
             raise ValidationError(
-                "The dispute window has expired. Disputes must be opened within 24 hours after delivery."
+                "The 24-hour dispute window has expired."
             )
 
-        # ------------------------------------------------------------------
-        # Prevent duplicate disputes
-        # ------------------------------------------------------------------
+        # --------------------------------------------------
+        # 4. PREVENT DUPLICATE DISPUTE
+        # --------------------------------------------------
         if Dispute.objects.filter(booking=booking).exists():
             raise ValidationError(
                 "A dispute already exists for this booking."
             )
-        # Verify escrow payment
+
+        # --------------------------------------------------
+        # 5. PAYMENT / ESCROW VALIDATION
+        # --------------------------------------------------
         try:
             payment = BookingPayment.objects.get(booking=booking)
         except BookingPayment.DoesNotExist:
             raise ValidationError(
-                "Booking payment not found."
+                "Payment record not found for this completed booking."
             )
 
         if payment.status != BookingPaymentStatus.AUTHORIZED:
             raise ValidationError(
-                "Disputes can only be opened while funds are held in escrow."
+                "This booking does not have an active escrow payment."
             )
 
+        # --------------------------------------------------
+        # 6. DETERMINE OTHER PARTICIPANT
+        # --------------------------------------------------
         against_user = (
             booking.traveler
             if user == booking.sender
             else booking.sender
         )
 
+        # --------------------------------------------------
+        # 7. CREATE DISPUTE
+        # --------------------------------------------------
         dispute = Dispute.objects.create(
             booking=booking,
             opened_by=user,
@@ -138,7 +142,9 @@ class DisputeService:
             last_updated_by=user,
         )
 
-        # Upload initial evidence (optional)
+        # --------------------------------------------------
+        # 8. INITIAL EVIDENCE
+        # --------------------------------------------------
         if evidence_files:
             for evidence in evidence_files:
                 DisputeEvidence.objects.create(
@@ -147,7 +153,9 @@ class DisputeService:
                     file_attachment=evidence,
                 )
 
-        # Create history
+        # --------------------------------------------------
+        # 9. HISTORY
+        # --------------------------------------------------
         DisputeHistory.objects.create(
             dispute=dispute,
             actor=user,
@@ -157,15 +165,9 @@ class DisputeService:
             notes=f"Dispute opened by {user.email}.",
         )
 
-        logger.info(
-            "Dispute %s created.",
-            dispute.id,
-            extra={
-                "booking": str(booking.id),
-                "opened_by": str(user.id),
-            },
-        )
-
+        # --------------------------------------------------
+        # 10. NOTIFICATION
+        # --------------------------------------------------
         transaction.on_commit(
             lambda: notify_dispute_opened(
                 user=against_user,
@@ -174,8 +176,6 @@ class DisputeService:
         )
 
         return dispute
-
-
 
     @staticmethod
     @transaction.atomic
@@ -208,7 +208,7 @@ class DisputeService:
             DisputeHistory.objects.create(
                 dispute=dispute,
                 actor=sender,
-                action=DisputeHistoryAction.EVIDENCE_SUBMITTED,
+                action=DisputeHistoryAction.EVIDENCE_ADDED,
                 status_from=old_status,
                 status_to=DisputeStatus.UNDER_REVIEW,
                 notes=f"User {sender.email} provided comments. Workflow returned to review processing queue."
@@ -270,7 +270,7 @@ class DisputeService:
             DisputeHistory.objects.create(
                 dispute=dispute,
                 actor=uploaded_by,
-                action=DisputeHistoryAction.EVIDENCE_SUBMITTED,
+                action=DisputeHistoryAction.EVIDENCE_ADDED,
                 status_from=old_status,
                 status_to=DisputeStatus.UNDER_REVIEW,
                 notes=f"Evidence uploaded by {uploaded_by.email}.",
