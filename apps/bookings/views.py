@@ -8,7 +8,7 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .models import Booking
-from .serializers import BookingSerializer, VerifyDeliveryPinSerializer, VerifyPickupPinSerializer
+from .serializers import BookingSerializer, PublicTripBookingRequestSerializer, VerifyDeliveryPinSerializer, VerifyPickupPinSerializer
 from .services import BookingService
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
@@ -52,7 +52,7 @@ from .serializers import SenderActionRequiredSerializer
 
 from .serializers import MyBookingSerializer
 from apps.bookings.models import Booking
-from apps.bookings.serializers import SenderDashboardStatsSerializer,SenderRecentBookingSerializer
+from apps.bookings.serializers import SenderDashboardStatsSerializer,SenderRecentBookingSerializer,PublicTripBookingRequestSerializer
 from apps.bookings.models import (
     Booking,
     BookingStatus,
@@ -129,6 +129,160 @@ class BookingCreateView(generics.CreateAPIView):
 
 
 
+# apps/bookings/views.py
+
+# import logging
+
+# from django.core.exceptions import ValidationError as DjangoValidationError
+
+# from rest_framework import generics, status
+# from rest_framework.permissions import IsAuthenticated
+# from rest_framework.response import Response
+# from rest_framework.exceptions import ValidationError as DRFValidationError
+
+# from apps.bookings.serializers import (
+#     PublicTripBookingRequestSerializer,
+#     BookingSerializer,
+# )
+# from apps.bookings.services import BookingService
+
+
+
+class PublicTripBookingRequestView(generics.CreateAPIView):
+    """
+    POST /api/bookings/public-trip-request/
+
+    Creates a booking request directly from a public trip.
+
+    This endpoint is separate from match-based booking because
+    a public trip may not have a Match record yet.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = PublicTripBookingRequestSerializer
+
+    def create(self, request, *args, **kwargs):
+
+        serializer = self.get_serializer(
+            data=request.data,
+        )
+
+        # --------------------------------------------------
+        # VALIDATION
+        # --------------------------------------------------
+
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "success": False,
+                    "code": "VALIDATION_ERROR",
+                    "message": "Unable to create booking request.",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+
+            # --------------------------------------------------
+            # CREATE
+            # --------------------------------------------------
+
+            booking = (
+                BookingService
+                .create_public_trip_booking_request(
+                    trip=serializer.validated_data["trip"],
+                    package=serializer.validated_data["package"],
+                    traveler=serializer.validated_data["traveler"],
+                    initiated_by=request.user,
+                )
+            )
+
+            # --------------------------------------------------
+            # RESPONSE
+            # --------------------------------------------------
+
+            output_serializer = BookingSerializer(
+                booking,
+                context={
+                    "request": request,
+                },
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "code": "BOOKING_REQUEST_CREATED",
+                    "message": (
+                        "Booking request sent successfully. "
+                        "The traveler has been notified."
+                    ),
+                    "data": output_serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except DjangoValidationError as exc:
+
+            logger.warning(
+                "Public trip booking rejected. "
+                "user=%s error=%s",
+                request.user.id,
+                exc,
+            )
+
+            if hasattr(exc, "message_dict"):
+                errors = exc.message_dict
+            elif hasattr(exc, "messages"):
+                errors = {
+                    "booking": exc.messages
+                }
+            else:
+                errors = {
+                    "booking": [str(exc)]
+                }
+
+            return Response(
+                {
+                    "success": False,
+                    "code": "BOOKING_VALIDATION_FAILED",
+                    "message": "Booking request could not be created.",
+                    "errors": errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        except DRFValidationError as exc:
+
+            return Response(
+                {
+                    "success": False,
+                    "code": "BOOKING_VALIDATION_FAILED",
+                    "message": "Booking request could not be created.",
+                    "errors": exc.detail,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Unexpected error creating public trip booking. "
+                "user=%s",
+                request.user.id,
+            )
+
+            return Response(
+                {
+                    "success": False,
+                    "code": "INTERNAL_ERROR",
+                    "message": (
+                        "An unexpected error occurred while "
+                        "creating the booking request."
+                    ),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 class TravelerPendingBookingsView(generics.ListAPIView):
     """
