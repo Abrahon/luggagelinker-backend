@@ -24,7 +24,7 @@ from rest_framework import serializers
 from apps.bookings.models import Booking, BookingStatus
 from apps.packages.models import Package
 from apps.packages.models import PackageStatus
-from apps.trips.models import Trip
+from apps.trips.models import Trip, TripStatus
 
 
 class BookingSerializer(serializers.ModelSerializer):
@@ -218,18 +218,30 @@ class PublicTripBookingRequestSerializer(serializers.Serializer):
 
     def validate_trip_id(self, value):
         try:
-            trip = Trip.objects.select_related(
-                "traveler",
-                "user",
-            ).get(
-                id=value,
+            trip = (
+                Trip.objects
+                .select_related("traveler")
+                .get(
+                    id=value,
+                    is_public=True,
+                    is_active=True,
+                )
             )
         except Trip.DoesNotExist:
             raise serializers.ValidationError(
-                "The selected trip does not exist."
+                "The selected public trip does not exist or is no longer available."
             )
 
-        # Store for object-level validation
+        if trip.status != TripStatus.PLANNED:
+            raise serializers.ValidationError(
+                "This trip is no longer accepting booking requests."
+            )
+
+        if trip.departure_date < timezone.localdate():
+            raise serializers.ValidationError(
+                "This trip has already departed."
+            )
+
         self._trip = trip
 
         return value

@@ -9,6 +9,8 @@ from apps.bookings.models import (
     BookingStatus,
     PaymentStatus,
 )
+from apps.trips.services import TripStatusService
+from apps.trips.models import Trip, TripStatus
 from apps.matching.models import Match
 from apps.packages.models import PackageStatus
 from apps.trips.models import Trip
@@ -131,6 +133,7 @@ class BookingService:
 
         return booking
 
+
     @staticmethod
     @transaction.atomic
     def create_public_booking_request(trip_id, package_id, initiated_by):
@@ -150,6 +153,9 @@ class BookingService:
             )
         except Trip.DoesNotExist:
             raise ValidationError("Trip does not exist.")
+
+        # Sync PLANNED → ACTIVE → COMPLETED
+        TripStatusService.sync_status(trip)
 
         try:
             package = (
@@ -188,13 +194,24 @@ class BookingService:
                 "Your package must be published before you can request this trip."
             )
 
+
         # --------------------------------------------------
-        # 4. TRIP MUST BE ACTIVE/PUBLIC
+        # 4. TRIP MUST BE BOOKABLE
         # --------------------------------------------------
 
         if not trip.is_active:
             raise ValidationError(
                 "This trip is no longer available."
+            )
+
+        if trip.status != TripStatus.PLANNED:
+            raise ValidationError(
+                "This trip is not currently accepting booking requests."
+            )
+
+        if trip.departure_date < timezone.localdate():
+            raise ValidationError(
+                "This trip has already departed."
             )
 
         # --------------------------------------------------
@@ -208,6 +225,32 @@ class BookingService:
                 f"Available: {trip.available_weight_kg}kg."
             )
 
+
+        # --------------------------------------------------
+        # 5.1 PREVENT DUPLICATE ACTIVE BOOKING
+        # --------------------------------------------------
+
+        active_booking = Booking.objects.filter(
+            package=package,
+            trip=trip,
+            is_active=True,
+            status__in=[
+                BookingStatus.PENDING,
+                BookingStatus.TRAVELER_ACCEPTED,
+                BookingStatus.PAYMENT_PENDING,
+                BookingStatus.CONFIRMED,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+            ],
+            expires_at__gt=timezone.now(),
+        ).exists()
+
+        if active_booking:
+            raise ValidationError(
+                "You already have an active booking request for this trip."
+            )
+
+
         # --------------------------------------------------
         # 6. FIND EXISTING MATCH
         # --------------------------------------------------
@@ -217,6 +260,7 @@ class BookingService:
             trip=trip,
             is_active=True,
         ).first()
+
 
         # --------------------------------------------------
         # 7. CREATE MATCH IF PUBLIC TRIP WAS NOT PRE-MATCHED
@@ -229,6 +273,7 @@ class BookingService:
                 is_active=True,
             )
 
+
         # --------------------------------------------------
         # 8. REUSE EXISTING BOOKING LOGIC
         # --------------------------------------------------
@@ -236,7 +281,7 @@ class BookingService:
         return BookingService.create_booking_request(
             match_id=match.id,
             initiated_by=initiated_by,
-        )
+    )
 
     @staticmethod
     @transaction.atomic
