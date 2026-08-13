@@ -10,6 +10,9 @@ from apps.bookings.models import (
     PaymentStatus,
 )
 from apps.matching.models import Match
+from apps.packages.models import PackageStatus
+from apps.trips.models import Trip
+from apps.packages.models import PackageStatus,Package
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType
@@ -128,6 +131,112 @@ class BookingService:
 
         return booking
 
+    @staticmethod
+    @transaction.atomic
+    def create_public_booking_request(trip_id, package_id, initiated_by):
+        """
+        Create a booking request directly from a public trip.
+
+        Used when a sender discovers a public trip and wants to
+        book it without coming through the sender's matching list.
+        """
+
+        try:
+            trip = (
+                Trip.objects
+                .select_for_update()
+                .select_related("traveler")
+                .get(id=trip_id)
+            )
+        except Trip.DoesNotExist:
+            raise ValidationError("Trip does not exist.")
+
+        try:
+            package = (
+                Package.objects
+                .select_for_update()
+                .select_related("sender")
+                .get(id=package_id)
+            )
+        except Package.DoesNotExist:
+            raise ValidationError("Package does not exist.")
+
+        # --------------------------------------------------
+        # 1. ONLY PACKAGE OWNER CAN BOOK
+        # --------------------------------------------------
+
+        if package.sender != initiated_by:
+            raise ValidationError(
+                "You can only use your own package for a booking request."
+            )
+
+        # --------------------------------------------------
+        # 2. CANNOT BOOK OWN TRIP
+        # --------------------------------------------------
+
+        if trip.traveler == initiated_by:
+            raise ValidationError(
+                "You cannot book your own trip."
+            )
+
+        # --------------------------------------------------
+        # 3. PACKAGE MUST BE PUBLISHED
+        # --------------------------------------------------
+
+        if package.status != PackageStatus.PUBLISHED:
+            raise ValidationError(
+                "Your package must be published before you can request this trip."
+            )
+
+        # --------------------------------------------------
+        # 4. TRIP MUST BE ACTIVE/PUBLIC
+        # --------------------------------------------------
+
+        if not trip.is_active:
+            raise ValidationError(
+                "This trip is no longer available."
+            )
+
+        # --------------------------------------------------
+        # 5. CAPACITY CHECK
+        # --------------------------------------------------
+
+        if trip.available_weight_kg < package.weight:
+            raise ValidationError(
+                f"Insufficient available capacity. "
+                f"Required: {package.weight}kg, "
+                f"Available: {trip.available_weight_kg}kg."
+            )
+
+        # --------------------------------------------------
+        # 6. FIND EXISTING MATCH
+        # --------------------------------------------------
+
+        match = Match.objects.filter(
+            package=package,
+            trip=trip,
+            is_active=True,
+        ).first()
+
+        # --------------------------------------------------
+        # 7. CREATE MATCH IF PUBLIC TRIP WAS NOT PRE-MATCHED
+        # --------------------------------------------------
+
+        if not match:
+            match = Match.objects.create(
+                package=package,
+                trip=trip,
+                is_active=True,
+            )
+
+        # --------------------------------------------------
+        # 8. REUSE EXISTING BOOKING LOGIC
+        # --------------------------------------------------
+
+        return BookingService.create_booking_request(
+            match_id=match.id,
+            initiated_by=initiated_by,
+        )
 
     @staticmethod
     @transaction.atomic

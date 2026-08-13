@@ -10,6 +10,7 @@ from .views import (
     BookingDetailView,
     BookingRespondView,
     BookingStartTransitView,
+    PublicTripBookingRequestView,
     SenderDeliveryHistoryStatsView,
     TravelerPendingBookingsView,
     ActiveBookingListView,
@@ -42,6 +43,12 @@ urlpatterns = [
         "bookings/<uuid:id>/", 
         BookingDetailView.as_view(), 
         name="booking-detail"
+    ),
+     #  public-trip booking
+    path(
+        "bookings/public-trip-request/",
+        PublicTripBookingRequestView.as_view(),
+        name="public-trip-booking-request",
     ),
     path(
         "bookings/traveler/pending/",

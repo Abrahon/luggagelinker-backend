@@ -131,20 +131,6 @@ class BookingCreateView(generics.CreateAPIView):
 
 # apps/bookings/views.py
 
-# import logging
-
-# from django.core.exceptions import ValidationError as DjangoValidationError
-
-# from rest_framework import generics, status
-# from rest_framework.permissions import IsAuthenticated
-# from rest_framework.response import Response
-# from rest_framework.exceptions import ValidationError as DRFValidationError
-
-# from apps.bookings.serializers import (
-#     PublicTripBookingRequestSerializer,
-#     BookingSerializer,
-# )
-# from apps.bookings.services import BookingService
 
 
 
