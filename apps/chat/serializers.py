@@ -41,6 +41,81 @@ class ChatParticipantSerializer(serializers.ModelSerializer):
 
 
 
+# class ChatMessageSerializer(serializers.ModelSerializer):
+#     reply_to = serializers.SerializerMethodField()
+#     attachment = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = ChatMessage
+#         fields = (
+#             "id",
+#             "room",
+#             "sender",
+#             "receiver",
+#             "message",
+#             "reply_to",
+#             "message_type",
+#             "attachment",
+#             "audio_duration",
+#             "is_delivered",
+#             "delivered_at",
+#             "is_read",
+#             "read_at",
+#             "is_deleted",
+#             "edited_at",
+#             "created_at",
+#         )
+
+#         read_only_fields = (
+#             "id",
+#             "room",
+#             "sender",
+#             "receiver",
+#             "is_delivered",
+#             "delivered_at",
+#             "is_read",
+#             "read_at",
+#             "is_deleted",
+#             "edited_at",
+#             "created_at",
+#         )
+
+#     def get_attachment(self, obj):
+#         if obj.attachment:
+#             return obj.attachment.url
+#         return None
+    
+#     def get_reply_to(self, obj):
+#         if not obj.reply_to:
+#             return None
+
+#         return {
+#             "id": str(obj.reply_to.id),
+#             "message": obj.reply_to.message,
+#             "sender_id": str(obj.reply_to.sender_id),
+#             "message_type": obj.reply_to.message_type,
+#         }
+
+
+#     def validate(self, attrs):
+#         """Validates that a message body exists unless an attachment is present."""
+#         request = self.context.get("request")
+        
+#         # Check if an attachment is arriving via files or data payloads
+#         has_attachment = request and ("attachment" in request.FILES or "attachment" in request.data)
+#         has_text = bool(attrs.get("message", "").strip())
+
+#         if not has_text and not has_attachment:
+#             raise serializers.ValidationError(
+#                 {"message": _("Cannot send an empty message without text or a valid file attachment.")}
+#             )
+#         return attrs
+
+from rest_framework import serializers
+from django.utils.translation import gettext_lazy as _
+from .models import ChatMessage
+
+
 class ChatMessageSerializer(serializers.ModelSerializer):
     reply_to = serializers.SerializerMethodField()
     attachment = serializers.SerializerMethodField()
@@ -80,40 +155,70 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        # Force message text and attachment to empty/None if deleted
+        if instance.is_deleted:
+            data["message"] = ""
+            data["attachment"] = None
+
+        return data
+
     def get_attachment(self, obj):
+        if obj.is_deleted:
+            return None
+
         if obj.attachment:
             return obj.attachment.url
+
         return None
-    
+
     def get_reply_to(self, obj):
         if not obj.reply_to:
             return None
 
+        reply_message = obj.reply_to
+        
+        # If replied message was deleted, hide text
+        reply_text = "" if reply_message.is_deleted else reply_message.message
+
         return {
-            "id": str(obj.reply_to.id),
-            "message": obj.reply_to.message,
-            "sender_id": str(obj.reply_to.sender_id),
-            "message_type": obj.reply_to.message_type,
+            "id": str(reply_message.id),
+            "message": reply_text,
+            "sender_id": str(reply_message.sender_id),
+            "message_type": reply_message.message_type,
+            "is_deleted": reply_message.is_deleted,
         }
 
-
     def validate(self, attrs):
-        """Validates that a message body exists unless an attachment is present."""
         request = self.context.get("request")
-        
-        # Check if an attachment is arriving via files or data payloads
-        has_attachment = request and ("attachment" in request.FILES or "attachment" in request.data)
-        has_text = bool(attrs.get("message", "").strip())
+
+        has_attachment = (
+            request
+            and (
+                "attachment" in request.FILES
+                or "attachment" in request.data
+            )
+        )
+
+        has_text = bool(
+            attrs.get("message", "").strip()
+        )
 
         if not has_text and not has_attachment:
             raise serializers.ValidationError(
-                {"message": _("Cannot send an empty message without text or a valid file attachment.")}
+                {
+                    "message": _(
+                        "Cannot send an empty message without text "
+                        "or a valid file attachment."
+                    )
+                }
             )
+
         return attrs
 
-
-
-
+    
 class ChatRoomSerializer(serializers.ModelSerializer):
     """
     Chat room serializer for conversation list.

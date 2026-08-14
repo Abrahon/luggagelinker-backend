@@ -234,11 +234,22 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# CHANNEL_LAYERS = {
+#     "default": {
+#         "BACKEND": "channels_redis.core.RedisChannelLayer",
+#         "CONFIG": {
+#             "hosts": [("127.0.0.1", 6379)],
+#         },
+#     },
+# }
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
             "hosts": [("127.0.0.1", 6379)],
+            "capacity": 1500,  # Increases max messages stored per group/channel buffer (default is 100)
+            "expiry": 300,     # Automatically clears dead channel messages after 5 minutes
         },
     },
 }

@@ -104,36 +104,144 @@ User = get_user_model()
 
 
 class LoginSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+    email = serializers.EmailField(
+        required=True,
+        allow_blank=False,
+        error_messages={
+            "required": "Email address is required.",
+            "blank": "Email address is required.",
+            "invalid": "Please enter a valid email address.",
+        },
+    )
+
+    password = serializers.CharField(
+        required=True,
+        write_only=True,
+        allow_blank=False,
+        trim_whitespace=False,
+        error_messages={
+            "required": "Password is required.",
+            "blank": "Password is required.",
+        },
+    )
 
     def validate(self, attrs):
         email = attrs.get("email", "").strip().lower()
         password = attrs.get("password")
 
-        # Check if user exists
+        # =====================================================
+        # 1. EMAIL VALIDATION
+        # =====================================================
+
+        if not email:
+            raise serializers.ValidationError({
+                "email": {
+                    "code": "email_required",
+                    "message": "Email address is required.",
+                }
+            })
+
+        # =====================================================
+        # 2. PASSWORD VALIDATION
+        # =====================================================
+
+        if not password:
+            raise serializers.ValidationError({
+                "password": {
+                    "code": "password_required",
+                    "message": "Password is required.",
+                }
+            })
+
+        # =====================================================
+        # 3. FIND USER
+        # =====================================================
+
         try:
             user = User.objects.get(email__iexact=email)
+
         except User.DoesNotExist:
             raise serializers.ValidationError({
-                "email": ["No account found with this email address."]
+                "email": {
+                    "code": "account_not_found",
+                    "message": "No account found with this email address.",
+                }
             })
 
-        # Check password
+        # =====================================================
+        # 4. CHECK PASSWORD
+        # =====================================================
+
         if not user.check_password(password):
             raise serializers.ValidationError({
-                "password": ["Incorrect password."]
+                "password": {
+                    "code": "invalid_password",
+                    "message": "Incorrect password.",
+                }
             })
 
-        # Check if account is active / verified
+        # =====================================================
+        # 5. CHECK ACTIVE STATUS
+        # =====================================================
+
         if not user.is_active:
             raise serializers.ValidationError({
-                "email": ["Please verify your email before logging in."]
+                "email": {
+                    "code": "account_inactive",
+                    "message": "Your account is inactive.",
+                }
             })
 
-        attrs["user"] = user
-        return attrs
+        # =====================================================
+        # 6. EMAIL VERIFICATION
+        # =====================================================
 
+        # Only use this if your User model actually has
+        # an email verification field.
+        if hasattr(user, "is_email_verified"):
+            if not user.is_email_verified:
+                raise serializers.ValidationError({
+                    "email": {
+                        "code": "email_not_verified",
+                        "message": "Please verify your email before logging in.",
+                    }
+                })
+
+        # =====================================================
+        # 7. ACCOUNT SUSPENSION
+        # =====================================================
+
+        # Only applies if your User model has is_suspended.
+        if hasattr(user, "is_suspended"):
+            if user.is_suspended:
+                raise serializers.ValidationError({
+                    "email": {
+                        "code": "account_suspended",
+                        "message": "Your account has been suspended.",
+                    }
+                })
+
+        # =====================================================
+        # 8. ACCOUNT LOCK
+        # =====================================================
+
+        # Only applies if your User model has is_locked.
+        if hasattr(user, "is_locked"):
+            if user.is_locked:
+                raise serializers.ValidationError({
+                    "email": {
+                        "code": "account_locked",
+                        "message": "Your account is temporarily locked.",
+                    }
+                })
+
+        # =====================================================
+        # LOGIN SUCCESS
+        # =====================================================
+
+        attrs["user"] = user
+
+        return attrs
 
 # resend otp
 # ---------------------------------
