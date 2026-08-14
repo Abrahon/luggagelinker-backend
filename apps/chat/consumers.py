@@ -11,8 +11,10 @@ from django.utils import timezone
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .models import ChatRoom, ChatMessage,PinnedMessage
-from apps.notifications.services import create_notification
-from apps.notifications.models import NotificationType
+
+from apps.notifications.services import create_chat_notification
+from django.contrib.auth import get_user_model
+User = get_user_model()
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -420,50 +422,104 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return False
 
 
-    @database_sync_to_async
-    def save_chat_message(self, message, msg_type, attachment_url=None,reply_to=None,audio_duration=0,):
+    # @database_sync_to_async
+    # def save_chat_message(self, message, msg_type, attachment_url=None,reply_to=None,audio_duration=0,):
 
-            if self.user.id == self.room_sender_id:
-                receiver_id = self.room_traveler_id
+    #         if self.user.id == self.room_sender_id:
+    #             receiver_id = self.room_traveler_id
         
-            else:
-                receiver_id = self.room_sender_id
+    #         else:
+    #             receiver_id = self.room_sender_id
 
-            # Load replied message if provided
-            reply_message = None
+    #         # Load replied message if provided
+    #         reply_message = None
 
-            if reply_to:
-                try:
-                    reply_message = ChatMessage.objects.get(
-                        id=reply_to,
-                        room_id=self.room_id,
-                    )
-                except ChatMessage.DoesNotExist:
-                    reply_message = None
+    #         if reply_to:
+    #             try:
+    #                 reply_message = ChatMessage.objects.get(
+    #                     id=reply_to,
+    #                     room_id=self.room_id,
+    #                 )
+    #             except ChatMessage.DoesNotExist:
+    #                 reply_message = None
 
-            msg = ChatMessage.objects.create(
-                room_id=self.room_id,
-                sender=self.user,
-                receiver_id=receiver_id,
-                message=message,
-                message_type=msg_type,
-                attachment=attachment_url,
-                reply_to=reply_message,
-                audio_duration=audio_duration,
+    #         msg = ChatMessage.objects.create(
+    #             room_id=self.room_id,
+    #             sender=self.user,
+    #             receiver_id=receiver_id,
+    #             message=message,
+    #             message_type=msg_type,
+    #             attachment=attachment_url,
+    #             reply_to=reply_message,
+    #             audio_duration=audio_duration,
 
-            )
-            create_notification(
-                user_id=receiver_id,
-                sender=self.user,
-                title="New Message",
-                message=msg.message or "Sent an attachment",
-                notification_type=NotificationType.CHAT,
-                object_id=msg.id,
-                action_url=f"/chat/{self.room_id}",
-            )
+    #         )
+    #         # create_notification(
+    #         #     user_id=receiver_id,
+    #         #     sender=self.user,
+    #         #     title="New Message",
+    #         #     message=msg.message or "Sent an attachment",
+    #         #     notification_type=NotificationType.CHAT,
+    #         #     object_id=msg.id,
+    #         #     action_url=f"/chat/{self.room_id}",
+    #         # )
 
-            return msg, receiver_id
+    #         return msg, receiver_id
 
+    @database_sync_to_async
+    def save_chat_message(
+        self,
+        message,
+        msg_type,
+        attachment_url=None,
+        reply_to=None,
+        audio_duration=0,
+    ):
+        if self.user.id == self.room_sender_id:
+            receiver_id = self.room_traveler_id
+        else:
+            receiver_id = self.room_sender_id
+
+        # Load replied message
+        reply_message = None
+
+        if reply_to:
+            try:
+                reply_message = ChatMessage.objects.get(
+                    id=reply_to,
+                    room_id=self.room_id,
+                )
+            except ChatMessage.DoesNotExist:
+                reply_message = None
+
+        # Create message
+        msg = ChatMessage.objects.create(
+            room_id=self.room_id,
+            sender=self.user,
+            receiver_id=receiver_id,
+            message=message,
+            message_type=msg_type,
+            attachment=attachment_url,
+            reply_to=reply_message,
+            # Keep only if ChatMessage has this field
+            # audio_duration=audio_duration,
+        )
+
+        # Get receiver
+        receiver = User.objects.get(
+            id=receiver_id
+        )
+
+        # Create notification through centralized service
+        create_chat_notification(
+            receiver=receiver,
+            sender=self.user,
+            message=msg.message or "Sent an attachment.",
+            room_id=self.room_id,
+            message_id=msg.id,
+        )
+
+        return msg, receiver_id
 
     @database_sync_to_async
     def mark_messages_as_read(self):

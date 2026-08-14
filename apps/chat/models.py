@@ -137,6 +137,10 @@ class ChatMessage(models.Model):
         null=True, 
         blank=True
     )
+    audio_duration = models.PositiveIntegerField(
+        default=0,
+        help_text="Audio duration in seconds"
+    )
     reply_to = models.ForeignKey(  
     "self",
     on_delete=models.SET_NULL,

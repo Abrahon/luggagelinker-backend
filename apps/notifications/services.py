@@ -109,7 +109,7 @@ def create_booking_request_notification(
     sender = booking.sender
 
     sender_name = (
-        getattr(sender, "username", None)
+        getattr(sender, "name", None)
         or getattr(sender, "email", None)
         or "A sender"
     )
@@ -173,6 +173,36 @@ def create_booking_request_notification(
     )
 
     return notification
+
+
+# chat notifications
+@transaction.atomic
+def create_chat_notification(
+    *,
+    receiver,
+    sender,
+    message,
+    room_id,
+    message_id,
+):
+    """
+    Create a notification when a user receives a chat message.
+    """
+
+    sender_name = getattr(sender, "name", None) or getattr(
+        sender,
+        "email",
+        "Someone",
+    )
+
+    return create_notification(
+        user=receiver,
+        title="New Message",
+        message=f"{sender_name} sent you a message.",
+        notification_type=NotificationType.CHAT,
+        object_id=message_id,
+        action_url=f"/chat/rooms/{room_id}/",
+    )
 
 # ==========================================================
 # CREATE BULK NOTIFICATIONS

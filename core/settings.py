@@ -189,23 +189,6 @@ SIMPLE_JWT = {
 }
 
 
-# SIMPLE_JWT = {
-#     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=360),
-#     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-
-#     "ROTATE_REFRESH_TOKENS": True,
-#     "BLACKLIST_AFTER_ROTATION": True,
-
-#     "UPDATE_LAST_LOGIN": True,
-
-#     "ALGORITHM": "HS256",
-#     "SIGNING_KEY": SECRET_KEY,
-
-#     "AUTH_HEADER_TYPES": ("Bearer",),
-#     "AUTH_TOKEN_CLASSES": (
-#         "rest_framework_simplejwt.tokens.AccessToken",
-#     ),
-# }
 
 cloudinary.config(
     cloud_name=config("CLOUDINARY_CLOUD_NAME"),
