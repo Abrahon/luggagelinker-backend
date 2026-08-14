@@ -15,6 +15,7 @@ from apps.matching.models import Match
 from apps.packages.models import PackageStatus
 from apps.trips.models import Trip
 from apps.packages.models import PackageStatus,Package
+from apps.packages.services import PackageService
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.notifications.models import Notification, NotificationType
@@ -30,6 +31,7 @@ from apps.payment.services import BookingPaymentService
 from apps.notifications.models import Notification, NotificationType
 from apps.wallets.models import WalletTransaction
 from apps.notifications.services import create_notification
+from apps.chat.services import ChatService
 
 
 
@@ -38,12 +40,104 @@ logger = logging.getLogger(__name__)
 
 class BookingService:
 
+    # @staticmethod
+    # @transaction.atomic
+    # def create_booking_request(match_id, initiated_by):
+    #     """
+    #     Create a booking request from a valid match.
+    #     """
+    #     try:
+    #         match = Match.objects.select_related(
+    #             "package",
+    #             "trip",
+    #             "package__sender",
+    #             "trip__traveler",
+    #         ).get(id=match_id)
+    #     except Match.DoesNotExist:
+    #         raise ValidationError("Match does not exist.")
+
+    #     package = match.package
+    #     trip = match.trip
+
+    #     # --------------------------------------------------
+    #     # BUSINESS VALIDATIONS
+    #     # --------------------------------------------------
+
+    #     # Match must be active
+    #     if not match.is_active:
+    #         raise ValidationError("This match is no longer active.")
+
+    #     # Only sender can create booking
+    #     if initiated_by != package.sender:
+    #         raise ValidationError("Only the package sender can create a booking request.")
+
+    #     # Prevent booking own trip
+    #     if package.sender == trip.traveler:
+    #         raise ValidationError("You cannot book your own trip.")
+
+    #     # 🟢 Mark old expired pending bookings for this match as inactive
+    #     Booking.objects.filter(
+    #         match=match,
+    #         status=BookingStatus.PENDING,
+    #         expires_at__lte=timezone.now()
+    #     ).update(is_active=False, status=BookingStatus.EXPIRED)
+
+    #     # 🟢 Check ONLY for active, non-expired, valid bookings
+    #     active_booking_exists = Booking.objects.filter(
+    #         match=match,
+    #         is_active=True,
+    #         status__in=[
+    #             BookingStatus.PENDING,
+    #             BookingStatus.TRAVELER_ACCEPTED,
+    #             BookingStatus.PAYMENT_PENDING,
+    #             BookingStatus.CONFIRMED,
+    #             BookingStatus.PICKED_UP,
+    #             BookingStatus.IN_TRANSIT,
+    #         ],
+    #         expires_at__gt=timezone.now(),
+    #     ).exists()
+
+    #     if active_booking_exists:
+    #         raise ValidationError("An active booking already exists for this match.")
+
+    #     # Capacity check
+    #     if trip.available_weight_kg < package.weight:
+    #         raise ValidationError(
+    #             f"Insufficient available capacity. "
+    #             f"Required: {package.weight}kg, "
+    #             f"Available: {trip.available_weight_kg}kg."
+    #         )
+
+    #     # --------------------------------------------------
+    #     # CREATE BOOKING (NO DELETE REQUIRED!)
+    #     # --------------------------------------------------
+    #     booking = Booking.objects.create(
+    #         match=match,
+    #         package=package,
+    #         trip=trip,
+    #         sender=package.sender,
+    #         traveler=trip.traveler,
+    #         agreed_reward=package.reward_amount,
+    #         agreed_weight_kg=package.weight,
+    #         currency=package.currency,
+    #         status=BookingStatus.PENDING,
+    #         payment_status=PaymentStatus.UNPAID,
+    #         is_active=True,
+    #         # Set a clear expiration window (e.g., 7 days or 30 days)
+    #         expires_at=timezone.now() + timedelta(days=7),
+    #     )
+
+    #     logger.info(
+    #         "Booking %s created by user %s",
+    #         booking.tracking_number,
+    #         initiated_by.id,
+    #     )
+
+    #     return booking
+
     @staticmethod
     @transaction.atomic
     def create_booking_request(match_id, initiated_by):
-        """
-        Create a booking request from a valid match.
-        """
         try:
             match = Match.objects.select_related(
                 "package",
@@ -61,26 +155,30 @@ class BookingService:
         # BUSINESS VALIDATIONS
         # --------------------------------------------------
 
-        # Match must be active
         if not match.is_active:
             raise ValidationError("This match is no longer active.")
 
-        # Only sender can create booking
         if initiated_by != package.sender:
-            raise ValidationError("Only the package sender can create a booking request.")
+            raise ValidationError(
+                "Only the package sender can create a booking request."
+            )
 
-        # Prevent booking own trip
         if package.sender == trip.traveler:
-            raise ValidationError("You cannot book your own trip.")
+            raise ValidationError(
+                "You cannot book your own trip."
+            )
 
-        # 🟢 Mark old expired pending bookings for this match as inactive
+        # Expire old booking requests
         Booking.objects.filter(
             match=match,
             status=BookingStatus.PENDING,
-            expires_at__lte=timezone.now()
-        ).update(is_active=False, status=BookingStatus.EXPIRED)
+            expires_at__lte=timezone.now(),
+        ).update(
+            is_active=False,
+            status=BookingStatus.EXPIRED,
+        )
 
-        # 🟢 Check ONLY for active, non-expired, valid bookings
+        # Check active booking
         active_booking_exists = Booking.objects.filter(
             match=match,
             is_active=True,
@@ -96,9 +194,11 @@ class BookingService:
         ).exists()
 
         if active_booking_exists:
-            raise ValidationError("An active booking already exists for this match.")
+            raise ValidationError(
+                "An active booking already exists for this match."
+            )
 
-        # Capacity check
+        # Capacity
         if trip.available_weight_kg < package.weight:
             raise ValidationError(
                 f"Insufficient available capacity. "
@@ -107,8 +207,9 @@ class BookingService:
             )
 
         # --------------------------------------------------
-        # CREATE BOOKING (NO DELETE REQUIRED!)
+        # CREATE BOOKING
         # --------------------------------------------------
+
         booking = Booking.objects.create(
             match=match,
             package=package,
@@ -121,14 +222,23 @@ class BookingService:
             status=BookingStatus.PENDING,
             payment_status=PaymentStatus.UNPAID,
             is_active=True,
-            # Set a clear expiration window (e.g., 7 days or 30 days)
             expires_at=timezone.now() + timedelta(days=7),
         )
 
+        # --------------------------------------------------
+        # CREATE / GET CHAT ROOM
+        # --------------------------------------------------
+        # Create chat room automatically
+        chat_room, room_created = ChatService.get_or_create_booking_room(
+            booking
+        )
+
         logger.info(
-            "Booking %s created by user %s",
+            "Booking %s created by user %s. Chat room=%s created=%s",
             booking.tracking_number,
             initiated_by.id,
+            chat_room.id,
+            room_created,
         )
 
         return booking
@@ -136,26 +246,53 @@ class BookingService:
 
     @staticmethod
     @transaction.atomic
-    def create_public_booking_request(trip_id, package_id, initiated_by):
+    def create_public_booking_request(
+        trip_id,
+        package_id,
+        initiated_by,
+    ):
         """
         Create a booking request directly from a public trip.
 
-        Used when a sender discovers a public trip and wants to
-        book it without coming through the sender's matching list.
+        Flow:
+            1. Validate selected trip
+            2. Validate selected package ownership
+            3. Validate traveler/sender
+            4. Validate trip availability
+            5. Validate package <-> trip compatibility
+            6. Validate duplicate booking
+            7. Find/create Match
+            8. Create booking
         """
+
+        # ==========================================================
+        # 1. FETCH TRIP
+        # ==========================================================
 
         try:
             trip = (
                 Trip.objects
                 .select_for_update()
                 .select_related("traveler")
-                .get(id=trip_id)
+                .get(
+                    id=trip_id,
+                    is_public=True,
+                )
             )
         except Trip.DoesNotExist:
-            raise ValidationError("Trip does not exist.")
+            raise ValidationError(
+                "The selected public trip does not exist."
+            )
 
         # Sync PLANNED → ACTIVE → COMPLETED
         TripStatusService.sync_status(trip)
+
+        # Get latest status after sync
+        trip.refresh_from_db()
+
+        # ==========================================================
+        # 2. FETCH PACKAGE
+        # ==========================================================
 
         try:
             package = (
@@ -165,39 +302,50 @@ class BookingService:
                 .get(id=package_id)
             )
         except Package.DoesNotExist:
-            raise ValidationError("Package does not exist.")
+            raise ValidationError(
+                "Package does not exist."
+            )
 
-        # --------------------------------------------------
-        # 1. ONLY PACKAGE OWNER CAN BOOK
-        # --------------------------------------------------
+        # ==========================================================
+        # 3. PACKAGE OWNER
+        # ==========================================================
 
-        if package.sender != initiated_by:
+        if package.sender_id != initiated_by.id:
             raise ValidationError(
                 "You can only use your own package for a booking request."
             )
 
-        # --------------------------------------------------
-        # 2. CANNOT BOOK OWN TRIP
-        # --------------------------------------------------
+        # ==========================================================
+        # 4. CANNOT BOOK OWN TRIP
+        # ==========================================================
 
-        if trip.traveler == initiated_by:
+        if trip.traveler_id == initiated_by.id:
             raise ValidationError(
                 "You cannot book your own trip."
             )
 
-        # --------------------------------------------------
-        # 3. PACKAGE MUST BE PUBLISHED
-        # --------------------------------------------------
+        # ==========================================================
+        # 5. PACKAGE MUST BE PUBLISHED
+        # ==========================================================
 
         if package.status != PackageStatus.PUBLISHED:
             raise ValidationError(
                 "Your package must be published before you can request this trip."
             )
 
+        if not package.is_active:
+            raise ValidationError(
+                "This package is no longer active."
+            )
 
-        # --------------------------------------------------
-        # 4. TRIP MUST BE BOOKABLE
-        # --------------------------------------------------
+        # ==========================================================
+        # 6. TRIP MUST BE BOOKABLE
+        # ==========================================================
+
+        if not trip.is_public:
+            raise ValidationError(
+                "This trip is not public."
+            )
 
         if not trip.is_active:
             raise ValidationError(
@@ -214,21 +362,29 @@ class BookingService:
                 "This trip has already departed."
             )
 
-        # --------------------------------------------------
-        # 5. CAPACITY CHECK
-        # --------------------------------------------------
+        # ==========================================================
+        # 7. PACKAGE ↔ TRIP COMPATIBILITY
+        # ==========================================================
+        #
+        # This is the important part.
+        #
+        # Do NOT duplicate route/date/weight matching here.
+        # PackageService is responsible for that logic.
+        #
 
-        if trip.available_weight_kg < package.weight:
+        if not PackageService.package_matches_trip(
+            package=package,
+            trip=trip,
+            sender=initiated_by,
+        ):
             raise ValidationError(
-                f"Insufficient available capacity. "
-                f"Required: {package.weight}kg, "
-                f"Available: {trip.available_weight_kg}kg."
+                "This package is not compatible with the selected trip. "
+                "The package route, dates, or weight do not match the trip."
             )
 
-
-        # --------------------------------------------------
-        # 5.1 PREVENT DUPLICATE ACTIVE BOOKING
-        # --------------------------------------------------
+        # ==========================================================
+        # 8. DUPLICATE BOOKING CHECK
+        # ==========================================================
 
         active_booking = Booking.objects.filter(
             package=package,
@@ -250,10 +406,9 @@ class BookingService:
                 "You already have an active booking request for this trip."
             )
 
-
-        # --------------------------------------------------
-        # 6. FIND EXISTING MATCH
-        # --------------------------------------------------
+        # ==========================================================
+        # 9. FIND EXISTING MATCH
+        # ==========================================================
 
         match = Match.objects.filter(
             package=package,
@@ -261,10 +416,9 @@ class BookingService:
             is_active=True,
         ).first()
 
-
-        # --------------------------------------------------
-        # 7. CREATE MATCH IF PUBLIC TRIP WAS NOT PRE-MATCHED
-        # --------------------------------------------------
+        # ==========================================================
+        # 10. CREATE MATCH IF NOT EXISTS
+        # ==========================================================
 
         if not match:
             match = Match.objects.create(
@@ -273,15 +427,14 @@ class BookingService:
                 is_active=True,
             )
 
-
-        # --------------------------------------------------
-        # 8. REUSE EXISTING BOOKING LOGIC
-        # --------------------------------------------------
+        # ==========================================================
+        # 11. CREATE BOOKING
+        # ==========================================================
 
         return BookingService.create_booking_request(
             match_id=match.id,
             initiated_by=initiated_by,
-    )
+        )
 
     @staticmethod
     @transaction.atomic

@@ -270,6 +270,8 @@ class PublicTripBookingRequestView(generics.CreateAPIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        
+
 class TravelerPendingBookingsView(generics.ListAPIView):
     """
     API Endpoint for Travelers to list all active, non-expired pending booking requests.

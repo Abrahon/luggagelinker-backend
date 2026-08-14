@@ -5,6 +5,7 @@ from .views import (
     PackageMatchListView,
     TripMatchListView,
     MatchDetailView,
+    MyTripMatchingPackagesView
 )
 
 urlpatterns = [
@@ -43,5 +44,10 @@ urlpatterns = [
         "matches/<uuid:id>/",
         MatchDetailView.as_view(),
         name="match-detail",
+    ),
+    path(
+        "my/package/matching-trip/<uuid:trip_id>/",
+        MyTripMatchingPackagesView.as_view(),
+        name="my-trip-matching-packages",
     ),
 ]

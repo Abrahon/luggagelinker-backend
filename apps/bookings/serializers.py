@@ -202,19 +202,344 @@ class BookingSerializer(serializers.ModelSerializer):
 
 
 # apps/bookings/serializers.py
+# class PublicTripBookingRequestSerializer(serializers.Serializer):
+#     """
+#     Booking request initiated directly from the public
+#     Find a Traveler / Public Trips page.
+#     """
+
+#     trip_id = serializers.UUIDField(
+#         required=True,
+#     )
+
+#     package_id = serializers.UUIDField(
+#         required=True,
+#     )
+
+#     def validate_trip_id(self, value):
+#         try:
+#             trip = (
+#                 Trip.objects
+#                 .select_related("traveler")
+#                 .get(
+#                     id=value,
+#                     is_public=True,
+#                     is_active=True,
+#                 )
+#             )
+#         except Trip.DoesNotExist:
+#             raise serializers.ValidationError(
+#                 "The selected public trip does not exist or is no longer available."
+#             )
+
+#         if trip.status != TripStatus.PLANNED:
+#             raise serializers.ValidationError(
+#                 "This trip is no longer accepting booking requests."
+#             )
+
+#         if trip.departure_date < timezone.localdate():
+#             raise serializers.ValidationError(
+#                 "This trip has already departed."
+#             )
+
+#         self._trip = trip
+
+#         return value
+
+#     def validate(self, attrs):
+#         request = self.context["request"]
+#         user = request.user
+
+#         trip_id = attrs["trip_id"]
+#         package_id = attrs["package_id"]
+
+#         # --------------------------------------------------
+#         # 1. GET TRIP
+#         # --------------------------------------------------
+
+#         trip = getattr(self, "_trip", None)
+
+#         if trip is None:
+#             try:
+#                 trip = Trip.objects.select_related(
+#                     "traveler",
+#                     "user",
+#                 ).get(id=trip_id)
+#             except Trip.DoesNotExist:
+#                 raise serializers.ValidationError({
+#                     "trip_id": "The selected trip does not exist."
+#                 })
+
+#         # --------------------------------------------------
+#         # 2. TRIP ACTIVE
+#         # --------------------------------------------------
+
+#         if not trip.is_active:
+#             raise serializers.ValidationError({
+#                 "trip_id": "This trip is no longer available."
+#             })
+
+#         # --------------------------------------------------
+#         # 3. GET TRAVELER
+#         # --------------------------------------------------
+
+#         traveler = getattr(
+#             trip,
+#             "traveler",
+#             None,
+#         )
+
+#         # If your Trip model uses `user` instead of `traveler`,
+#         # this fallback supports that structure.
+#         if traveler is None:
+#             traveler = getattr(
+#                 trip,
+#                 "user",
+#                 None,
+#             )
+
+#         if traveler is None:
+#             raise serializers.ValidationError({
+#                 "trip_id": "This trip does not have a valid traveler."
+#             })
+
+#         # --------------------------------------------------
+#         # 4. USER CANNOT BOOK OWN TRIP
+#         # --------------------------------------------------
+
+#         if traveler == user:
+#             raise serializers.ValidationError({
+#                 "trip_id": "You cannot send a booking request to your own trip."
+#             })
+
+#         # --------------------------------------------------
+#         # 5. GET PACKAGE
+#         # --------------------------------------------------
+
+#         try:
+#             package = Package.objects.select_related(
+#                 "sender",
+#             ).get(
+#                 id=package_id,
+#                 sender=user,
+#             )
+#         except Package.DoesNotExist:
+#             raise serializers.ValidationError({
+#                 "package_id": (
+#                     "Package not found or this package does not "
+#                     "belong to you."
+#                 )
+#             })
+
+#         # --------------------------------------------------
+#         # 6. PACKAGE MUST BE PUBLISHED
+#         # --------------------------------------------------
+
+#         if package.status != PackageStatus.PUBLISHED:
+#             raise serializers.ValidationError({
+#                 "package_id": (
+#                     "This package is not published yet. "
+#                     "Your package must be approved and published "
+#                     "before requesting a booking."
+#                 )
+#             })
+
+#         # --------------------------------------------------
+#         # 7. ROUTE VALIDATION
+#         # --------------------------------------------------
+
+#         package_from_country = getattr(
+#             package,
+#             "from_country",
+#             None,
+#         )
+
+#         package_from_city = getattr(
+#             package,
+#             "from_city",
+#             None,
+#         )
+
+#         package_to_country = getattr(
+#             package,
+#             "to_country",
+#             None,
+#         )
+
+#         package_to_city = getattr(
+#             package,
+#             "to_city",
+#             None,
+#         )
+
+#         trip_from_country = getattr(
+#             trip,
+#             "from_country",
+#             None,
+#         )
+
+#         trip_from_city = getattr(
+#             trip,
+#             "from_city",
+#             None,
+#         )
+
+#         trip_to_country = getattr(
+#             trip,
+#             "to_country",
+#             None,
+#         )
+
+#         trip_to_city = getattr(
+#             trip,
+#             "to_city",
+#             None,
+#         )
+
+#         if package_from_country != trip_from_country:
+#             raise serializers.ValidationError({
+#                 "package_id": (
+#                     "The package origin country does not "
+#                     "match the traveler's trip."
+#                 )
+#             })
+
+#         if package_from_city != trip_from_city:
+#             raise serializers.ValidationError({
+#                 "package_id": (
+#                     "The package origin city does not "
+#                     "match the traveler's trip."
+#                 )
+#             })
+
+#         if package_to_country != trip_to_country:
+#             raise serializers.ValidationError({
+#                 "package_id": (
+#                     "The package destination country does not "
+#                     "match the traveler's trip."
+#                 )
+#             })
+
+#         if package_to_city != trip_to_city:
+#             raise serializers.ValidationError({
+#                 "package_id": (
+#                     "The package destination city does not "
+#                     "match the traveler's trip."
+#                 )
+#             })
+
+#         # --------------------------------------------------
+#         # 8. WEIGHT / CAPACITY
+#         # --------------------------------------------------
+
+#         package_weight = getattr(
+#             package,
+#             "weight",
+#             None,
+#         )
+
+#         if package_weight is None:
+#             package_weight = getattr(
+#                 package,
+#                 "weight_kg",
+#                 None,
+#             )
+
+#         available_capacity = getattr(
+#             trip,
+#             "available_capacity_kg",
+#             None,
+#         )
+
+#         if (
+#             package_weight is not None
+#             and available_capacity is not None
+#             and package_weight > available_capacity
+#         ):
+#             raise serializers.ValidationError({
+#                 "package_id": (
+#                     f"This package weighs {package_weight} KG, "
+#                     f"but the traveler has only "
+#                     f"{available_capacity} KG available."
+#                 )
+#             })
+
+#         # --------------------------------------------------
+#         # 9. PREVENT DUPLICATE ACTIVE BOOKING
+#         # --------------------------------------------------
+
+#         active_statuses = [
+#             BookingStatus.PENDING,
+#             BookingStatus.TRAVELER_ACCEPTED,
+#             BookingStatus.PAYMENT_PENDING,
+#             BookingStatus.CONFIRMED,
+#             BookingStatus.PICKED_UP,
+#             BookingStatus.IN_TRANSIT,
+#         ]
+
+#         duplicate_exists = Booking.objects.filter(
+#             sender=user,
+#             traveler=traveler,
+#             trip=trip,
+#             package=package,
+#             is_active=True,
+#             status__in=active_statuses,
+#         ).filter(
+#             # If expires_at is nullable in your model,
+#             # this condition can be adjusted.
+#             expires_at__gt=timezone.now(),
+#         ).exists()
+
+#         if duplicate_exists:
+#             raise serializers.ValidationError({
+#                 "booking": (
+#                     "You already have an active booking request "
+#                     "for this package and trip."
+#                 )
+#             })
+
+#         # --------------------------------------------------
+#         # 10. STORE OBJECTS FOR CREATE()
+#         # --------------------------------------------------
+
+#         attrs["trip"] = trip
+#         attrs["package"] = package
+#         attrs["traveler"] = traveler
+
+#         return attrs
+
+from rest_framework import serializers
+from django.utils import timezone
+
+from apps.trips.models import Trip, TripStatus
+from apps.packages.models import Package, PackageStatus
+from apps.bookings.models import Booking, BookingStatus
+
+
 class PublicTripBookingRequestSerializer(serializers.Serializer):
     """
-    Booking request initiated directly from the public
-    Find a Traveler / Public Trips page.
+    Serializer for booking requests initiated directly from a public trip.
+
+    Flow:
+        Public Trip
+            ↓
+        GET /api/my/package/
+            ↓
+        User selects a package
+            ↓
+        POST /api/bookings/public-trip-request/
+            ↓
+        Validate selected trip + package
+            ↓
+        BookingService.create_public_booking_request()
     """
 
-    trip_id = serializers.UUIDField(
-        required=True,
-    )
+    trip_id = serializers.UUIDField(required=True)
+    package_id = serializers.UUIDField(required=True)
 
-    package_id = serializers.UUIDField(
-        required=True,
-    )
+    # ==========================================================
+    # 1. VALIDATE TRIP
+    # ==========================================================
 
     def validate_trip_id(self, value):
         try:
@@ -232,19 +557,31 @@ class PublicTripBookingRequestSerializer(serializers.Serializer):
                 "The selected public trip does not exist or is no longer available."
             )
 
+        # Trip must still accept booking requests.
         if trip.status != TripStatus.PLANNED:
             raise serializers.ValidationError(
                 "This trip is no longer accepting booking requests."
             )
 
+        # Trip cannot already be departed.
         if trip.departure_date < timezone.localdate():
             raise serializers.ValidationError(
                 "This trip has already departed."
             )
 
+        # Public trip must have a traveler.
+        if not trip.traveler:
+            raise serializers.ValidationError(
+                "This trip does not have a valid traveler."
+            )
+
         self._trip = trip
 
         return value
+
+    # ==========================================================
+    # 2. VALIDATE PACKAGE + SELECTED TRIP
+    # ==========================================================
 
     def validate(self, attrs):
         request = self.context["request"]
@@ -253,220 +590,248 @@ class PublicTripBookingRequestSerializer(serializers.Serializer):
         trip_id = attrs["trip_id"]
         package_id = attrs["package_id"]
 
-        # --------------------------------------------------
-        # 1. GET TRIP
-        # --------------------------------------------------
+        # ------------------------------------------------------
+        # FETCH TRIP
+        # ------------------------------------------------------
 
         trip = getattr(self, "_trip", None)
 
         if trip is None:
             try:
-                trip = Trip.objects.select_related(
-                    "traveler",
-                    "user",
-                ).get(id=trip_id)
+                trip = (
+                    Trip.objects
+                    .select_related("traveler")
+                    .get(
+                        id=trip_id,
+                        is_public=True,
+                        is_active=True,
+                    )
+                )
             except Trip.DoesNotExist:
                 raise serializers.ValidationError({
-                    "trip_id": "The selected trip does not exist."
+                    "trip_id": (
+                        "The selected public trip does not exist "
+                        "or is no longer available."
+                    )
                 })
 
-        # --------------------------------------------------
-        # 2. TRIP ACTIVE
-        # --------------------------------------------------
+        # ------------------------------------------------------
+        # USER CANNOT BOOK OWN TRIP
+        # ------------------------------------------------------
 
-        if not trip.is_active:
+        if trip.traveler == user:
             raise serializers.ValidationError({
-                "trip_id": "This trip is no longer available."
+                "trip_id": (
+                    "You cannot send a booking request "
+                    "to your own trip."
+                )
             })
 
-        # --------------------------------------------------
-        # 3. GET TRAVELER
-        # --------------------------------------------------
-
-        traveler = getattr(
-            trip,
-            "traveler",
-            None,
-        )
-
-        # If your Trip model uses `user` instead of `traveler`,
-        # this fallback supports that structure.
-        if traveler is None:
-            traveler = getattr(
-                trip,
-                "user",
-                None,
-            )
-
-        if traveler is None:
-            raise serializers.ValidationError({
-                "trip_id": "This trip does not have a valid traveler."
-            })
-
-        # --------------------------------------------------
-        # 4. USER CANNOT BOOK OWN TRIP
-        # --------------------------------------------------
-
-        if traveler == user:
-            raise serializers.ValidationError({
-                "trip_id": "You cannot send a booking request to your own trip."
-            })
-
-        # --------------------------------------------------
-        # 5. GET PACKAGE
-        # --------------------------------------------------
+        # ------------------------------------------------------
+        # FETCH USER'S PACKAGE
+        # ------------------------------------------------------
 
         try:
-            package = Package.objects.select_related(
-                "sender",
-            ).get(
-                id=package_id,
-                sender=user,
+            package = (
+                Package.objects
+                .select_related("sender")
+                .get(
+                    id=package_id,
+                    sender=user,
+                )
             )
         except Package.DoesNotExist:
             raise serializers.ValidationError({
                 "package_id": (
-                    "Package not found or this package does not "
-                    "belong to you."
+                    "Package not found or does not belong to you."
                 )
             })
 
-        # --------------------------------------------------
-        # 6. PACKAGE MUST BE PUBLISHED
-        # --------------------------------------------------
+        # ------------------------------------------------------
+        # PACKAGE MUST BE PUBLISHED
+        # ------------------------------------------------------
 
         if package.status != PackageStatus.PUBLISHED:
             raise serializers.ValidationError({
                 "package_id": (
-                    "This package is not published yet. "
-                    "Your package must be approved and published "
+                    "Your package must be published "
                     "before requesting a booking."
                 )
             })
 
-        # --------------------------------------------------
-        # 7. ROUTE VALIDATION
-        # --------------------------------------------------
+        # ======================================================
+        # RULE 1 — ROUTE MUST MATCH SELECTED TRIP
+        # ======================================================
 
-        package_from_country = getattr(
-            package,
-            "from_country",
-            None,
+        package_pickup_country = (
+            (package.pickup_country or "")
+            .strip()
+            .casefold()
         )
 
-        package_from_city = getattr(
-            package,
-            "from_city",
-            None,
+        package_pickup_city = (
+            (package.pickup_city or "")
+            .strip()
+            .casefold()
         )
 
-        package_to_country = getattr(
-            package,
-            "to_country",
-            None,
+        package_destination_country = (
+            (package.destination_country or "")
+            .strip()
+            .casefold()
         )
 
-        package_to_city = getattr(
-            package,
-            "to_city",
-            None,
+        package_destination_city = (
+            (package.destination_city or "")
+            .strip()
+            .casefold()
         )
 
-        trip_from_country = getattr(
-            trip,
-            "from_country",
-            None,
+        trip_from_country = (
+            (trip.from_country or "")
+            .strip()
+            .casefold()
         )
 
-        trip_from_city = getattr(
-            trip,
-            "from_city",
-            None,
+        trip_from_city = (
+            (trip.from_city or "")
+            .strip()
+            .casefold()
         )
 
-        trip_to_country = getattr(
-            trip,
-            "to_country",
-            None,
+        trip_to_country = (
+            (trip.to_country or "")
+            .strip()
+            .casefold()
         )
 
-        trip_to_city = getattr(
-            trip,
-            "to_city",
-            None,
+        trip_to_city = (
+            (trip.to_city or "")
+            .strip()
+            .casefold()
         )
 
-        if package_from_country != trip_from_country:
+        # ------------------------------------------------------
+        # ORIGIN
+        # ------------------------------------------------------
+
+        if package_pickup_country != trip_from_country:
             raise serializers.ValidationError({
                 "package_id": (
-                    "The package origin country does not "
-                    "match the traveler's trip."
+                    f"Package pickup country "
+                    f"({package.pickup_country}) does not match "
+                    f"the trip departure country "
+                    f"({trip.from_country})."
                 )
             })
 
-        if package_from_city != trip_from_city:
+        if package_pickup_city != trip_from_city:
             raise serializers.ValidationError({
                 "package_id": (
-                    "The package origin city does not "
-                    "match the traveler's trip."
+                    f"Package pickup city "
+                    f"({package.pickup_city}) does not match "
+                    f"the trip departure city "
+                    f"({trip.from_city})."
                 )
             })
 
-        if package_to_country != trip_to_country:
+        # ------------------------------------------------------
+        # DESTINATION
+        # ------------------------------------------------------
+
+        if package_destination_country != trip_to_country:
             raise serializers.ValidationError({
                 "package_id": (
-                    "The package destination country does not "
-                    "match the traveler's trip."
+                    f"Package destination country "
+                    f"({package.destination_country}) does not match "
+                    f"the trip destination country "
+                    f"({trip.to_country})."
                 )
             })
 
-        if package_to_city != trip_to_city:
+        if package_destination_city != trip_to_city:
             raise serializers.ValidationError({
                 "package_id": (
-                    "The package destination city does not "
-                    "match the traveler's trip."
+                    f"Package destination city "
+                    f"({package.destination_city}) does not match "
+                    f"the trip destination city "
+                    f"({trip.to_city})."
                 )
             })
 
-        # --------------------------------------------------
-        # 8. WEIGHT / CAPACITY
-        # --------------------------------------------------
+        # ======================================================
+        # RULE 2 — DATE MUST MATCH SELECTED TRIP
+        # ======================================================
 
-        package_weight = getattr(
+        package_pickup_date = getattr(
             package,
-            "weight",
-            None,
-        )
-
-        if package_weight is None:
-            package_weight = getattr(
-                package,
-                "weight_kg",
-                None,
-            )
-
-        available_capacity = getattr(
-            trip,
-            "available_capacity_kg",
+            "pickup_date",
             None,
         )
 
         if (
-            package_weight is not None
-            and available_capacity is not None
-            and package_weight > available_capacity
+            package_pickup_date
+            and trip.departure_date
+            and package_pickup_date > trip.departure_date
         ):
             raise serializers.ValidationError({
                 "package_id": (
-                    f"This package weighs {package_weight} KG, "
-                    f"but the traveler has only "
-                    f"{available_capacity} KG available."
+                    f"Package pickup date "
+                    f"({package_pickup_date}) is after "
+                    f"the trip departure date "
+                    f"({trip.departure_date})."
                 )
             })
 
-        # --------------------------------------------------
-        # 9. PREVENT DUPLICATE ACTIVE BOOKING
-        # --------------------------------------------------
+        # ------------------------------------------------------
+        # Trip arrival vs package latest delivery
+        # ------------------------------------------------------
+
+        trip_arrival_date = getattr(
+            trip,
+            "arrival_date",
+            None,
+        )
+
+        package_latest_delivery_date = getattr(
+            package,
+            "latest_delivery_date",
+            None,
+        )
+
+        if (
+            trip_arrival_date
+            and package_latest_delivery_date
+            and trip_arrival_date > package_latest_delivery_date
+        ):
+            raise serializers.ValidationError({
+                "package_id": (
+                    f"Trip arrival date "
+                    f"({trip_arrival_date}) is later than "
+                    f"the package latest delivery date "
+                    f"({package_latest_delivery_date})."
+                )
+            })
+
+        # ======================================================
+        # 3. CAPACITY CHECK
+        # ======================================================
+
+        package_weight = package.weight
+
+        if trip.available_weight_kg < package_weight:
+            raise serializers.ValidationError({
+                "package_id": (
+                    f"Insufficient available capacity. "
+                    f"Package requires {package_weight}kg, "
+                    f"but only {trip.available_weight_kg}kg "
+                    f"is available."
+                )
+            })
+
+        # ======================================================
+        # 4. PREVENT DUPLICATE ACTIVE BOOKING
+        # ======================================================
 
         active_statuses = [
             BookingStatus.PENDING,
@@ -478,37 +843,30 @@ class PublicTripBookingRequestSerializer(serializers.Serializer):
         ]
 
         duplicate_exists = Booking.objects.filter(
-            sender=user,
-            traveler=traveler,
-            trip=trip,
             package=package,
+            trip=trip,
             is_active=True,
             status__in=active_statuses,
-        ).filter(
-            # If expires_at is nullable in your model,
-            # this condition can be adjusted.
             expires_at__gt=timezone.now(),
         ).exists()
 
         if duplicate_exists:
             raise serializers.ValidationError({
                 "booking": (
-                    "You already have an active booking request "
-                    "for this package and trip."
+                    "You already have an active booking "
+                    "request for this package and trip."
                 )
             })
 
-        # --------------------------------------------------
-        # 10. STORE OBJECTS FOR CREATE()
-        # --------------------------------------------------
+        # ======================================================
+        # STORE OBJECTS FOR VIEW / SERVICE
+        # ======================================================
 
         attrs["trip"] = trip
         attrs["package"] = package
-        attrs["traveler"] = traveler
+        attrs["traveler"] = trip.traveler
 
         return attrs
-
-    
 class VerifyPickupPinSerializer(serializers.Serializer):
     booking_id = serializers.UUIDField(required=True)
 

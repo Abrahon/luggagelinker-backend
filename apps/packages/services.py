@@ -19,6 +19,10 @@ class PackageService:
         "Syria",
     }
 
+    # ==========================================================
+    # PACKAGE RISK EVALUATION
+    # ==========================================================
+
     @staticmethod
     def process_and_evaluate_risk(package: Package) -> Package:
 
@@ -47,16 +51,12 @@ class PackageService:
 
         if value >= Decimal("5000"):
             score += 35
-
         elif value >= Decimal("2500"):
             score += 30
-
         elif value >= Decimal("1000"):
             score += 20
-
         elif value >= Decimal("500"):
             score += 15
-
         elif value >= Decimal("150"):
             score += 10
 
@@ -67,10 +67,8 @@ class PackageService:
 
         if reward >= Decimal("1000"):
             score += 20
-
         elif reward >= Decimal("500"):
             score += 15
-
         elif reward >= Decimal("200"):
             score += 10
 
@@ -86,10 +84,7 @@ class PackageService:
         # --------------------------------------------------
         # 5. High Risk Country
         # --------------------------------------------------
-        if (
-            package.pickup_country.strip()
-            in PackageService.HIGH_RISK_COUNTRIES
-        ):
+        if package.pickup_country.strip() in PackageService.HIGH_RISK_COUNTRIES:
             score += 15
 
         # --------------------------------------------------
@@ -109,11 +104,11 @@ class PackageService:
         # --------------------------------------------------
         profile = getattr(package.sender, "profile", None)
 
-        completed = getattr(
-            profile,
-            "completed_deliveries",
-            0,
-        ) if profile else 0
+        completed = (
+            getattr(profile, "completed_deliveries", 0)
+            if profile
+            else 0
+        )
 
         if completed == 0:
             score += 10
@@ -123,8 +118,6 @@ class PackageService:
         # --------------------------------------------------
         package.risk_score = min(score, 100)
 
-        # < 50 = Auto Approve
-        # >= 50 = Manual Review
         if package.risk_score >= 50:
             package.verification_status = (
                 VerificationStatus.MANUAL_REVIEW
@@ -143,6 +136,190 @@ class PackageService:
 
         return package
 
+    # ==========================================================
+    # FIND PACKAGES COMPATIBLE WITH A SPECIFIC TRIP
+    # ==========================================================
+
+    # ==========================================================
+    # FIND PACKAGES FOR A SPECIFIC TRIP
+    # ==========================================================
+
+    @staticmethod
+    def find_packages_for_trip(trip, sender):
+        """
+        Return only the sender's packages that are compatible
+        with the selected trip.
+
+        Used when the sender clicks:
+            "Booking Request"
+
+        Matching rules:
+            - Package belongs to sender
+            - Package is published
+            - Package is active
+            - Route matches trip
+            - Pickup date is before/on trip departure
+            - Delivery deadline is after/on trip arrival
+            - Package weight fits available capacity
+        """
+
+        return Package.objects.filter(
+            sender=sender,
+            status=PackageStatus.PUBLISHED,
+            is_active=True,
+
+            # ==================================================
+            # ROUTE
+            # ==================================================
+
+            pickup_country__iexact=trip.from_country,
+            pickup_city__iexact=trip.from_city,
+
+            destination_country__iexact=trip.to_country,
+            destination_city__iexact=trip.to_city,
+
+            # ==================================================
+            # DATE
+            # ==================================================
+
+            pickup_date__lte=trip.departure_date,
+            latest_delivery_date__gte=trip.arrival_date,
+
+            # ==================================================
+            # CAPACITY
+            # ==================================================
+
+            weight__lte=trip.available_weight_kg,
+        )
+
+
+    # ==========================================================
+    # VALIDATE ONE PACKAGE AGAINST ONE SPECIFIC TRIP
+    # ==========================================================
+
+    @staticmethod
+    def validate_package_for_trip(package, trip, sender):
+        """
+        Final backend validation before creating a booking.
+
+        The frontend may show only matching packages, but we
+        MUST validate again here because the frontend cannot
+        be trusted.
+
+        Returns:
+            (True, None)
+            OR
+            (False, "error message")
+        """
+
+        # ======================================================
+        # 1. PACKAGE OWNER
+        # ======================================================
+
+        if package.sender_id != sender.id:
+            return False, (
+                "This package does not belong to you."
+            )
+
+        # ======================================================
+        # 2. PACKAGE STATUS
+        # ======================================================
+
+        if package.status != PackageStatus.PUBLISHED:
+            return False, (
+                "Package must be published."
+            )
+
+        # ======================================================
+        # 3. PACKAGE ACTIVE
+        # ======================================================
+
+        if not package.is_active:
+            return False, (
+                "Package is inactive."
+            )
+
+        # ======================================================
+        # 4. ROUTE VALIDATION
+        # ======================================================
+
+        if (
+            package.pickup_country.strip().casefold()
+            != trip.from_country.strip().casefold()
+        ):
+            return False, (
+                "Package pickup country does not match the trip."
+            )
+
+        if (
+            package.pickup_city.strip().casefold()
+            != trip.from_city.strip().casefold()
+        ):
+            return False, (
+                "Package pickup city does not match the trip."
+            )
+
+        if (
+            package.destination_country.strip().casefold()
+            != trip.to_country.strip().casefold()
+        ):
+            return False, (
+                "Package destination country does not match the trip."
+            )
+
+        if (
+            package.destination_city.strip().casefold()
+            != trip.to_city.strip().casefold()
+        ):
+            return False, (
+                "Package destination city does not match the trip."
+            )
+
+        # ======================================================
+        # 5. PICKUP DATE
+        # ======================================================
+
+        if (
+            package.pickup_date
+            and trip.departure_date
+            and package.pickup_date > trip.departure_date
+        ):
+            return False, (
+                "Package pickup date is after the trip departure date."
+            )
+
+        # ======================================================
+        # 6. DELIVERY DATE
+        # ======================================================
+
+        if (
+            package.latest_delivery_date
+            and trip.arrival_date
+            and package.latest_delivery_date < trip.arrival_date
+        ):
+            return False, (
+                "Package delivery deadline is before the trip arrival date."
+            )
+
+        # ======================================================
+        # 7. WEIGHT / CAPACITY
+        # ======================================================
+
+        if (
+            package.weight > trip.available_weight_kg
+        ):
+            return False, (
+                f"Package weight ({package.weight}kg) exceeds "
+                f"available trip capacity ({trip.available_weight_kg}kg)."
+            )
+
+        # ======================================================
+        # EVERYTHING MATCHES
+        # ======================================================
+
+        return True, None
+
+    
     @staticmethod
     def publish_package(package):
 

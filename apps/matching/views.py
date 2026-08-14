@@ -258,3 +258,88 @@ class MatchDetailView(generics.RetrieveAPIView):
                 status_code=404,
                 errors=str(e)
             )
+
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.trips.models import Trip
+from apps.packages.services import PackageService
+from apps.packages.serializers import PackageSerializer
+
+
+class MyTripMatchingPackagesView(APIView):
+    """
+    Return only the authenticated sender's packages
+    that match a specific trip.
+
+    Used when sender clicks:
+        Booking Request
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, trip_id):
+
+        # ==========================================================
+        # 1. GET PUBLIC TRIP
+        # ==========================================================
+
+        try:
+            trip = Trip.objects.get(
+                id=trip_id,
+                is_public=True,
+                is_active=True,
+            )
+        except Trip.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "The selected public trip "
+                        "does not exist or is no longer available."
+                    ),
+                    "data": [],
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # ==========================================================
+        # 2. FIND MATCHING PACKAGES
+        # ==========================================================
+
+        packages = PackageService.find_packages_for_trip(
+            trip=trip,
+            sender=request.user,
+        )
+
+        # ==========================================================
+        # 3. SERIALIZE
+        # ==========================================================
+
+        serializer = PackageSerializer(
+            packages,
+            many=True,
+            context={
+                "request": request,
+            },
+        )
+
+        # ==========================================================
+        # 4. RESPONSE
+        # ==========================================================
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Matching packages retrieved successfully."
+                ),
+                "trip_id": str(trip.id),
+                "count": packages.count(),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )

@@ -9,7 +9,7 @@ Responsible for creating or updating Match records.
 import logging
 
 from django.db import transaction
-
+from apps.packages.models import Package, PackageStatus
 from apps.matching.models import Match, MatchStatus
 
 logger = logging.getLogger(__name__)
@@ -89,3 +89,85 @@ def deactivate_match(match):
     )
 
     return match
+
+
+# apps/matching/services.py
+
+
+
+
+class MatchService:
+
+    @staticmethod
+    def find_compatible_packages(trip, sender):
+        """
+        Return sender's packages that are compatible
+        with the selected trip.
+        """
+
+        packages = Package.objects.filter(
+            sender=sender,
+            status=PackageStatus.PUBLISHED,
+            is_active=True,
+        )
+
+        compatible = []
+
+        for package in packages:
+
+            # -------------------------------
+            # ROUTE
+            # -------------------------------
+
+            if (
+                package.pickup_country.strip().casefold()
+                != trip.from_country.strip().casefold()
+            ):
+                continue
+
+            if (
+                package.pickup_city.strip().casefold()
+                != trip.from_city.strip().casefold()
+            ):
+                continue
+
+            if (
+                package.destination_country.strip().casefold()
+                != trip.to_country.strip().casefold()
+            ):
+                continue
+
+            if (
+                package.destination_city.strip().casefold()
+                != trip.to_city.strip().casefold()
+            ):
+                continue
+
+            # -------------------------------
+            # DATE
+            # -------------------------------
+
+            if (
+                package.pickup_date
+                and trip.departure_date
+                and package.pickup_date > trip.departure_date
+            ):
+                continue
+
+            if (
+                package.latest_delivery_date
+                and trip.arrival_date
+                and trip.arrival_date > package.latest_delivery_date
+            ):
+                continue
+
+            # -------------------------------
+            # WEIGHT
+            # -------------------------------
+
+            if package.weight > trip.available_weight_kg:
+                continue
+
+            compatible.append(package)
+
+        return compatible
