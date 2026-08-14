@@ -5,8 +5,7 @@ import uuid
 from django.db import models
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
-# Assuming a standard third-party storage package integration or simple configuration layout
-# from cloudinary.models import CloudinaryField
+
 
 class ChatRoom(models.Model):
     id = models.UUIDField(

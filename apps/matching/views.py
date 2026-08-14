@@ -50,7 +50,6 @@ def error_response(message, status_code=400, errors=None):
     )
 
 
-
 class MyMatchListView(generics.ListAPIView):
     serializer_class = MatchSerializer
     permission_classes = [IsAuthenticated]
@@ -59,19 +58,20 @@ class MyMatchListView(generics.ListAPIView):
         user = self.request.user
 
         return (
-            Match.objects.filter(is_active=True)
-            .select_related(
-                "package__sender",
-                "trip__traveler",
+            Match.objects
+            .filter(
+                is_active=True,
             )
             .filter(
                 models.Q(package__sender=user)
                 | models.Q(trip__traveler=user)
             )
+            .select_related(
+                "package__sender",
+                "trip__traveler",
+            )
             .order_by("-created_at")
         )
-
-
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
@@ -91,20 +91,25 @@ class MyMatchListView(generics.ListAPIView):
         if page is not None:
             serializer = self.get_serializer(page, many=True)
 
-            paginated_response = self.get_paginated_response(serializer.data)
+            response = self.get_paginated_response(
+                serializer.data
+            )
 
-            paginated_response.data = OrderedDict([
+            response.data = OrderedDict([
                 ("success", True),
                 ("message", "Matches retrieved successfully."),
-                ("count", paginated_response.data["count"]),
-                ("next", paginated_response.data["next"]),
-                ("previous", paginated_response.data["previous"]),
-                ("data", paginated_response.data["results"]),
+                ("count", response.data["count"]),
+                ("next", response.data["next"]),
+                ("previous", response.data["previous"]),
+                ("data", response.data["results"]),
             ])
 
-            return paginated_response
+            return response
 
-        serializer = self.get_serializer(queryset, many=True)
+        serializer = self.get_serializer(
+            queryset,
+            many=True,
+        )
 
         return Response(
             {
@@ -114,8 +119,6 @@ class MyMatchListView(generics.ListAPIView):
             },
             status=status.HTTP_200_OK,
         )
-        
-
 
 
 class PackageMatchListView(generics.ListAPIView):

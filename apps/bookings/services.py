@@ -32,6 +32,10 @@ from apps.notifications.models import Notification, NotificationType
 from apps.wallets.models import WalletTransaction
 from apps.notifications.services import create_notification
 from apps.chat.services import ChatService
+from apps.chat.services import ChatService
+from apps.notifications.services import (
+    create_booking_request_notification,
+)
 
 
 
@@ -39,101 +43,6 @@ logger = logging.getLogger(__name__)
 
 
 class BookingService:
-
-    # @staticmethod
-    # @transaction.atomic
-    # def create_booking_request(match_id, initiated_by):
-    #     """
-    #     Create a booking request from a valid match.
-    #     """
-    #     try:
-    #         match = Match.objects.select_related(
-    #             "package",
-    #             "trip",
-    #             "package__sender",
-    #             "trip__traveler",
-    #         ).get(id=match_id)
-    #     except Match.DoesNotExist:
-    #         raise ValidationError("Match does not exist.")
-
-    #     package = match.package
-    #     trip = match.trip
-
-    #     # --------------------------------------------------
-    #     # BUSINESS VALIDATIONS
-    #     # --------------------------------------------------
-
-    #     # Match must be active
-    #     if not match.is_active:
-    #         raise ValidationError("This match is no longer active.")
-
-    #     # Only sender can create booking
-    #     if initiated_by != package.sender:
-    #         raise ValidationError("Only the package sender can create a booking request.")
-
-    #     # Prevent booking own trip
-    #     if package.sender == trip.traveler:
-    #         raise ValidationError("You cannot book your own trip.")
-
-    #     # 🟢 Mark old expired pending bookings for this match as inactive
-    #     Booking.objects.filter(
-    #         match=match,
-    #         status=BookingStatus.PENDING,
-    #         expires_at__lte=timezone.now()
-    #     ).update(is_active=False, status=BookingStatus.EXPIRED)
-
-    #     # 🟢 Check ONLY for active, non-expired, valid bookings
-    #     active_booking_exists = Booking.objects.filter(
-    #         match=match,
-    #         is_active=True,
-    #         status__in=[
-    #             BookingStatus.PENDING,
-    #             BookingStatus.TRAVELER_ACCEPTED,
-    #             BookingStatus.PAYMENT_PENDING,
-    #             BookingStatus.CONFIRMED,
-    #             BookingStatus.PICKED_UP,
-    #             BookingStatus.IN_TRANSIT,
-    #         ],
-    #         expires_at__gt=timezone.now(),
-    #     ).exists()
-
-    #     if active_booking_exists:
-    #         raise ValidationError("An active booking already exists for this match.")
-
-    #     # Capacity check
-    #     if trip.available_weight_kg < package.weight:
-    #         raise ValidationError(
-    #             f"Insufficient available capacity. "
-    #             f"Required: {package.weight}kg, "
-    #             f"Available: {trip.available_weight_kg}kg."
-    #         )
-
-    #     # --------------------------------------------------
-    #     # CREATE BOOKING (NO DELETE REQUIRED!)
-    #     # --------------------------------------------------
-    #     booking = Booking.objects.create(
-    #         match=match,
-    #         package=package,
-    #         trip=trip,
-    #         sender=package.sender,
-    #         traveler=trip.traveler,
-    #         agreed_reward=package.reward_amount,
-    #         agreed_weight_kg=package.weight,
-    #         currency=package.currency,
-    #         status=BookingStatus.PENDING,
-    #         payment_status=PaymentStatus.UNPAID,
-    #         is_active=True,
-    #         # Set a clear expiration window (e.g., 7 days or 30 days)
-    #         expires_at=timezone.now() + timedelta(days=7),
-    #     )
-
-    #     logger.info(
-    #         "Booking %s created by user %s",
-    #         booking.tracking_number,
-    #         initiated_by.id,
-    #     )
-
-    #     return booking
 
     @staticmethod
     @transaction.atomic
@@ -206,9 +115,9 @@ class BookingService:
                 f"Available: {trip.available_weight_kg}kg."
             )
 
-        # --------------------------------------------------
+        # ==========================================================
         # CREATE BOOKING
-        # --------------------------------------------------
+        # ==========================================================
 
         booking = Booking.objects.create(
             match=match,
@@ -225,21 +134,54 @@ class BookingService:
             expires_at=timezone.now() + timedelta(days=7),
         )
 
-        # --------------------------------------------------
-        # CREATE / GET CHAT ROOM
-        # --------------------------------------------------
-        # Create chat room automatically
-        chat_room, room_created = ChatService.get_or_create_booking_room(
-            booking
+
+        # ==========================================================
+        # CREATE / REUSE CHAT ROOM
+        # ==========================================================
+
+        chat_room, chat_created = (
+            ChatService.get_or_create_booking_room(
+                booking=booking,
+            )
         )
 
-        logger.info(
-            "Booking %s created by user %s. Chat room=%s created=%s",
-            booking.tracking_number,
-            initiated_by.id,
-            chat_room.id,
-            room_created,
+
+        # ==========================================================
+        # CREATE SYSTEM CHAT MESSAGE
+        # ==========================================================
+
+        chat_message = (
+            ChatService.create_booking_request_message(
+                booking=booking,
+                room=chat_room,
+            )
         )
+
+
+        # ==========================================================
+        # CREATE TRAVELER NOTIFICATION
+        # ==========================================================
+
+        notification = (
+            create_booking_request_notification(
+                booking=booking,
+                chat_room=chat_room,
+                chat_message=chat_message,
+            )
+        )
+
+
+        logger.info(
+            "Booking %s created | "
+            "ChatRoom=%s | "
+            "ChatMessage=%s | "
+            "Notification=%s",
+            booking.tracking_number,
+            chat_room.id,
+            chat_message.id,
+            notification.id,
+        )
+
 
         return booking
 

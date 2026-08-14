@@ -85,6 +85,96 @@ def create_notification(
 
 
 # ==========================================================
+# BOOKING REQUEST NOTIFICATION
+# ==========================================================
+
+@transaction.atomic
+def create_booking_request_notification(
+    *,
+    booking,
+    chat_room=None,
+    chat_message=None,
+):
+    """
+    Notify the traveler when a new booking request is created.
+
+    This notification is specifically for:
+        Sender -> Traveler
+
+    It also optionally links the notification to the
+    created chat room and system chat message.
+    """
+
+    traveler = booking.traveler
+    sender = booking.sender
+
+    sender_name = (
+        getattr(sender, "username", None)
+        or getattr(sender, "email", None)
+        or "A sender"
+    )
+
+    package_title = (
+        getattr(booking.package, "title", None)
+        or "your package"
+    )
+
+    weight = booking.agreed_weight_kg
+
+    trip = booking.trip
+
+    route = (
+        f"{trip.from_city} → {trip.to_city}"
+        if trip
+        else "your trip"
+    )
+
+    notification = create_notification(
+        user=traveler,
+
+        title="New Booking Request",
+
+        message=(
+            f"{sender_name} sent a booking request for "
+            f"{package_title} ({weight} kg) "
+            f"on your {route} trip."
+        ),
+
+        notification_type=NotificationType.BOOKING,
+
+        # Booking is the main object.
+        object_id=booking.id,
+
+        action_url=(
+            f"/bookings/{booking.id}/"
+        ),
+
+        sender=sender,
+
+        room_id=(
+            chat_room.id
+            if chat_room
+            else None
+        ),
+
+        message_id=(
+            chat_message.id
+            if chat_message
+            else None
+        ),
+    )
+
+    logger.info(
+        "Booking request notification created | "
+        "Booking=%s | Traveler=%s | Notification=%s",
+        booking.id,
+        traveler.id,
+        notification.id,
+    )
+
+    return notification
+
+# ==========================================================
 # CREATE BULK NOTIFICATIONS
 # ==========================================================
 @transaction.atomic

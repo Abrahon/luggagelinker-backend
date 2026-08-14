@@ -10,33 +10,66 @@ class ChatService:
     @transaction.atomic
     def get_or_create_booking_room(booking):
         """
-        Get or create a chat room for the sender/traveler pair.
+        Get or create the chat room between the sender and traveler.
 
-        Business rule:
-            One sender + one traveler = ONE chat room.
-
-        Multiple bookings between the same sender and traveler
-        reuse the same chat room.
+        Rules:
+        1. Validate sender and traveler.
+        2. If this booking already has a room, reuse it.
+        3. If sender/traveler already have an active conversation, reuse it.
+        4. Attach the current booking to the existing conversation.
+        5. Otherwise create a new room.
+        6. Never intentionally create a duplicate sender/traveler room.
         """
+
+        # ======================================================
+        # 1. VALIDATE PARTICIPANTS
+        # ======================================================
 
         if not booking.sender_id:
             raise ValidationError(
-                "Booking sender is required."
+                "Booking sender is required before creating chat room."
             )
 
         if not booking.traveler_id:
             raise ValidationError(
-                "Booking traveler is required."
+                "Booking traveler is required before creating chat room."
             )
 
-        if booking.sender_id == booking.traveler_id:
-            raise ValidationError(
-                "Sender and traveler cannot be the same user."
-            )
+        # ======================================================
+        # 2. CHECK ROOM ALREADY CONNECTED TO THIS BOOKING
+        # ======================================================
 
-        # --------------------------------------------------
-        # FIND EXISTING ROOM
-        # --------------------------------------------------
+        room = (
+            ChatRoom.objects
+            .select_for_update()
+            .filter(booking_id=booking.id)
+            .first()
+        )
+
+        if room:
+            # Make sure participants are still correct.
+            if (
+                room.sender_id != booking.sender_id
+                or room.traveler_id != booking.traveler_id
+            ):
+                raise ValidationError(
+                    "Existing chat room participants do not match the booking."
+                )
+
+            if not room.is_active:
+                room.is_active = True
+                room.save(
+                    update_fields=[
+                        "is_active",
+                        "updated_at",
+                    ]
+                )
+
+            return room, False
+
+        # ======================================================
+        # 3. FIND EXISTING SENDER ↔ TRAVELER CONVERSATION
+        # ======================================================
 
         room = (
             ChatRoom.objects
@@ -45,31 +78,32 @@ class ChatService:
                 sender_id=booking.sender_id,
                 traveler_id=booking.traveler_id,
             )
+            .order_by("-is_active", "-updated_at")
             .first()
         )
 
-        # --------------------------------------------------
-        # EXISTING ROOM
-        # --------------------------------------------------
-
         if room:
-            # Keep the room active when a new booking creates/
-            # reuses the conversation.
+            # Re-open archived conversation if necessary.
+            update_fields = []
+
             if not room.is_active:
                 room.is_active = True
-                room.save(update_fields=["is_active", "updated_at"])
+                update_fields.append("is_active")
 
-            # Attach this booking if you want the latest/current
-            # booking represented on the room.
+            # Attach the latest booking to the conversation.
             if room.booking_id != booking.id:
                 room.booking = booking
-                room.save(update_fields=["booking", "updated_at"])
+                update_fields.append("booking")
+
+            if update_fields:
+                update_fields.append("updated_at")
+                room.save(update_fields=update_fields)
 
             return room, False
 
-        # --------------------------------------------------
-        # CREATE NEW ROOM
-        # --------------------------------------------------
+        # ======================================================
+        # 4. CREATE NEW CONVERSATION
+        # ======================================================
 
         room = ChatRoom.objects.create(
             booking=booking,
@@ -79,3 +113,50 @@ class ChatService:
         )
 
         return room, True
+
+
+@staticmethod
+@transaction.atomic
+def create_booking_request_message(
+    *,
+    booking,
+    room,
+):
+    from .models import ChatMessage
+
+    sender = booking.sender
+    traveler = booking.traveler
+    trip = booking.trip
+    package = booking.package
+
+    sender_name = (
+        getattr(sender, "username", None)
+        or getattr(sender, "email", None)
+        or "A sender"
+    )
+
+    message = (
+        f"New booking request from {sender_name}. "
+        f"Package: {package.title}. "
+        f"Weight: {booking.agreed_weight_kg} kg. "
+        f"Route: {trip.from_city} → {trip.to_city}. "
+        f"Please review the booking request."
+    )
+
+    chat_message = ChatMessage.objects.create(
+        room=room,
+
+        # This is a SYSTEM message, so don't pretend
+        # the sender manually typed it.
+        sender=sender,
+        receiver=traveler,
+
+        message=message,
+
+        message_type=ChatMessage.MessageType.SYSTEM,
+
+        is_delivered=False,
+        is_read=False,
+    )
+
+    return chat_message
