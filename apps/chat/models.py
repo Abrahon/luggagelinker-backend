@@ -9,48 +9,92 @@ from django.utils.translation import gettext_lazy as _
 # from cloudinary.models import CloudinaryField
 
 class ChatRoom(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
-    # Structural Integrity (Uniqueness constraint handled via OneToOneField)
-    booking = models.OneToOneField(
-        "bookings.Booking", 
-        on_delete=models.CASCADE, 
-        related_name="chat_room"
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
     )
-    
-    # Participants
+
+    # Booking that originally opened this conversation.
+    # The room itself belongs to the sender/traveler pair.
+    booking = models.ForeignKey(
+        "bookings.Booking",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chat_rooms",
+    )
+
     sender = models.ForeignKey(
-        settings.AUTH_USER_MODEL, 
-        on_delete=models.CASCADE, 
-        related_name="sender_chat_rooms"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sender_chat_rooms",
     )
+
     traveler = models.ForeignKey(
-        settings.AUTH_USER_MODEL, 
-        on_delete=models.CASCADE, 
-        related_name="traveler_chat_rooms"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="traveler_chat_rooms",
     )
-    
-    # Denormalized Fields for Query Optimization (Prevents N+1 database bottlenecks during list fetches)
-    last_message = models.TextField(blank=True, default="")
-    last_message_at = models.DateTimeField(null=True, blank=True)
-    
-    # Operational Lifecycle Control Flags
-    is_active = models.BooleanField(default=True, help_text=_("Designates whether this conversation is active or archived."))
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+
+    last_message = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    last_message_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text=_(
+            "Designates whether this conversation is active or archived."
+        ),
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
 
     class Meta:
-        ordering = ["-last_message_at", "-updated_at"]
+        ordering = [
+            "-last_message_at",
+            "-updated_at",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sender", "traveler"],
+                name="unique_sender_traveler_chat_room",
+            ),
+        ]
+
         indexes = [
-            models.Index(fields=["sender", "traveler"]),
-            models.Index(fields=["is_active"]),
-            models.Index(fields=["last_message_at"]),
+            models.Index(
+                fields=["sender", "traveler"],
+            ),
+            models.Index(
+                fields=["traveler", "sender"],
+            ),
+            models.Index(
+                fields=["is_active"],
+            ),
+            models.Index(
+                fields=["last_message_at"],
+            ),
         ]
 
     def __str__(self):
-        return f"Room {self.id} | Booking {self.booking_id}"
-
+        return (
+            f"Room {self.id} | "
+            f"{self.sender.email} ↔ {self.traveler.email}"
+        )
 
 class ChatMessage(models.Model):
     class MessageType(models.TextChoices):

@@ -406,35 +406,33 @@ class BookingService:
                 "You already have an active booking request for this trip."
             )
 
+
         # ==========================================================
-        # 9. FIND EXISTING MATCH
+        # 9. FIND / CREATE MATCH
         # ==========================================================
 
-        match = Match.objects.filter(
+        match, _ = Match.objects.get_or_create(
             package=package,
             trip=trip,
-            is_active=True,
-        ).first()
+            defaults={
+                "is_active": True,
+            },
+        )
+
+        if not match.is_active:
+            match.is_active = True
+            match.save(update_fields=["is_active"])
+
 
         # ==========================================================
-        # 10. CREATE MATCH IF NOT EXISTS
-        # ==========================================================
-
-        if not match:
-            match = Match.objects.create(
-                package=package,
-                trip=trip,
-                is_active=True,
-            )
-
-        # ==========================================================
-        # 11. CREATE BOOKING
+        # 10. CREATE BOOKING
         # ==========================================================
 
         return BookingService.create_booking_request(
             match_id=match.id,
             initiated_by=initiated_by,
         )
+    
 
     @staticmethod
     @transaction.atomic
