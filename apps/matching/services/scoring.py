@@ -1,29 +1,5 @@
-"""
-===========================================================
-MATCH SCORING ENGINE
-===========================================================
-
-This module calculates the compatibility score between
-a Package and a Trip.
-
-Maximum Score = 100
-
-Scoring Rules
--------------
-Pickup Country      = 20
-Pickup City         = 10
-Destination Country = 20
-Destination City    = 10
-Date Compatibility  = 20
-Weight Capacity     = 20
-"""
-
 from decimal import Decimal
 
-
-# ===========================================================
-# SCORE CONSTANTS
-# ===========================================================
 
 PICKUP_COUNTRY_SCORE = Decimal("20")
 PICKUP_CITY_SCORE = Decimal("10")
@@ -37,126 +13,83 @@ WEIGHT_SCORE = Decimal("20")
 MAX_SCORE = Decimal("100")
 
 
-# ===========================================================
-# HELPERS
-# ===========================================================
-
 def normalize(value):
 
-    """
-    Normalize string for comparison.
-    """
-
-    if not value:
+    if value is None:
         return ""
 
-    return value.strip().lower()
+    return str(value).strip().casefold()
 
-
-# ===========================================================
-# DATE MATCH
-# ===========================================================
 
 def date_matches(package, trip):
 
-    """
-    Trip departure must be on or after package pickup.
+    if not package.pickup_date:
+        return False
 
-    Trip arrival must be before package latest delivery.
-    """
+    if not package.latest_delivery_date:
+        return False
+
+    if not trip.departure_date:
+        return False
+
+    if not trip.arrival_date:
+        return False
 
     return (
-        trip.departure_date >= package.pickup_date
+        package.pickup_date <= trip.departure_date
         and
         trip.arrival_date <= package.latest_delivery_date
     )
 
 
-# ===========================================================
-# WEIGHT MATCH
-# ===========================================================
-
 def weight_matches(package, trip):
 
-    """
-    Trip must have enough available luggage space.
-    """
-
-    return (
-        trip.available_weight_kg >= package.weight
+    available_weight = (
+        trip.available_weight_kg
+        if trip.available_weight_kg is not None
+        else Decimal("0")
     )
 
+    return available_weight >= package.weight
 
-# ===========================================================
-# MAIN SCORING FUNCTION
-# ===========================================================
 
 def calculate_match_score(package, trip):
 
-    """
-    Calculate compatibility score.
-
-    Returns:
-        Decimal
-    """
-
     score = Decimal("0")
 
-    # ======================================================
-    # PICKUP COUNTRY
-    # ======================================================
-
+    # Pickup country
     if normalize(package.pickup_country) == normalize(
         trip.from_country
     ):
-
         score += PICKUP_COUNTRY_SCORE
 
-    # ======================================================
-    # PICKUP CITY
-    # ======================================================
-
+    # Pickup city
     if normalize(package.pickup_city) == normalize(
         trip.from_city
     ):
-
         score += PICKUP_CITY_SCORE
 
-    # ======================================================
-    # DESTINATION COUNTRY
-    # ======================================================
-
+    # Destination country
     if normalize(package.destination_country) == normalize(
         trip.to_country
     ):
-
         score += DEST_COUNTRY_SCORE
 
-    # ======================================================
-    # DESTINATION CITY
-    # ======================================================
-
+    # Destination city
     if normalize(package.destination_city) == normalize(
         trip.to_city
     ):
-
         score += DEST_CITY_SCORE
 
-    # ======================================================
-    # DATE
-    # ======================================================
-
+    # Dates
     if date_matches(package, trip):
-
         score += DATE_SCORE
 
-    # ======================================================
-    # WEIGHT
-    # ======================================================
-
+    # Weight
     if weight_matches(package, trip):
-
         score += WEIGHT_SCORE
 
-    # Never exceed 100
-    return min(score, MAX_SCORE)
+    return min(
+        score,
+        MAX_SCORE,
+    )

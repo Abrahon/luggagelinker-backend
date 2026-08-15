@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dispute Notification</title>
+</head>
+<body style="margin: 0; padding: 24px 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+    <tr>
+      <td align="center">
+        <!-- Main Card Outer Box -->
+        <table role="presentation" width="100%" style="max-width: 580px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; border-collapse: separate;" border="0" cellspacing="0" cellpadding="0">
+          
+          <!-- Header Bar -->
+          <tr>
+            <td align="center" style="padding: 20px 24px; background-color: #0f172a; color: #ffffff;">
+              <div style="font-size: 20px; font-weight: 700; letter-spacing: 0.05em; font-family: monospace;">LuggageLinker</div>
+              <div style="font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px;">Dispute Notification</div>
+            </td>
+          </tr>
+
+          <!-- Banner & Intro -->
+          <tr>
+            <td style="padding: 24px 28px; border-bottom: 1px solid #e2e8f0;">
+              <div style="font-size: 16px; font-weight: 700; color: #d97706; margin-bottom: 12px;">
+                ⚠️ A Dispute Has Been Opened
+              </div>
+              <p style="font-size: 14px; line-height: 1.5; color: #334155; margin: 0 0 10px 0;">
+                Hello <strong>{{ recipient_name }}</strong>,
+              </p>
+              <p style="font-size: 14px; line-height: 1.5; color: #475569; margin: 0 0 10px 0;">
+                A dispute has been opened against you regarding one of your completed bookings.
+              </p>
+              <p style="font-size: 14px; line-height: 1.5; color: #475569; margin: 0;">
+                Please review the details below and provide your response or evidence if necessary.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Dispute Details -->
+          <tr>
+            <td style="padding: 20px 28px; border-bottom: 1px solid #e2e8f0;">
+              <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
+                Dispute Details
+              </div>
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="4" style="font-size: 13px;">
+                <tr>
+                  <td width="38%" style="color: #64748b; padding-bottom: 6px;">Dispute ID</td>
+                  <td style="color: #0f172a; font-weight: 600; font-family: monospace; padding-bottom: 6px;">{{ dispute.id }}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b; padding-bottom: 6px;">Status</td>
+                  <td style="padding-bottom: 6px;">
+                    <span style="background-color: #fef3c7; color: #92400e; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">
+                      {{ dispute.get_status_display }}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b; padding-bottom: 6px;">Reason</td>
+                  <td style="color: #0f172a; font-weight: 600; padding-bottom: 6px;">{{ dispute.get_reason_display }}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Disputed Amount</td>
+                  <td style="color: #059669; font-weight: 700;">${{ dispute.disputed_amount }} {{ booking.currency }}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Booking Details -->
+          <tr>
+            <td style="padding: 20px 28px; border-bottom: 1px solid #e2e8f0;">
+              <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
+                Booking Details
+              </div>
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="4" style="font-size: 13px;">
+                <tr>
+                  <td width="38%" style="color: #64748b; padding-bottom: 6px;">Booking</td>
+                  <td style="color: #0f172a; font-weight: 600; font-family: monospace; padding-bottom: 6px;">{{ booking.tracking_number }}</td>
+                </tr>
+                {% if booking.package_details %}
+                <tr>
+                  <td style="color: #64748b; padding-bottom: 6px;">Package</td>
+                  <td style="color: #0f172a; font-weight: 600; padding-bottom: 6px;">{{ booking.package_details }}</td>
+                </tr>
+                {% endif %}
+                {% if booking.origin and booking.destination %}
+                <tr>
+                  <td style="color: #64748b; padding-bottom: 6px;">Route</td>
+                  <td style="color: #0f172a; font-weight: 600; padding-bottom: 6px;">{{ booking.origin }} → {{ booking.destination }}</td>
+                </tr>
+                {% endif %}
+                {% if booking.weight %}
+                <tr>
+                  <td style="color: #64748b;">Weight</td>
+                  <td style="color: #0f172a; font-weight: 600;">{{ booking.weight }} KG</td>
+                </tr>
+                {% endif %}
+              </table>
+            </td>
+          </tr>
+
+          <!-- Dispute Description -->
+          <tr>
+            <td style="padding: 20px 28px; border-bottom: 1px solid #e2e8f0;">
+              <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">
+                Dispute Description
+              </div>
+              <div style="font-size: 13px; line-height: 1.6; color: #334155; background-color: #f8fafc; padding: 12px 14px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                {{ dispute.description }}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Action Button -->
+          <tr>
+            <td align="center" style="padding: 24px 28px; border-bottom: 1px solid #e2e8f0;">
+              <a href="{{ dispute_url }}" target="_blank" style="display: inline-block; background-color: #059669; color: #ffffff; font-size: 14px; font-weight: 700; text-decoration: none; padding: 12px 28px; border-radius: 6px;">
+                Review Dispute
+              </a>
+              <p style="font-size: 12px; color: #64748b; margin: 14px 0 0 0;">
+                Please review the dispute and submit your response through your LuggageLinker account.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding: 20px 28px; background-color: #f8fafc; font-size: 12px; color: #64748b; line-height: 1.5;">
+              <p style="margin: 0 0 6px 0;">Need help? Contact LuggageLinker Support.</p>
+              <p style="margin: 0 0 10px 0;">This is an automated notification. Please do not reply directly to this email.</p>
+              <p style="margin: 0; font-weight: 600; color: #94a3b8;">© 2026 LuggageLinker</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

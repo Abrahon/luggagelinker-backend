@@ -395,8 +395,7 @@ def send_delivery_pin_email(user_email, booking, delivery_pin):
         logger.error(f"Failed to transmit Delivery PIN mail to user {user_email}: {str(e)}", exc_info=True)
 
 
-# apps/notifications/utils/email.py
-# apps/notifications/utils/email.py
+
 
 # apps/notifications/utils/email.py
 def send_wallet_topup_email(user, amount, balance_after, reference):
@@ -498,3 +497,185 @@ def send_wallet_topup_email(user, amount, balance_after, reference):
         logger.info(f"Successfully sent wallet top-up email to {user.email} for reference {reference}")
     except Exception as e:
         logger.error(f"Failed to transmit wallet top-up mail to user {user.email}: {str(e)}", exc_info=True)
+
+
+import logging
+
+from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
+
+logger = logging.getLogger(__name__)
+
+
+def get_recipient_name(user):
+    """
+    Safely get a user's display name.
+
+    Supports custom User models that may not implement
+    Django's get_full_name().
+    """
+    # 1. first_name + last_name
+    first_name = getattr(user, "first_name", "") or ""
+    last_name = getattr(user, "last_name", "") or ""
+
+    full_name = f"{first_name} {last_name}".strip()
+
+    if full_name:
+        return full_name
+
+    # 2. Custom name fields
+    for field in ["full_name", "name", "display_name"]:
+        value = getattr(user, field, None)
+        if value:
+            value = str(value).strip()
+            if value:
+                return value
+
+    # 3. Profile name
+    profile = getattr(user, "profile", None)
+    if profile:
+        profile_name = getattr(profile, "full_name", None)
+        if profile_name:
+            profile_name = str(profile_name).strip()
+            if profile_name:
+                return profile_name
+
+    # 4. Username
+    username = getattr(user, "username", None)
+    if username:
+        return username
+
+    # 5. Email fallback
+    return getattr(user, "email", "User")
+
+
+def send_dispute_opened_email(*, user, dispute):
+    """
+    Send a structured HTML + plain-text email to the
+    participant against whom the dispute was opened.
+    """
+    booking = dispute.booking
+
+    # --------------------------------------------------
+    # SENDER ADDRESS (With Display Name)
+    # --------------------------------------------------
+    default_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@luggagelinker.com")
+    
+    # Avoid duplicate header if DEFAULT_FROM_EMAIL already contains the display name
+    if "Luggage Linker" in default_email:
+        from_email = default_email
+    else:
+        from_email = f"Luggage Linker <{default_email}>"
+
+    # --------------------------------------------------
+    # FRONTEND DISPUTE URL
+    # --------------------------------------------------
+    frontend_url = getattr(
+        settings,
+        "FRONTEND_URL",
+        "http://localhost:3600",
+    ).rstrip("/")
+
+    dispute_url = f"{frontend_url}/disputes/{dispute.id}"
+
+    # --------------------------------------------------
+    # RECIPIENT
+    # --------------------------------------------------
+    recipient_email = getattr(user, "email", None)
+
+    if not recipient_email:
+        logger.warning(
+            "Dispute email skipped: user has no email | "
+            "Dispute=%s User=%s",
+            dispute.id,
+            user.id,
+        )
+        return None
+
+    recipient_name = get_recipient_name(user)
+
+    # --------------------------------------------------
+    # SUBJECT
+    # --------------------------------------------------
+    tracking_number = getattr(
+        booking,
+        "tracking_number",
+        booking.id,
+    )
+
+    subject = f"⚠️ Dispute Opened - Booking #{tracking_number}"
+
+    # --------------------------------------------------
+    # TEMPLATE CONTEXT
+    # --------------------------------------------------
+    context = {
+        "user": user,
+        "recipient_name": recipient_name,
+        "dispute": dispute,
+        "booking": booking,
+        "dispute_url": dispute_url,
+    }
+
+    # --------------------------------------------------
+    # RENDER TEMPLATES
+    # --------------------------------------------------
+    try:
+        text_content = render_to_string(
+            "emails/dispute_opened.txt",
+            context,
+        )
+        html_content = render_to_string(
+            "emails/dispute_opened.html",
+            context,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to render dispute email templates | "
+            "Dispute=%s User=%s",
+            dispute.id,
+            user.id,
+        )
+        return None
+
+    # --------------------------------------------------
+    # SEND EMAIL
+    # --------------------------------------------------
+    try:
+        msg = EmailMultiAlternatives(
+            subject=subject,
+            body=text_content,
+            from_email=from_email,
+            to=[recipient_email],
+        )
+
+        msg.attach_alternative(
+            html_content,
+            "text/html",
+        )
+
+        msg.send(
+            fail_silently=False,
+        )
+
+        logger.info(
+            "Dispute email sent successfully | "
+            "Dispute=%s User=%s Email=%s",
+            dispute.id,
+            user.id,
+            recipient_email,
+        )
+
+        return True
+
+    except Exception:
+        logger.exception(
+            "Failed to send dispute email | "
+            "Dispute=%s User=%s Email=%s",
+            dispute.id,
+            user.id,
+            recipient_email,
+        )
+
+        # Do not crash the dispute creation request if email fails
+        return False

@@ -1,0 +1,43 @@
+==========================================================
+LuggageLinker - Dispute Notification
+==========================================================
+
+⚠️ A Dispute Has Been Opened
+
+Hello {{ recipient_name }},
+
+A dispute has been opened against you regarding one of your completed bookings.
+
+Please review the details below and provide your response or evidence if necessary.
+
+----------------------------------------------------------
+DISPUTE DETAILS
+----------------------------------------------------------
+Dispute ID:      {{ dispute.id }}
+Status:          {{ dispute.get_status_display }}
+Reason:          {{ dispute.get_reason_display }}
+Disputed Amount: ${{ dispute.disputed_amount }} {{ booking.currency }}
+
+----------------------------------------------------------
+BOOKING DETAILS
+----------------------------------------------------------
+Booking:         {{ booking.tracking_number }}
+{% if booking.package_details %}Package:         {{ booking.package_details }}{% endif %}
+{% if booking.origin and booking.destination %}Route:           {{ booking.origin }} → {{ booking.destination }}{% endif %}
+{% if booking.weight %}Weight:          {{ booking.weight }} KG{% endif %}
+
+----------------------------------------------------------
+DISPUTE DESCRIPTION
+----------------------------------------------------------
+{{ dispute.description }}
+
+----------------------------------------------------------
+REVIEW DISPUTE:
+{{ dispute_url }}
+
+Please review the dispute and submit your response through your LuggageLinker account.
+
+Need help? Contact LuggageLinker Support.
+This is an automated notification. Please do not reply directly to this email.
+
+© 2026 LuggageLinker

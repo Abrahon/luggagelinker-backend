@@ -51,44 +51,53 @@ def error_response(message, status_code=400, errors=None):
     )
 
 
+from django.db.models import Q
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+
+from apps.matching.models import Match
+from apps.packages.models import PackageStatus
+
+
+from .serializers import MatchSerializer
 
 
 class MyMatchListView(generics.ListAPIView):
+    """
+    Return matches relevant to the authenticated user.
+
+    User can see a match when:
+        - They are the package sender
+        OR
+        - They are the trip traveler
+
+    Only active and currently eligible matches are returned.
+    """
+
     serializer_class = MatchSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
 
-        return (
+        queryset = (
             Match.objects
             .filter(
-                # ------------------------------------------
-                # MATCH MUST BE ACTIVE
-                # ------------------------------------------
                 is_active=True,
 
-                # ------------------------------------------
-                # PACKAGE MUST CURRENTLY BE PUBLISHED
-                # ------------------------------------------
+                # Package must still be eligible
                 package__status=PackageStatus.PUBLISHED,
                 package__is_active=True,
                 package__is_public=True,
 
-                # ------------------------------------------
-                # TRIP MUST CURRENTLY BE ACTIVE/PUBLIC
-                # ------------------------------------------
+                # Trip must still be eligible
                 trip__is_active=True,
                 trip__is_public=True,
             )
             .filter(
-                # ------------------------------------------
-                # USER MUST BE EITHER:
-                # 1. PACKAGE SENDER
-                # 2. TRIP TRAVELER
-                # ------------------------------------------
-                models.Q(package__sender=user)
-                | models.Q(trip__traveler=user)
+                Q(package__sender_id=user.id)
+                |
+                Q(trip__traveler_id=user.id)
             )
             .select_related(
                 "package",
@@ -96,91 +105,12 @@ class MyMatchListView(generics.ListAPIView):
                 "trip",
                 "trip__traveler",
             )
-            .order_by("-created_at")
+            .order_by("-score", "-created_at")
         )
 
-    def list(self, request, *args, **kwargs):
+        return queryset
 
-        queryset = self.get_queryset()
-
-        # --------------------------------------------------
-        # NO MATCHES
-        # --------------------------------------------------
-
-        if not queryset.exists():
-            return Response(
-                {
-                    "success": False,
-                    "message": "No matches found.",
-                    "data": [],
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # --------------------------------------------------
-        # PAGINATION
-        # --------------------------------------------------
-
-        page = self.paginate_queryset(queryset)
-
-        if page is not None:
-
-            serializer = self.get_serializer(
-                page,
-                many=True,
-            )
-
-            response = self.get_paginated_response(
-                serializer.data
-            )
-
-            response.data = OrderedDict([
-                (
-                    "success",
-                    True,
-                ),
-                (
-                    "message",
-                    "Matches retrieved successfully.",
-                ),
-                (
-                    "count",
-                    response.data["count"],
-                ),
-                (
-                    "next",
-                    response.data["next"],
-                ),
-                (
-                    "previous",
-                    response.data["previous"],
-                ),
-                (
-                    "data",
-                    response.data["results"],
-                ),
-            ])
-
-            return response
-
-        # --------------------------------------------------
-        # NON-PAGINATED RESPONSE
-        # --------------------------------------------------
-
-        serializer = self.get_serializer(
-            queryset,
-            many=True,
-        )
-
-        return Response(
-            {
-                "success": True,
-                "message": "Matches retrieved successfully.",
-                "data": serializer.data,
-            },
-            status=status.HTTP_200_OK,
-        )
-
+    
     
 class PackageMatchListView(generics.ListAPIView):
 

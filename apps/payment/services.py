@@ -624,42 +624,281 @@ class BookingPaymentService:
         return payment
     
 
+        
     @classmethod
     def refund(cls, payment: BookingPayment) -> BookingPayment:
         """
-        Reverses escrow hold, returning collected balances securely back to the original Payer.
+        Fully refund an authorized escrow payment.
+
+        Production requirements:
+        - Lock payment row to prevent duplicate refunds.
+        - Verify Stripe's actual refundable balance.
+        - Never attempt to refund an already-refunded charge.
+        - Treat an already-refunded Stripe payment as successful.
+        - Update local payment state only after financial state is confirmed.
+        - Restore trip capacity only once.
         """
+
         if payment.status != BookingPaymentStatus.AUTHORIZED:
-            raise DjangoValidationError("Only payments securely held in authorized escrow status bounds can be refunded.")
+            raise DjangoValidationError(
+                "Only payments in AUTHORIZED escrow status can be refunded."
+            )
 
         with transaction.atomic():
-            payment = BookingPayment.objects.select_related("booking__trip").select_for_update().get(id=payment.id)
+
+            payment = (
+                BookingPayment.objects
+                .select_related("booking__trip")
+                .select_for_update()
+                .get(id=payment.id)
+            )
+
+            # ==================================================
+            # DUPLICATE REFUND PROTECTION
+            # ==================================================
+
+            if payment.status == BookingPaymentStatus.REFUNDED:
+                logger.info(
+                    "Payment already refunded | Payment=%s",
+                    payment.id,
+                )
+                return payment
+
             booking = payment.booking
-            trip = booking.trip
+            trip = getattr(booking, "trip", None)
+
+            # ==================================================
+            # STRIPE REFUND
+            # ==================================================
 
             if payment.gateway == BookingPaymentGateway.STRIPE:
+
+                intent_id = (
+                    payment.transaction_id
+                    or getattr(
+                        payment,
+                        "stripe_payment_intent_id",
+                        None,
+                    )
+                )
+
+                if not intent_id:
+                    raise DjangoValidationError(
+                        "Cannot process refund: "
+                        "Payment record is missing a valid Stripe transaction ID."
+                    )
+
                 try:
-                    stripe.Refund.create(payment_intent=payment.transaction_id)
+
+                    # --------------------------------------------------
+                    # PAYMENT INTENT
+                    # --------------------------------------------------
+
+                    if intent_id.startswith("pi_"):
+
+                        payment_intent = stripe.PaymentIntent.retrieve(
+                            intent_id
+                        )
+
+                        latest_charge = getattr(
+                            payment_intent,
+                            "latest_charge",
+                            None,
+                        )
+
+                        charge_id = (
+                            latest_charge.id
+                            if hasattr(latest_charge, "id")
+                            else latest_charge
+                        )
+
+                        if not charge_id:
+                            raise DjangoValidationError(
+                                "Stripe PaymentIntent does not contain a charge."
+                            )
+
+                        charge = stripe.Charge.retrieve(
+                            charge_id
+                        )
+
+                    # --------------------------------------------------
+                    # DIRECT CHARGE
+                    # --------------------------------------------------
+
+                    elif intent_id.startswith("ch_"):
+
+                        charge = stripe.Charge.retrieve(
+                            intent_id
+                        )
+
+                    else:
+                        raise DjangoValidationError(
+                            "Invalid Stripe transaction ID."
+                        )
+
+                    # ==================================================
+                    # CHECK ALREADY REFUNDED
+                    # ==================================================
+
+                    charge_amount = int(
+                        getattr(charge, "amount", 0)
+                    )
+
+                    amount_refunded = int(
+                        getattr(charge, "amount_refunded", 0)
+                    )
+
+                    remaining_amount = (
+                        charge_amount - amount_refunded
+                    )
+
+                    # ==================================================
+                    # ALREADY FULLY REFUNDED
+                    # ==================================================
+
+                    if remaining_amount <= 0:
+
+                        logger.warning(
+                            "Stripe payment already fully refunded | "
+                            "Payment=%s | Charge=%s",
+                            payment.id,
+                            charge.id,
+                        )
+
+                    else:
+
+                        # ==================================================
+                        # CREATE FULL REFUND
+                        # ==================================================
+
+                        stripe.Refund.create(
+                            charge=charge.id,
+                            metadata={
+                                "booking_payment_id": str(payment.id),
+                                "reason": "booking_refund",
+                            },
+                        )
+
+                        logger.info(
+                            "Stripe full refund completed | "
+                            "Payment=%s | Charge=%s | Amount=%s",
+                            payment.id,
+                            charge.id,
+                            remaining_amount,
+                        )
+
+                except stripe.error.InvalidRequestError as e:
+
+                    error_message = str(e).lower()
+
+                    # ==================================================
+                    # ALREADY REFUNDED
+                    # ==================================================
+
+                    if (
+                        "already been refunded" in error_message
+                        or "has already been refunded" in error_message
+                    ):
+
+                        logger.warning(
+                            "Stripe reports payment already refunded. "
+                            "Continuing dispute resolution | Payment=%s",
+                            payment.id,
+                        )
+
+                        # IMPORTANT:
+                        # DO NOT raise.
+                        # Financial operation is already completed.
+
+                    else:
+
+                        logger.error(
+                            "Stripe refund rejected | Payment=%s | Error=%s",
+                            payment.id,
+                            str(e),
+                            exc_info=True,
+                        )
+
+                        raise DjangoValidationError(
+                            f"Stripe refund backend declined: {str(e)}"
+                        )
+
                 except stripe.error.StripeError as e:
-                    logger.error(f"Stripe execution refund failure: {str(e)}", exc_info=True)
-                    raise DjangoValidationError(f"Stripe refund backend declined: {str(e)}")
+
+                    logger.error(
+                        "Stripe refund failure | Payment=%s | Error=%s",
+                        payment.id,
+                        str(e),
+                        exc_info=True,
+                    )
+
+                    raise DjangoValidationError(
+                        f"Stripe refund backend declined: {str(e)}"
+                    )
+
+            # ==================================================
+            # UPDATE LOCAL PAYMENT
+            # ==================================================
 
             payment.status = BookingPaymentStatus.REFUNDED
             payment.refunded_at = timezone.now()
-            payment.save(update_fields=["status", "refunded_at"])
 
-            # 🟢 FIX 3: Replaced hardcoded booking status strings with BookingStatus enum
-            booking.status = BookingStatus.CANCELLED
-            booking.save(update_fields=["status"])
-            
-            # Return package weight allocation back into the pool since the transaction was abandoned
-            booking_weight = getattr(booking, "agreed_weight_kg", decimal.Decimal("0.00"))
-            if trip and hasattr(trip, "available_weight_kg"):
+            update_fields = [
+                "status",
+                "refunded_at",
+            ]
+
+            if hasattr(payment, "updated_at"):
+                update_fields.append("updated_at")
+
+            payment.save(
+                update_fields=update_fields
+            )
+
+            # ==================================================
+            # BOOKING STATUS
+            # ==================================================
+
+            if booking.status != BookingStatus.CANCELLED:
+
+                booking.status = BookingStatus.CANCELLED
+
+                booking.save(
+                    update_fields=["status"]
+                )
+
+            # ==================================================
+            # RESTORE TRIP CAPACITY
+            # ==================================================
+
+            booking_weight = getattr(
+                booking,
+                "agreed_weight_kg",
+                decimal.Decimal("0.00"),
+            )
+
+            if (
+                trip
+                and hasattr(trip, "available_weight_kg")
+                and booking_weight > decimal.Decimal("0.00")
+            ):
+
                 trip.available_weight_kg += booking_weight
-                trip.save(update_fields=["available_weight_kg"])
 
-            return payment
-        
+                trip.save(
+                    update_fields=[
+                        "available_weight_kg"
+                    ]
+                )
+
+            logger.info(
+                "Payment refund finalized | "
+                "Payment=%s | Booking=%s",
+                payment.id,
+                booking.id,
+            )
+
+            return payment       
 
     @classmethod
     def release(cls, payment: BookingPayment) -> BookingPayment:

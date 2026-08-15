@@ -145,6 +145,7 @@ class DisputeSerializer(serializers.ModelSerializer):
         many=True,
         read_only=True,
     )
+    disputed_amount = serializers.SerializerMethodField()
 
     evidence = DisputeEvidenceSerializer(
         many=True,
@@ -177,10 +178,34 @@ class DisputeSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = fields
-        # All user mutations go through discrete action endpoints
-        read_only_fields = fields
 
-        read_only_fields = fields
+
+    def get_disputed_amount(self, obj):
+            amount_str = str(obj.disputed_amount)
+            request = self.context.get("request")
+
+            # Show sign only when status is RESOLVED and request user is present
+            if obj.status != "RESOLVED" or not request or not request.user:
+                return amount_str
+
+            current_user = request.user
+
+            # Refund resolutions: Sender/OpenedBy gets refunded (+), Traveler/AgainstUser pays (-)
+            if obj.resolution in ["FULL_REFUND", "PARTIAL_REFUND"]:
+                if current_user == obj.opened_by:
+                    return f"+{amount_str}"
+                elif current_user == obj.against_user:
+                    return f"-{amount_str}"
+
+            # Non-refund/release resolutions: Traveler gets paid (+), Sender loses (-)
+            elif obj.resolution in ["RELEASE_TO_TRAVELER", "PAY_TRAVELER", "NO_REFUND"]:
+                if current_user == obj.against_user:
+                    return f"+{amount_str}"
+                elif current_user == obj.opened_by:
+                    return f"-{amount_str}"
+
+            return amount_str
+    
 
     def validate(self, attrs):
         request = self.context["request"]

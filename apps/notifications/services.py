@@ -12,6 +12,8 @@ from django.db import transaction
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
+from apps.notifications.utils.email import send_dispute_opened_email
+
 
 from .models import Notification, NotificationType
 
@@ -278,24 +280,41 @@ def mark_all_notifications_as_read(user):
 # DISPUTE MODULE INTEGRATIONS ⚖️
 # ==========================================================
 def notify_dispute_opened(*, user, dispute):
-    return create_notification(
+    """
+    Notify the participant against whom the dispute was opened.
+    """
+
+    notification = create_notification(
         user=user,
         title="Dispute Case File Opened ⚠️",
-        message=f"A dispute hold has been placed on booking #{dispute.booking.id} due to: {dispute.get_reason_display()}.",
+        message=(
+            f"A dispute has been opened against you for "
+            f"booking #{dispute.booking.tracking_number}. "
+            f"Reason: {dispute.get_reason_display()}."
+        ),
         notification_type=NotificationType.BOOKING,
         object_id=dispute.id,
         action_url=f"/disputes/{dispute.id}/",
     )
+
+    # Email should happen after successful DB transaction
+    transaction.on_commit(
+        lambda: send_dispute_opened_email(
+            user=user,
+            dispute=dispute,
+        )
+    )
+
+    return notification
 
 
 # ==========================================================
 # DISPUTE → ADMIN
 # ==========================================================
 
-def notify_admin_dispute_opened(*, dispute):
+def notify_admins_dispute_opened(*, dispute):
     """
-    Notify every active staff/admin user when a dispute
-    is successfully opened.
+    Notify all active staff/admin users about a newly opened dispute.
     """
 
     admins = User.objects.filter(
@@ -306,14 +325,12 @@ def notify_admin_dispute_opened(*, dispute):
     notifications = []
 
     for admin in admins:
-
         notification = create_notification(
             user=admin,
-            title="New Dispute Opened ⚠️",
+            title="New Dispute Requires Review ⚠️",
             message=(
                 f"A new dispute has been opened for "
-                f"booking #{dispute.booking.tracking_number}. "
-                f"Reason: {dispute.get_reason_display()}."
+                f"booking #{dispute.booking.tracking_number}."
             ),
             notification_type=NotificationType.BOOKING,
             object_id=dispute.id,
@@ -323,8 +340,7 @@ def notify_admin_dispute_opened(*, dispute):
         notifications.append(notification)
 
     logger.info(
-        "Admin dispute notifications sent | "
-        "Dispute=%s | Admins=%s",
+        "Admin dispute notifications created | Dispute=%s | Admins=%s",
         dispute.id,
         len(notifications),
     )
