@@ -70,17 +70,99 @@ from apps.bookings.services import BookingLifecycleService
 
 
 
+# class BookingCreateView(generics.CreateAPIView):
+#     """
+#     API Endpoint to initiate a secure P2P shipping transaction from a Match instance.
+#     """
+#     serializer_class = BookingSerializer
+#     permission_classes = [IsAuthenticated]
+
+#     def create(self, request, *args, **kwargs):
+#         # Pass request context down directly to handle authority flow checks
+#         serializer = self.get_serializer(data=request.data, context={"request": request})
+        
+#         if not serializer.is_valid():
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Invalid booking request parameters.",
+#                     "errors": serializer.errors,
+#                 },
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         try:
+#             # Creation logic drops into Service layer inside serializer.save()
+#             instance = serializer.save()
+            
+#             return Response(
+#                 {
+#                     "success": True,
+#                     "message": "Booking request initialized successfully. Valid for 20 minutes.",
+#                     "data": self.get_serializer(instance).data,
+#                 },
+#                 status=status.HTTP_201_CREATED,
+#             )
+            
+#         except DRFValidationError as e:
+#             # 🟢 FIXED: Intercept validation errors and return a clean 400 with the exact message
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Booking validation failed.",
+#                     "errors": e.detail,
+#                 },
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+            
+#         except Exception as e:
+#             # Fallback capture if anything drops at low-level runtime execution bounds
+#             logger.error(f"Critical execution crash inside BookingCreateView: {str(e)}", exc_info=True)
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "An internal system error occurred while setting up the transaction.",
+#                     "error_details": str(e) # Show the underlying systemic exception details
+#                 },
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
+
+
+
+logger = logging.getLogger(__name__)
+
+
 class BookingCreateView(generics.CreateAPIView):
     """
-    API Endpoint to initiate a secure P2P shipping transaction from a Match instance.
+    Create a booking request from an existing Match.
+
+    Pricing architecture:
+        Package -> NO price
+        Trip -> reward_per_kg
+        Booking -> offered_reward / agreed_reward
+
+    Initial offer is calculated from:
+
+        package.weight * trip.reward_per_kg
+
+    Negotiation can later change the final agreed_reward.
     """
+
     serializer_class = BookingSerializer
     permission_classes = [IsAuthenticated]
 
     def create(self, request, *args, **kwargs):
-        # Pass request context down directly to handle authority flow checks
-        serializer = self.get_serializer(data=request.data, context={"request": request})
-        
+        serializer = self.get_serializer(
+            data=request.data,
+            context={
+                "request": request,
+            },
+        )
+
+        # --------------------------------------------------
+        # VALIDATE REQUEST
+        # --------------------------------------------------
+
         if not serializer.is_valid():
             return Response(
                 {
@@ -92,41 +174,75 @@ class BookingCreateView(generics.CreateAPIView):
             )
 
         try:
-            # Creation logic drops into Service layer inside serializer.save()
+
+            # --------------------------------------------------
+            # CREATE BOOKING
+            # --------------------------------------------------
+
             instance = serializer.save()
-            
+
+            # --------------------------------------------------
+            # RESPONSE
+            # --------------------------------------------------
+
+            response_serializer = self.get_serializer(
+                instance
+            )
+
             return Response(
                 {
                     "success": True,
-                    "message": "Booking request initialized successfully. Valid for 20 minutes.",
-                    "data": self.get_serializer(instance).data,
+                    "message": (
+                        "Booking request initialized successfully. "
+                        "Valid for 20 minutes."
+                    ),
+                    "data": response_serializer.data,
                 },
                 status=status.HTTP_201_CREATED,
             )
-            
-        except DRFValidationError as e:
-            # 🟢 FIXED: Intercept validation errors and return a clean 400 with the exact message
+
+        # ------------------------------------------------------
+        # BUSINESS VALIDATION ERROR
+        # ------------------------------------------------------
+
+        except DRFValidationError as exc:
+
+            logger.warning(
+                "Booking validation failed | User=%s | Errors=%s",
+                request.user.id,
+                exc.detail,
+            )
+
             return Response(
                 {
                     "success": False,
                     "message": "Booking validation failed.",
-                    "errors": e.detail,
+                    "errors": exc.detail,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-            
-        except Exception as e:
-            # Fallback capture if anything drops at low-level runtime execution bounds
-            logger.error(f"Critical execution crash inside BookingCreateView: {str(e)}", exc_info=True)
+
+        # ------------------------------------------------------
+        # UNEXPECTED ERROR
+        # ------------------------------------------------------
+
+        except Exception as exc:
+
+            logger.exception(
+                "Booking creation failed | User=%s",
+                request.user.id,
+            )
+
             return Response(
                 {
                     "success": False,
-                    "message": "An internal system error occurred while setting up the transaction.",
-                    "error_details": str(e) # Show the underlying systemic exception details
+                    "message": (
+                        "An internal system error occurred "
+                        "while creating the booking request."
+                    ),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
 
 
 # apps/bookings/views.py

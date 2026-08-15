@@ -233,6 +233,22 @@ class VerifyOTPView(APIView):
         )
 
 
+import logging
+
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+
+from rest_framework import generics, status
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from .serializers import LoginSerializer
+
+
+
+User = get_user_model()
+logger = logging.getLogger(__name__)
+
 
 class LoginView(generics.GenericAPIView):
     serializer_class = LoginSerializer
@@ -243,92 +259,234 @@ class LoginView(generics.GenericAPIView):
         try:
             serializer = self.get_serializer(data=request.data)
 
+            # ==========================================================
+            # 1. VALIDATE LOGIN CREDENTIALS
+            # ==========================================================
+
             if not serializer.is_valid():
+                errors = serializer.errors
+
+                # ------------------------------------------------------
+                # Email error
+                # ------------------------------------------------------
+
+                if "email" in errors:
+                    email_error = errors["email"]
+
+                    # Our LoginSerializer can return structured errors
+                    if isinstance(email_error, dict):
+                        return Response(
+                            {
+                                "success": False,
+                                "message": email_error.get(
+                                    "message",
+                                    "Unable to login.",
+                                ),
+                                "error_code": email_error.get(
+                                    "code",
+                                    "EMAIL_ERROR",
+                                ),
+                                "errors": {
+                                    "email": email_error,
+                                },
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    return Response(
+                        {
+                            "success": False,
+                            "message": "Please check your email address.",
+                            "error_code": "EMAIL_ERROR",
+                            "errors": {
+                                "email": email_error,
+                            },
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # ------------------------------------------------------
+                # Password error
+                # ------------------------------------------------------
+
+                if "password" in errors:
+                    return Response(
+                        {
+                            "success": False,
+                            "message": "Incorrect password.",
+                            "error_code": "INVALID_PASSWORD",
+                            "errors": {
+                                "password": errors["password"],
+                            },
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # ------------------------------------------------------
+                # Other validation errors
+                # ------------------------------------------------------
+
                 return Response(
                     {
                         "success": False,
-                        "message": "Login failed.",
-                        "errors": serializer.errors,
+                        "message": "Please correct the errors and try again.",
+                        "error_code": "VALIDATION_ERROR",
+                        "errors": errors,
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            auth_user = serializer.validated_data["user"]
+            # ==========================================================
+            # 2. GET AUTHENTICATED USER
+            # ==========================================================
 
-            try:
-                # user = User.objects.select_related("profile").get(id=auth_user.id)
-                user = auth_user
-            except User.DoesNotExist:
+            user = serializer.validated_data["user"]
+
+            if not user:
                 return Response(
                     {
                         "success": False,
-                        "message": "User not found.",
-                        "errors": {"detail": ["User does not exist."]},
+                        "message": "User account could not be found.",
+                        "error_code": "USER_NOT_FOUND",
+                        "errors": {
+                            "detail": {
+                                "code": "USER_NOT_FOUND",
+                                "message": "User account does not exist.",
+                            }
+                        },
                     },
                     status=status.HTTP_404_NOT_FOUND,
                 )
-  
+
+            # ==========================================================
+            # 3. ACCOUNT STATUS
+            # ==========================================================
+
             if not user.is_active:
                 return Response(
                     {
                         "success": False,
-                        "message": "Please verify your email first.",
+                        "message": "Please verify your email before logging in.",
+                        "error_code": "EMAIL_NOT_VERIFIED",
+                        "errors": {
+                            "email": {
+                                "code": "email_not_verified",
+                                "message": (
+                                    "Please verify your email before "
+                                    "logging in."
+                                ),
+                            }
+                        },
                     },
-                    status=status.HTTP_400_BAD_REQUEST,
+                    status=status.HTTP_403_FORBIDDEN,
                 )
 
+            # ==========================================================
+            # 4. USER PROFILE
+            # ==========================================================
 
             profile = getattr(user, "profile", None)
-            
 
             user_data = {
                 "id": str(user.id),
-                "name": profile.full_name if profile else "",
+                "name": (
+                    profile.full_name
+                    if profile
+                    else ""
+                ),
                 "email": user.email,
                 "role": user.role,
                 "profile_picture": (
-                    request.build_absolute_uri(profile.profile_picture.url)
+                    request.build_absolute_uri(
+                        profile.profile_picture.url
+                    )
                     if profile
                     and profile.profile_picture
                     else None
                 ),
             }
 
-            # NORMAL LOGIN (ALL USERS INCLUDING SUPER ADMIN)
+            # ==========================================================
+            # 5. GENERATE TOKENS
+            # ==========================================================
+
             try:
                 tokens = get_tokens_for_user(user)
-                User.objects.filter(id=user.id).update(last_login=timezone.now())
+
+            except Exception:
+                logger.exception(
+                    "Token generation failed for user %s",
+                    user.id,
+                )
 
                 return Response(
                     {
-                        "success": True,
-                        "message": "Login successful.",
-                        "token": tokens,
-                        "user": user_data,
-                    },
-                    status=status.HTTP_200_OK,
-                )
-            except Exception as e:
-                return Response(
-                    {
                         "success": False,
-                        "message": "Token generation failed.",
-                        "errors": {"detail": str(e)},
+                        "message": "Unable to complete login. Please try again.",
+                        "error_code": "TOKEN_GENERATION_FAILED",
+                        "errors": {
+                            "detail": {
+                                "code": "token_generation_failed",
+                                "message": (
+                                    "We could not create your login "
+                                    "session. Please try again."
+                                ),
+                            }
+                        },
                     },
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
-        except Exception as e:
-            logger.exception(e)
+            # ==========================================================
+            # 6. UPDATE LAST LOGIN
+            # ==========================================================
+
+            User.objects.filter(
+                id=user.id
+            ).update(
+                last_login=timezone.now()
+            )
+
+            # ==========================================================
+            # 7. SUCCESS
+            # ==========================================================
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Login successful.",
+                    "error_code": None,
+                    "token": tokens,
+                    "user": user_data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception:
+            logger.exception(
+                "Unexpected error during login."
+            )
+
             return Response(
                 {
                     "success": False,
-                    "message": "Something went wrong while sending the invitation.",
-                    "errors": {"detail": str(e)},
+                    "message": (
+                        "Something went wrong while "
+                        "logging you in."
+                    ),
+                    "error_code": "LOGIN_FAILED",
+                    "errors": {
+                        "detail": {
+                            "code": "login_failed",
+                            "message": (
+                                "An unexpected error occurred. "
+                                "Please try again."
+                            ),
+                        }
+                    },
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
 
 
 # resend otp
@@ -725,12 +883,6 @@ class AdminUserRoleDistributionView(APIView):
 
         serializer = UserRoleDistributionSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-
-
-
 
 
 

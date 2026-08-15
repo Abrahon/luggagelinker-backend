@@ -25,62 +25,112 @@ from apps.bookings.models import Booking, BookingStatus
 from apps.packages.models import Package
 from apps.packages.models import PackageStatus
 from apps.trips.models import Trip, TripStatus
+from apps.matching.models import MatchStatus
 
 
 class BookingSerializer(serializers.ModelSerializer):
-    tracking_number = serializers.CharField(read_only=True)
-    package_title = serializers.CharField(source="package.title", read_only=True)
-    trip_title = serializers.CharField(source="trip.title", read_only=True)
+
+    tracking_number = serializers.CharField(
+        read_only=True
+    )
+
+    package_title = serializers.CharField(
+        source="package.title",
+        read_only=True
+    )
+
+    trip_title = serializers.CharField(
+        source="trip.title",
+        read_only=True
+    )
+
     escrow_status = serializers.SerializerMethodField()
-    
+
     sender_name = serializers.SerializerMethodField()
-    sender_email = serializers.CharField(source="sender.email", read_only=True)
+
+    sender_email = serializers.CharField(
+        source="sender.email",
+        read_only=True
+    )
+
     sender_profile_picture = serializers.SerializerMethodField()
-    traveler_email = serializers.CharField(source="traveler.email", read_only=True)
+
+    traveler_email = serializers.CharField(
+        source="traveler.email",
+        read_only=True
+    )
+
     traveler_matches_listing = serializers.BooleanField(
-    source="package.traveler_matches_listing",
-    read_only=True,
+        source="package.traveler_matches_listing",
+        read_only=True,
     )
 
     traveler_refusal_reason = serializers.CharField(
         source="package.traveler_refusal_reason",
         read_only=True,
     )
-    
 
     route = serializers.SerializerMethodField()
+
     package_image = serializers.SerializerMethodField()
 
-    match_id = serializers.UUIDField(write_only=True)
+    match_id = serializers.UUIDField(
+        write_only=True,
+        required=True,
+    )
 
     class Meta:
         model = Booking
+
         fields = [
             "id",
             "match_id",
+
             "tracking_number",
+
+            # Package
             "package_title",
+            "package_image",
+
+            # Trip
             "trip_title",
+
+            # Sender
             "sender_name",
             "sender_email",
             "sender_profile_picture",
+
+            # Traveler
             "traveler_email",
+
+            # Route
             "route",
-            "package_image",
+
+            # Booking
             "status",
             "payment_status",
             "escrow_status",
+
+            # Pricing
             "agreed_reward",
+            "currency",
+
+            # Weight
+            "agreed_weight_kg",
+
+            # Handshake
             "traveler_matches_listing",
             "traveler_refusal_reason",
-            "currency",
-            "agreed_weight_kg",
+
+            # Dates
             "expires_at",
             "created_at",
             "updated_at",
         ]
+
         read_only_fields = [
             "id",
+            "tracking_number",
             "status",
             "payment_status",
             "agreed_reward",
@@ -91,119 +141,231 @@ class BookingSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def get_sender_name(self, obj) -> str:
-        """Pulls the sender's name from their related Profile instance using the full_name property."""
+    # ------------------------------------------------------
+    # SENDER NAME
+    # ------------------------------------------------------
+
+    def get_sender_name(self, obj):
         if not obj.sender:
             return ""
 
-        if hasattr(obj.sender, "profile") and obj.sender.profile:
-            name = obj.sender.profile.full_name
-            if name:
-                return name
+        profile = getattr(
+            obj.sender,
+            "profile",
+            None,
+        )
 
-        return getattr(obj.sender, "username", obj.sender.email)
-    
+        if profile:
+            full_name = getattr(
+                profile,
+                "full_name",
+                None,
+            )
+
+            if full_name:
+                return full_name
+
+        return getattr(
+            obj.sender,
+            "username",
+            obj.sender.email,
+        )
+
+    # ------------------------------------------------------
+    # ESCROW
+    # ------------------------------------------------------
+
     def get_escrow_status(self, obj):
         return WalletService.get_escrow_status(obj)
 
-    def get_sender_profile_picture(self, obj) -> str | None:
-        """Pulls the sender's profile picture URL from Cloudinary if present."""
-        if not obj.sender or not hasattr(obj.sender, "profile") or not obj.sender.profile:
-            return None
-            
-        profile_picture = obj.sender.profile.profile_picture
-        return profile_picture.url if profile_picture else None
+    # ------------------------------------------------------
+    # PROFILE PICTURE
+    # ------------------------------------------------------
 
-    def get_route(self, obj) -> dict:
-        """Extracts route details from the trip or falls back to package details."""
-        trip = obj.trip
+    def get_sender_profile_picture(self, obj):
+        if not obj.sender:
+            return None
+
+        profile = getattr(
+            obj.sender,
+            "profile",
+            None,
+        )
+
+        if not profile:
+            return None
+
+        picture = getattr(
+            profile,
+            "profile_picture",
+            None,
+        )
+
+        if not picture:
+            return None
+
+        try:
+            return picture.url
+        except Exception:
+            return str(picture)
+
+    # ------------------------------------------------------
+    # ROUTE
+    # ------------------------------------------------------
+
+    def get_route(self, obj):
+        trip = getattr(
+            obj,
+            "trip",
+            None,
+        )
+
         if trip:
             return {
-                "from_country": getattr(trip, "from_country", ""),
-                "from_city": getattr(trip, "from_city", ""),
-                "to_country": getattr(trip, "to_country", ""),
-                "to_city": getattr(trip, "to_city", ""),
+                "from_country": trip.from_country,
+                "from_city": trip.from_city,
+                "to_country": trip.to_country,
+                "to_city": trip.to_city,
             }
 
-        package = obj.package
+        package = getattr(
+            obj,
+            "package",
+            None,
+        )
+
         if package:
             return {
-                "from_country": getattr(package, "from_country", ""),
-                "from_city": getattr(package, "from_city", ""),
-                "to_country": getattr(package, "to_country", ""),
-                "to_city": getattr(package, "to_city", ""),
+                "from_country": package.pickup_country,
+                "from_city": package.pickup_city,
+                "to_country": package.destination_country,
+                "to_city": package.destination_city,
             }
 
         return {}
 
-    def get_package_image(self, obj) -> str | None:
-        """Fetches the primary or first image associated with the package."""
-        if not obj.package:
-            return None
-        
-        if hasattr(obj.package, "images"):
-            primary_image = obj.package.images.filter(is_primary=True).first()
-            if primary_image:
-                return str(primary_image.image)
-            
-            first_image = obj.package.images.first()
-            if first_image:
-                return str(first_image.image)
+    # ------------------------------------------------------
+    # PACKAGE IMAGE
+    # ------------------------------------------------------
 
-        if hasattr(obj.package, "image") and obj.package.image:
-            return str(obj.package.image)
+    def get_package_image(self, obj):
+        package = getattr(
+            obj,
+            "package",
+            None,
+        )
+
+        if not package:
+            return None
+
+        primary = (
+            package.images
+            .filter(is_primary=True)
+            .first()
+        )
+
+        if primary:
+            return str(primary.image)
+
+        first = package.images.first()
+
+        if first:
+            return str(first.image)
 
         return None
 
-    def validate(self, attrs):
-            match_id = attrs.get("match_id")
-            if match_id:
-                # Check for active non-expired bookings upfront
-                active_exists = Booking.objects.filter(
-                    match_id=match_id,
-                    is_active=True,
-                    status__in=[
-                        BookingStatus.PENDING,
-                        BookingStatus.TRAVELER_ACCEPTED,
-                        BookingStatus.PAYMENT_PENDING,
-                        BookingStatus.CONFIRMED,
-                        BookingStatus.PICKED_UP,
-                        BookingStatus.IN_TRANSIT,
-                    ],
-                    expires_at__gt=timezone.now()
-                ).exists()
+    # ------------------------------------------------------
+    # VALIDATE
+    # ------------------------------------------------------
 
-                if active_exists:
-                    raise serializers.ValidationError(
-                        "An active booking request already exists for this match."
-                    )
-            return attrs
+    def validate(self, attrs):
+
+        match_id = attrs.get("match_id")
+
+        if not match_id:
+            raise serializers.ValidationError({
+                "match_id": "Match ID is required."
+            })
+
+        try:
+            match = Match.objects.get(
+                id=match_id,
+                is_active=True,
+                status=MatchStatus.AVAILABLE,
+            )
+
+        except Match.DoesNotExist:
+            raise serializers.ValidationError({
+                "match_id": (
+                    "The selected match does not exist "
+                    "or is no longer available."
+                )
+            })
+
+        active_exists = Booking.objects.filter(
+            match_id=match_id,
+            is_active=True,
+            status__in=[
+                BookingStatus.PENDING,
+                BookingStatus.TRAVELER_ACCEPTED,
+                BookingStatus.PAYMENT_PENDING,
+                BookingStatus.CONFIRMED,
+                BookingStatus.PICKED_UP,
+                BookingStatus.IN_TRANSIT,
+            ],
+            expires_at__gt=timezone.now(),
+        ).exists()
+
+        if active_exists:
+            raise serializers.ValidationError({
+                "match_id": (
+                    "An active booking request already "
+                    "exists for this match."
+                )
+            })
+
+        return attrs
+
+    # ------------------------------------------------------
+    # CREATE
+    # ------------------------------------------------------
 
     def create(self, validated_data):
+
         match_id = validated_data["match_id"]
-        initiated_by = self.context["request"].user
+
+        request = self.context.get("request")
+
+        if not request:
+            raise serializers.ValidationError(
+                "Request context is required."
+            )
 
         try:
             return BookingService.create_booking_request(
-                match_id=match_id, 
-                initiated_by=initiated_by
+                match_id=match_id,
+                initiated_by=request.user,
             )
+
         except DjangoValidationError as e:
+
             if hasattr(e, "message_dict"):
-                raise serializers.ValidationError(e.message_dict)
+                raise serializers.ValidationError(
+                    e.message_dict
+                )
+
             if hasattr(e, "messages"):
                 raise serializers.ValidationError(
-                    e.messages[0] if len(e.messages) == 1 else e.messages
+                    e.messages[0]
+                    if len(e.messages) == 1
+                    else e.messages
                 )
-            raise serializers.ValidationError(str(e))
 
+            raise serializers.ValidationError(
+                str(e)
+            )
 
-
-
-
-
-
-
+        
 class PublicTripBookingRequestSerializer(serializers.Serializer):
     """
     Serializer for booking requests initiated directly from a public trip.

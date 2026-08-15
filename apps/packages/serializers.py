@@ -51,9 +51,6 @@ class PackageSerializer(serializers.ModelSerializer):
             "description",
             "category",
             "weight",
-            "declared_value",
-            "reward_amount",
-            "currency",
             "pickup_country",
             "pickup_city",
             "pickup_address",
@@ -147,21 +144,6 @@ class PackageSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Max weight is 100 KG.")
         return value
 
-    # =========================
-    # DECLARED VALUE
-    # =========================
-    def validate_declared_value(self, value):
-        if value < 0:
-            raise serializers.ValidationError("Invalid declared value.")
-        return value
-
-    # =========================
-    # REWARD
-    # =========================
-    def validate_reward_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Reward must be > 0.")
-        return value
 
     # =========================
     # CROSS-FIELD DATES/LOCATIONS ARCHITECTURE
@@ -330,9 +312,6 @@ class AdminPackageSerializer(serializers.ModelSerializer):
             "category",
 
             "weight",
-            "declared_value",
-            "reward_amount",
-            "currency",
 
             "pickup_country",
             "pickup_city",

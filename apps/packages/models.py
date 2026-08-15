@@ -66,10 +66,7 @@ class Package(models.Model):
     description = models.TextField()
     category = models.CharField(max_length=30, choices=PackageCategory.choices)
     weight = models.DecimalField(max_digits=6, decimal_places=2, help_text="Weight in KG")
-    declared_value = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    reward_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Amount sender will pay traveler")
-    currency = models.CharField(max_length=10, default="USD")
-    
+
     pickup_country = models.CharField(max_length=100)
     pickup_city = models.CharField(max_length=100)
     pickup_address = models.TextField()

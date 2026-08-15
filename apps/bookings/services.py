@@ -32,62 +32,115 @@ from apps.notifications.models import Notification, NotificationType
 from apps.wallets.models import WalletTransaction
 from apps.notifications.services import create_notification
 from apps.chat.services import ChatService
-from apps.chat.services import ChatService
+
 from apps.notifications.services import (
     create_booking_request_notification,
 )
 
+from datetime import timedelta
+from decimal import Decimal, ROUND_HALF_UP
+from apps.matching.models import MatchStatus
 
+from apps.matching.models import Match
+from apps.bookings.models import (
+    Booking,
+    BookingStatus,
+    PaymentStatus,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class BookingService:
 
+
+
+
     @staticmethod
     @transaction.atomic
     def create_booking_request(match_id, initiated_by):
+
         try:
-            match = Match.objects.select_related(
-                "package",
-                "trip",
-                "package__sender",
-                "trip__traveler",
-            ).get(id=match_id)
+            match = (
+                Match.objects
+                .select_related(
+                    "package",
+                    "trip",
+                    "package__sender",
+                    "trip__traveler",
+                )
+                .select_for_update()
+                .get(id=match_id)
+            )
+
         except Match.DoesNotExist:
             raise ValidationError("Match does not exist.")
 
         package = match.package
         trip = match.trip
 
-        # --------------------------------------------------
-        # BUSINESS VALIDATIONS
-        # --------------------------------------------------
+        # ======================================================
+        # MATCH VALIDATION
+        # ======================================================
 
         if not match.is_active:
-            raise ValidationError("This match is no longer active.")
+            raise ValidationError(
+                "This match is no longer active."
+            )
+
+        if (
+            package.status != PackageStatus.PUBLISHED
+            or not package.is_active
+        ):
+            raise ValidationError(
+                "This package is not currently published."
+            )
+
+        if not trip.is_public or not trip.is_active:
+            raise ValidationError(
+                "This trip is not currently available."
+            )
 
         if initiated_by != package.sender:
             raise ValidationError(
                 "Only the package sender can create a booking request."
             )
 
-        if package.sender == trip.traveler:
+        if package.sender_id == trip.traveler_id:
             raise ValidationError(
                 "You cannot book your own trip."
             )
 
-        # Expire old booking requests
+        # ======================================================
+        # CAPACITY VALIDATION
+        # ======================================================
+
+        if trip.available_weight_kg < package.weight:
+            raise ValidationError(
+                f"Insufficient available capacity. "
+                f"Required: {package.weight}kg, "
+                f"Available: {trip.available_weight_kg}kg."
+            )
+
+        # ======================================================
+        # EXPIRE OLD BOOKINGS
+        # ======================================================
+
+        now = timezone.now()
+
         Booking.objects.filter(
             match=match,
             status=BookingStatus.PENDING,
-            expires_at__lte=timezone.now(),
+            expires_at__lte=now,
         ).update(
             is_active=False,
             status=BookingStatus.EXPIRED,
         )
 
-        # Check active booking
+        # ======================================================
+        # CHECK ACTIVE BOOKING
+        # ======================================================
+
         active_booking_exists = Booking.objects.filter(
             match=match,
             is_active=True,
@@ -99,7 +152,7 @@ class BookingService:
                 BookingStatus.PICKED_UP,
                 BookingStatus.IN_TRANSIT,
             ],
-            expires_at__gt=timezone.now(),
+            expires_at__gt=now,
         ).exists()
 
         if active_booking_exists:
@@ -107,17 +160,28 @@ class BookingService:
                 "An active booking already exists for this match."
             )
 
-        # Capacity
-        if trip.available_weight_kg < package.weight:
-            raise ValidationError(
-                f"Insufficient available capacity. "
-                f"Required: {package.weight}kg, "
-                f"Available: {trip.available_weight_kg}kg."
-            )
+        # ======================================================
+        # CALCULATE REWARD
+        # ======================================================
 
-        # ==========================================================
+        reward_per_kg = Decimal(
+            str(trip.reward_per_kg)
+        )
+
+        weight = Decimal(
+            str(package.weight)
+        )
+
+        agreed_reward = (
+            reward_per_kg * weight
+        ).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+        # ======================================================
         # CREATE BOOKING
-        # ==========================================================
+        # ======================================================
 
         booking = Booking.objects.create(
             match=match,
@@ -125,19 +189,26 @@ class BookingService:
             trip=trip,
             sender=package.sender,
             traveler=trip.traveler,
-            agreed_reward=package.reward_amount,
-            agreed_weight_kg=package.weight,
-            currency=package.currency,
+
+            # IMPORTANT
+            agreed_reward=agreed_reward,
+
+            agreed_weight_kg=weight,
+
+            currency=trip.currency,
+
             status=BookingStatus.PENDING,
+
             payment_status=PaymentStatus.UNPAID,
+
             is_active=True,
-            expires_at=timezone.now() + timedelta(days=7),
+
+            expires_at=now + timedelta(days=7),
         )
 
-
-        # ==========================================================
+        # ======================================================
         # CREATE / REUSE CHAT ROOM
-        # ==========================================================
+        # ======================================================
 
         chat_room, chat_created = (
             ChatService.get_or_create_booking_room(
@@ -145,22 +216,12 @@ class BookingService:
             )
         )
 
-
-        # ==========================================================
-        # CREATE SYSTEM CHAT MESSAGE
-        # ==========================================================
-
         chat_message = (
             ChatService.create_booking_request_message(
                 booking=booking,
                 room=chat_room,
             )
         )
-
-
-        # ==========================================================
-        # CREATE TRAVELER NOTIFICATION
-        # ==========================================================
 
         notification = (
             create_booking_request_notification(
@@ -170,18 +231,18 @@ class BookingService:
             )
         )
 
-
         logger.info(
-            "Booking %s created | "
-            "ChatRoom=%s | "
-            "ChatMessage=%s | "
-            "Notification=%s",
+            "Booking %s created | Match=%s | Package=%s | Trip=%s | "
+            "Weight=%s | RewardPerKg=%s | AgreedReward=%s | ChatRoom=%s",
             booking.tracking_number,
+            match.id,
+            package.id,
+            trip.id,
+            weight,
+            reward_per_kg,
+            agreed_reward,
             chat_room.id,
-            chat_message.id,
-            notification.id,
         )
-
 
         return booking
 

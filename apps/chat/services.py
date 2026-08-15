@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.core.exceptions import ValidationError
 
-from .models import ChatRoom
+from .models import ChatRoom, ChatMessage
 
 
 class ChatService:
@@ -11,14 +11,6 @@ class ChatService:
     def get_or_create_booking_room(booking):
         """
         Get or create the chat room between the sender and traveler.
-
-        Rules:
-        1. Validate sender and traveler.
-        2. If this booking already has a room, reuse it.
-        3. If sender/traveler already have an active conversation, reuse it.
-        4. Attach the current booking to the existing conversation.
-        5. Otherwise create a new room.
-        6. Never intentionally create a duplicate sender/traveler room.
         """
 
         # ======================================================
@@ -47,7 +39,6 @@ class ChatService:
         )
 
         if room:
-            # Make sure participants are still correct.
             if (
                 room.sender_id != booking.sender_id
                 or room.traveler_id != booking.traveler_id
@@ -83,14 +74,12 @@ class ChatService:
         )
 
         if room:
-            # Re-open archived conversation if necessary.
             update_fields = []
 
             if not room.is_active:
                 room.is_active = True
                 update_fields.append("is_active")
 
-            # Attach the latest booking to the conversation.
             if room.booking_id != booking.id:
                 room.booking = booking
                 update_fields.append("booking")
@@ -114,49 +103,59 @@ class ChatService:
 
         return room, True
 
+    # ==========================================================
+    # CREATE BOOKING REQUEST SYSTEM MESSAGE
+    # ==========================================================
 
-@staticmethod
-@transaction.atomic
-def create_booking_request_message(
-    *,
-    booking,
-    room,
-):
-    from .models import ChatMessage
+    @staticmethod
+    @transaction.atomic
+    def create_booking_request_message(
+        *,
+        booking,
+        room,
+    ):
+        from .models import ChatMessage
 
-    sender = booking.sender
-    traveler = booking.traveler
-    trip = booking.trip
-    package = booking.package
+        sender = booking.sender
+        traveler = booking.traveler
+        trip = booking.trip
+        package = booking.package
 
-    sender_name = (
-        getattr(sender, "username", None)
-        or getattr(sender, "email", None)
-        or "A sender"
-    )
+        # Get sender's actual profile name
+        sender_name = None
 
-    message = (
-        f"New booking request from {sender_name}. "
-        f"Package: {package.title}. "
-        f"Weight: {booking.agreed_weight_kg} kg. "
-        f"Route: {trip.from_city} → {trip.to_city}. "
-        f"Please review the booking request."
-    )
+        if sender:
+            profile = getattr(sender, "profile", None)
 
-    chat_message = ChatMessage.objects.create(
-        room=room,
+            if profile:
+                sender_name = getattr(profile, "full_name", None)
 
-        # This is a SYSTEM message, so don't pretend
-        # the sender manually typed it.
-        sender=sender,
-        receiver=traveler,
+            # Fallbacks only if profile name is unavailable
+            if not sender_name:
+                sender_name = (
+                    getattr(sender, "username", None)
+                    or getattr(sender, "first_name", None)
+                    or getattr(sender, "email", None)
+                )
 
-        message=message,
+        sender_name = sender_name or "A sender"
 
-        message_type=ChatMessage.MessageType.SYSTEM,
+        message = (
+            f"New booking request from {sender_name}. "
+            f"Package: {package.title}. "
+            f"Weight: {booking.agreed_weight_kg} kg. "
+            f"Route: {trip.from_city} → {trip.to_city}. "
+            f"Please review the booking request."
+        )
 
-        is_delivered=False,
-        is_read=False,
-    )
+        chat_message = ChatMessage.objects.create(
+            room=room,
+            sender=sender,
+            receiver=traveler,
+            message=message,
+            message_type=ChatMessage.MessageType.SYSTEM,
+            is_delivered=False,
+            is_read=False,
+        )
 
-    return chat_message
+        return chat_message

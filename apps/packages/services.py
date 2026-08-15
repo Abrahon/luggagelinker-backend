@@ -1,4 +1,5 @@
 from decimal import Decimal
+from apps.packages.models import PackageCategory
 
 from apps.packages.models import (
     Package,
@@ -22,10 +23,8 @@ class PackageService:
     # ==========================================================
     # PACKAGE RISK EVALUATION
     # ==========================================================
-
     @staticmethod
     def process_and_evaluate_risk(package: Package) -> Package:
-
         score = 0
 
         # --------------------------------------------------
@@ -38,69 +37,95 @@ class PackageService:
         if rule:
             score += rule.base_risk_score
 
-            if (
-                package.declared_value >= rule.requires_receipt_above
-                and not package.purchase_receipt
-            ):
+            # Receipt requirement is now based on category/risk rule,
+            # not on declared monetary value.
+            if rule.requires_receipt and not package.purchase_receipt:
                 score += 20
 
         # --------------------------------------------------
-        # 2. Declared Value
-        # --------------------------------------------------
-        value = package.declared_value
-
-        if value >= Decimal("5000"):
-            score += 35
-        elif value >= Decimal("2500"):
-            score += 30
-        elif value >= Decimal("1000"):
-            score += 20
-        elif value >= Decimal("500"):
-            score += 15
-        elif value >= Decimal("150"):
-            score += 10
-
-        # --------------------------------------------------
-        # 3. Reward Amount
-        # --------------------------------------------------
-        reward = package.reward_amount
-
-        if reward >= Decimal("1000"):
-            score += 20
-        elif reward >= Decimal("500"):
-            score += 15
-        elif reward >= Decimal("200"):
-            score += 10
-
-        # --------------------------------------------------
-        # 4. International Route
+        # 2. International Route
         # --------------------------------------------------
         if (
-            package.pickup_country.lower().strip()
+            package.pickup_country
+            and package.destination_country
+            and package.pickup_country.lower().strip()
             != package.destination_country.lower().strip()
         ):
             score += 15
 
         # --------------------------------------------------
-        # 5. High Risk Country
+        # 3. High Risk Country
         # --------------------------------------------------
-        if package.pickup_country.strip() in PackageService.HIGH_RISK_COUNTRIES:
+        if (
+            package.pickup_country
+            and package.pickup_country.strip().lower()
+            in {
+                country.lower()
+                for country in PackageService.HIGH_RISK_COUNTRIES
+            }
+        ):
+            score += 15
+
+        if (
+            package.destination_country
+            and package.destination_country.strip().lower()
+            in {
+                country.lower()
+                for country in PackageService.HIGH_RISK_COUNTRIES
+            }
+        ):
             score += 15
 
         # --------------------------------------------------
-        # 6. Fragile
+        # 4. Fragile Package
         # --------------------------------------------------
         if package.is_fragile:
             score += 5
 
         # --------------------------------------------------
-        # 7. Signature Required
+        # 5. Signature Required
         # --------------------------------------------------
         if package.requires_signature:
             score += 5
 
         # --------------------------------------------------
-        # 8. New User
+        # 6. Missing Purchase Receipt
+        # --------------------------------------------------
+        if (
+            package.category in [
+                PackageCategory.ELECTRONICS,
+                PackageCategory.MEDICINE,
+                PackageCategory.COSMETICS,
+                PackageCategory.FOOD,
+            ]
+            and not package.purchase_receipt
+        ):
+            score += 10
+
+        # --------------------------------------------------
+        # 7. Electronics Serial / IMEI Verification
+        # --------------------------------------------------
+        if package.category == PackageCategory.ELECTRONICS:
+
+            # Electronics without an identifiable serial/IMEI
+            # receive additional risk.
+            if not package.serial_number and not package.imei:
+                score += 15
+
+        # --------------------------------------------------
+        # 8. Legal Declaration
+        # --------------------------------------------------
+        if not package.declared_as_legal:
+            score += 30
+
+        # --------------------------------------------------
+        # 9. Terms Acceptance
+        # --------------------------------------------------
+        if not package.terms_accepted:
+            score += 20
+
+        # --------------------------------------------------
+        # 10. New User
         # --------------------------------------------------
         profile = getattr(package.sender, "profile", None)
 
@@ -112,6 +137,18 @@ class PackageService:
 
         if completed == 0:
             score += 10
+        elif completed < 3:
+            score += 5
+
+        # --------------------------------------------------
+        # 11. Weight Risk
+        # --------------------------------------------------
+        if package.weight >= Decimal("50"):
+            score += 15
+        elif package.weight >= Decimal("25"):
+            score += 10
+        elif package.weight >= Decimal("10"):
+            score += 5
 
         # --------------------------------------------------
         # Final Score
@@ -135,7 +172,6 @@ class PackageService:
         )
 
         return package
-
     # ==========================================================
     # FIND PACKAGES COMPATIBLE WITH A SPECIFIC TRIP
     # ==========================================================

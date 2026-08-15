@@ -61,9 +61,6 @@ def create_notification(
     object_id=None,
     action_url=None,
 ):
-    """
-    Create a database-backed notification entry and send WebSocket message.
-    """
     notification = Notification.objects.create(
         user=user,
         title=title,
@@ -76,7 +73,7 @@ def create_notification(
     send_notification_ws(notification)
 
     logger.info(
-        "Notification created | User=%s Notification=%s",
+        "Notification created | User=%s | Notification=%s",
         user.id,
         notification.id,
     )
@@ -87,7 +84,6 @@ def create_notification(
 # ==========================================================
 # BOOKING REQUEST NOTIFICATION
 # ==========================================================
-
 @transaction.atomic
 def create_booking_request_notification(
     *,
@@ -95,24 +91,32 @@ def create_booking_request_notification(
     chat_room=None,
     chat_message=None,
 ):
-    """
-    Notify the traveler when a new booking request is created.
-
-    This notification is specifically for:
-        Sender -> Traveler
-
-    It also optionally links the notification to the
-    created chat room and system chat message.
-    """
+    print("========================================")
+    print("BOOKING NOTIFICATION FUNCTION CALLED")
+    print("BOOKING ID:", booking.id)
+    print("TRAVELER ID:", booking.traveler_id)
+    print("SENDER ID:", booking.sender_id)
+    print("========================================")
 
     traveler = booking.traveler
     sender = booking.sender
 
-    sender_name = (
-        getattr(sender, "name", None)
-        or getattr(sender, "email", None)
-        or "A sender"
-    )
+    sender_name = None
+
+    if sender:
+        profile = getattr(sender, "profile", None)
+
+        if profile:
+            sender_name = getattr(profile, "full_name", None)
+
+        if not sender_name:
+            sender_name = (
+                getattr(sender, "username", None)
+                or getattr(sender, "first_name", None)
+                or getattr(sender, "email", None)
+            )
+
+    sender_name = sender_name or "A sender"
 
     package_title = (
         getattr(booking.package, "title", None)
@@ -123,11 +127,17 @@ def create_booking_request_notification(
 
     trip = booking.trip
 
-    route = (
-        f"{trip.from_city} → {trip.to_city}"
-        if trip
-        else "your trip"
-    )
+    if trip:
+        from_city = getattr(trip, "from_city", "")
+        to_city = getattr(trip, "to_city", "")
+
+        route = (
+            f"{from_city} → {to_city}"
+            if from_city and to_city
+            else "your trip"
+        )
+    else:
+        route = "your trip"
 
     notification = create_notification(
         user=traveler,
@@ -142,26 +152,9 @@ def create_booking_request_notification(
 
         notification_type=NotificationType.BOOKING,
 
-        # Booking is the main object.
         object_id=booking.id,
 
-        action_url=(
-            f"/bookings/{booking.id}/"
-        ),
-
-        sender=sender,
-
-        room_id=(
-            chat_room.id
-            if chat_room
-            else None
-        ),
-
-        message_id=(
-            chat_message.id
-            if chat_message
-            else None
-        ),
+        action_url=f"/bookings/{booking.id}/",
     )
 
     logger.info(
@@ -293,6 +286,50 @@ def notify_dispute_opened(*, user, dispute):
         object_id=dispute.id,
         action_url=f"/disputes/{dispute.id}/",
     )
+
+
+# ==========================================================
+# DISPUTE → ADMIN
+# ==========================================================
+
+def notify_admin_dispute_opened(*, dispute):
+    """
+    Notify every active staff/admin user when a dispute
+    is successfully opened.
+    """
+
+    admins = User.objects.filter(
+        is_active=True,
+        is_staff=True,
+    )
+
+    notifications = []
+
+    for admin in admins:
+
+        notification = create_notification(
+            user=admin,
+            title="New Dispute Opened ⚠️",
+            message=(
+                f"A new dispute has been opened for "
+                f"booking #{dispute.booking.tracking_number}. "
+                f"Reason: {dispute.get_reason_display()}."
+            ),
+            notification_type=NotificationType.BOOKING,
+            object_id=dispute.id,
+            action_url=f"/admin/disputes/{dispute.id}/",
+        )
+
+        notifications.append(notification)
+
+    logger.info(
+        "Admin dispute notifications sent | "
+        "Dispute=%s | Admins=%s",
+        dispute.id,
+        len(notifications),
+    )
+
+    return notifications
 
 
 def notify_dispute_evidence_requested(*, user, dispute):

@@ -2,7 +2,7 @@ import logging
 from django.db.migrations import serializer
 from django.db.models import Q
 from django.core.exceptions import ValidationError as DjangoValidationError
-
+from decimal import Decimal
 from rest_framework import generics, request, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
@@ -483,7 +483,14 @@ class AdminDisputeResolveAPIView(
                         "resolved_by": {
                             "id": str(request.user.id),
                             "email": request.user.email,
-                            "full_name": request.user.get_full_name(),
+                            "full_name": (
+                                request.user.profile.full_name
+                                if hasattr(request.user, "profile")
+                                and request.user.profile
+                                and request.user.profile.full_name
+                                else getattr(request.user, "username", None)
+                                or request.user.email
+                            ),
                         },
 
                         "booking": {
