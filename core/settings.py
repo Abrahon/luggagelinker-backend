@@ -96,6 +96,7 @@ AUTH_USER_MODEL = "accounts.User"
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3600",
     "http://127.0.0.1:5173",
+    "https://lug-api.abrahon.site"
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = True
