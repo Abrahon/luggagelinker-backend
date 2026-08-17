@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
+from django.db.models.functions import TruncMonth
 
 from apps.accounts.permissions import IsUserAllowed
 from .serializers import MonthlyWithdrawalSerializer, SenderWalletTransactionSerializer
@@ -896,11 +897,12 @@ class MonthlyEarningsView(generics.GenericAPIView):
 
         data = [
             {
-                "month": item["month"].strftime("%b %Y"),
-                "earnings": item["earnings"],
-                "deliveries": item["deliveries"],
+                "month": item["month"].strftime("%b %Y") if item.get("month") else "N/A",
+                "earnings": item.get("earnings", 0),
+                "deliveries": item.get("deliveries", 0),
             }
             for item in queryset
+            if item.get("month") is not None  # Optionally filter out None items completely
         ]
 
         serializer = self.get_serializer(data, many=True)

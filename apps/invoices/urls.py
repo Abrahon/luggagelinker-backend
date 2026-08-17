@@ -26,5 +26,5 @@ urlpatterns = [
         "admin/payments/<uuid:id>/invoice/download/",
         AdminPaymentInvoiceDownloadView.as_view(),
         name="admin-payment-invoice-download",
-),
+   ),
 ]

@@ -955,28 +955,170 @@ class ChatConsumer(AsyncWebsocketConsumer):
     #         })
     #     )
 
+
     async def connect(self):
-        self.room_id = str(self.scope["url_route"]["kwargs"]["room_id"])
+        self.room_id = str(
+            self.scope["url_route"]["kwargs"]["room_id"]
+        )
+
         self.room_group_name = f"chat_{self.room_id}"
         self.presence_group_name = f"presence_{self.room_id}"
+
         self.user = self.scope.get("user")
 
-        # 🔍 DEBUG LOGS
-        logger.info(f"--- WS CONNECT ATTEMPT --- Room: {self.room_id} | User: {self.user}")
+        logger.info(
+            "WS CONNECT ATTEMPT | room=%s | user=%s",
+            self.room_id,
+            self.user,
+        )
+
+        # ==========================================================
+        # AUTHENTICATION
+        # ==========================================================
 
         if not self.user or self.user.is_anonymous:
-            logger.error("WS REJECTED: User is Anonymous or missing from scope")
+            logger.warning(
+                "WS REJECTED | anonymous user | room=%s",
+                self.room_id,
+            )
+
             await self.close(code=4003)
             return
 
+        # ==========================================================
+        # ROOM AUTHORIZATION
+        # ==========================================================
 
         is_authorized = await self.verify_room_membership()
+
         if not is_authorized:
-            logger.error(f"WS REJECTED: User {self.user.id} not authorized for room {self.room_id}")
+            logger.warning(
+                "WS REJECTED | user=%s not authorized | room=%s",
+                self.user.id,
+                self.room_id,
+            )
+
             await self.close(code=4003)
             return
 
+        # ==========================================================
+        # ACCEPT CONNECTION
+        # ==========================================================
+
         await self.accept()
+
+        # ==========================================================
+        # JOIN CHAT GROUP
+        # ==========================================================
+
+        await self.channel_layer.group_add(
+            self.room_group_name,
+            self.channel_name,
+        )
+
+        # ==========================================================
+        # JOIN PRESENCE GROUP
+        # ==========================================================
+
+        await self.channel_layer.group_add(
+            self.presence_group_name,
+            self.channel_name,
+        )
+
+        # ==========================================================
+        # TRACK USER CONNECTION
+        # ==========================================================
+
+        connection_count = await self.increment_user_connection()
+
+        logger.info(
+            "WS CONNECTED | user=%s | room=%s | connections=%s",
+            self.user.id,
+            self.room_id,
+            connection_count,
+        )
+
+        # ==========================================================
+        # SET USER ONLINE
+        # ONLY FIRST CONNECTION BROADCASTS ONLINE
+        # ==========================================================
+
+        if connection_count == 1:
+
+            await self.set_user_presence(
+                status="online"
+            )
+
+            await self.channel_layer.group_send(
+                self.presence_group_name,
+                {
+                    "type": "presence_event",
+                    "user_id": str(self.user.id),
+                    "status": "online",
+                },
+            )
+
+        # ==========================================================
+        # SEND PARTNER'S CURRENT PRESENCE
+        # ==========================================================
+
+        other_user_id, partner_online = (
+            await self.get_partner_presence_info()
+        )
+
+        if other_user_id:
+
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "event": "presence",
+                        "data": {
+                            "user_id": str(other_user_id),
+                            "status": (
+                                "online"
+                                if partner_online
+                                else "offline"
+                            ),
+                        },
+                    }
+                )
+            )
+
+        # ==========================================================
+        # MARK INCOMING MESSAGES AS READ
+        # ==========================================================
+
+        read_message_ids = (
+            await self.mark_messages_as_read()
+        )
+
+        if read_message_ids:
+
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    "type": "read_receipt_event",
+                    "reader_id": str(self.user.id),
+                    "message_ids": read_message_ids,
+                },
+            )
+
+        # ==========================================================
+        # SEND UNREAD COUNT
+        # ==========================================================
+
+        unread_count = await self.get_unread_count()
+
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "event": "unread_count",
+                    "data": {
+                        "count": unread_count,
+                    },
+                }
+            )
+        )
     # ... rest of connect ...
     async def disconnect(self, close_code):
         # 1. ALWAYS remove channel from groups FIRST to prevent channel leaks
