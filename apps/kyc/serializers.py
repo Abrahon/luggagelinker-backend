@@ -220,6 +220,62 @@ class KYCSerializer(serializers.ModelSerializer):
 
 
 
+class KYCUpdateSerializer(serializers.ModelSerializer):
+    """
+    Dedicated serializer for PATCH/PUT updates.
+    All fields are optional to allow updating only modified document images.
+    """
+    id_type = serializers.ChoiceField(choices=IDType.choices, required=False)
+    id_number = serializers.CharField(max_length=100, required=False)
+    document_front = serializers.FileField(required=False, allow_null=True)
+    document_back = serializers.FileField(required=False, allow_null=True)
+    selfie = serializers.FileField(required=False, allow_null=True)
+
+    class Meta:
+        model = KYC
+        fields = (
+            "id",
+            "id_type",
+            "id_number",
+            "document_front",
+            "document_back",
+            "selfie",
+            "status",
+            "rejection_reason",
+            "updated_at",
+        )
+        read_only_fields = ("id", "status", "rejection_reason", "updated_at")
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["document_front"] = instance.document_front.url if instance.document_front else None
+        data["document_back"] = instance.document_back.url if instance.document_back else None
+        data["selfie"] = instance.selfie.url if instance.selfie else None
+        return data
+
+    def validate_id_number(self, value):
+        if not value:
+            return value
+        value = value.strip()
+        if len(value) < 6:
+            raise serializers.ValidationError("ID number is too short.")
+
+        queryset = KYC.objects.filter(id_number__iexact=value)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError("This ID number is already registered.")
+        return value
+
+    def validate(self, attrs):
+        id_type = attrs.get("id_type", self.instance.id_type)
+        document_back = attrs.get("document_back", self.instance.document_back)
+
+        if id_type != IDType.PASSPORT and not document_back:
+            raise serializers.ValidationError({"document_back": "Back document is required for National ID and Driver's License."})
+
+        return attrs
 
 class AdminUserSerializer(serializers.Serializer):
     """Minimal representation of the user for admin readability."""

@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser
 
 from apps.kyc.models import KYC, KYCStatus
-from apps.kyc.serializers import AdminKYCDetailSerializer, KYCRejectSerializer
+from apps.kyc.serializers import AdminKYCDetailSerializer, KYCRejectSerializer,KYCUpdateSerializer
 
 
 
@@ -59,24 +59,77 @@ class KYCCreateView(generics.CreateAPIView):
 
 
 
+# class MyKYCView(generics.RetrieveUpdateAPIView):
+#     """
+#     Manage user context KYC asset instances
+#     GET /api/kyc/me/
+#     PATCH /api/kyc/me/
+#     """
+#     serializer_class = KYCSerializer
+#     permission_classes = [IsAuthenticated]
+
+#     def get_object(self):
+#         # Clean execution flow instead of an unhandled HTTP 500 error
+#         return get_object_or_404(KYC, user=self.request.user)
+
+#     def perform_update(self, serializer):
+#         kyc = self.get_object()
+#         if kyc.status == KYCStatus.APPROVED:
+#             raise ValidationError({"detail": "Approved KYC records cannot be modified."})
+#         serializer.save()
+
 class MyKYCView(generics.RetrieveUpdateAPIView):
     """
-    Manage user context KYC asset instances
-    GET /api/kyc/me/
-    PATCH /api/kyc/me/
+    Retrieve or Update the KYC record for the logged-in user.
+    Endpoint: /api/kyc/me/
     """
     serializer_class = KYCSerializer
     permission_classes = [IsAuthenticated]
 
     def get_object(self):
-        # Clean execution flow instead of an unhandled HTTP 500 error
-        return get_object_or_404(KYC, user=self.request.user)
+        try:
+            return KYC.objects.get(user=self.request.user)
+        except KYC.DoesNotExist:
+            return None
 
-    def perform_update(self, serializer):
-        kyc = self.get_object()
-        if kyc.status == KYCStatus.APPROVED:
-            raise ValidationError({"detail": "Approved KYC records cannot be modified."})
-        serializer.save()
+    def get(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not instance:
+            return Response(
+                {"detail": "No KYC submission found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def get_serializer_class(self):
+        if self.request.method in ["PUT", "PATCH"]:
+            return KYCUpdateSerializer
+        return KYCSerializer
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+
+        if not instance:
+            return Response(
+                {"detail": "No KYC record exists to update. Please submit first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if instance.status == KYCStatus.APPROVED:
+            return Response(
+                {"detail": "Approved KYC cannot be modified."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        
+        # When user updates a rejected or pending KYC, reset status back to PENDING
+        serializer.save(status=KYCStatus.PENDING, rejection_reason=None)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 
