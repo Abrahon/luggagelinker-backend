@@ -44,19 +44,243 @@ from .serializers import AdminTripSerializer
 
 logger = logging.getLogger(__name__)
 
-class CreateTripListView(generics.ListCreateAPIView):
+# class CreateTripListView(generics.ListCreateAPIView):
+
+#     serializer_class = TripSerializer
+#     permission_classes = [IsAuthenticated, IsUserAllowed]
+
+#     # ==========================================================
+#     # LIST PUBLIC TRIPS + SEARCH
+#     # ==========================================================
+
+#     def get_queryset(self):
+#         queryset = (
+#             Trip.objects
+#             .select_related("traveler")
+#             .filter(
+#                 is_active=True,
+#                 is_public=True,
+#                 status=TripStatus.PLANNED,
+#             )
+#             .order_by("-created_at")
+#         )
+
+#         # ------------------------------------------
+#         # SEARCH PARAMETERS
+#         # ------------------------------------------
+
+#         from_country = self.request.query_params.get("from_country")
+#         from_city = self.request.query_params.get("from_city")
+
+#         to_country = self.request.query_params.get("to_country")
+#         to_city = self.request.query_params.get("to_city")
+
+#         departure_date = self.request.query_params.get("departure_date")
+
+#         # ------------------------------------------
+#         # FROM
+#         # ------------------------------------------
+
+#         if from_country:
+#             queryset = queryset.filter(
+#                 from_country__iexact=from_country.strip()
+#             )
+
+#         if from_city:
+#             queryset = queryset.filter(
+#                 from_city__icontains=from_city.strip()
+#             )
+
+#         # ------------------------------------------
+#         # TO
+#         # ------------------------------------------
+
+#         if to_country:
+#             queryset = queryset.filter(
+#                 to_country__iexact=to_country.strip()
+#             )
+
+#         if to_city:
+#             queryset = queryset.filter(
+#                 to_city__icontains=to_city.strip()
+#             )
+
+#         # ------------------------------------------
+#         # DEPARTURE DATE
+#         # ------------------------------------------
+
+#         if departure_date:
+#             try:
+#                 from datetime import datetime
+
+#                 parsed_date = datetime.strptime(
+#                     departure_date,
+#                     "%Y-%m-%d"
+#                 ).date()
+
+#                 queryset = queryset.filter(
+#                     departure_date=parsed_date
+#                 )
+
+#             except ValueError:
+#                 # Let the view return a clean validation error
+#                 raise ValidationError(
+#                     {
+#                         "departure_date": [
+#                             "Invalid date format. Use YYYY-MM-DD."
+#                         ]
+#                     }
+#                 )
+
+#         return queryset
+
+#     # ==========================================================
+#     # CREATE TRIP
+#     # ==========================================================
+
+#     @transaction.atomic
+#     def create(self, request, *args, **kwargs):
+
+#         serializer = self.get_serializer(
+#             data=request.data,
+#             context={"request": request},
+#         )
+
+#         try:
+#             serializer.is_valid(raise_exception=True)
+
+#             trip = serializer.save()
+
+#             run_trip_matching(trip)
+
+#             logger.info(
+#                 f"Trip created successfully. "
+#                 f"Trip={trip.id} "
+#                 f"Traveler={request.user.id}"
+#             )
+
+#             return Response(
+#                 {
+#                     "success": True,
+#                     "message": "Trip created successfully.",
+#                     "data": TripSerializer(
+#                         trip,
+#                         context={"request": request},
+#                     ).data,
+#                 },
+#                 status=status.HTTP_201_CREATED,
+#             )
+
+#         except ValidationError as e:
+
+#             logger.warning(
+#                 f"Trip validation failed. "
+#                 f"Traveler={request.user.id}"
+#             )
+
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Validation failed.",
+#                     "errors": e.detail,
+#                 },
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         except Exception:
+
+#             logger.exception(
+#                 f"Trip creation failed. "
+#                 f"Traveler={request.user.id}"
+#             )
+
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Unable to create trip at this time.",
+#                 },
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
+
+#     # ==========================================================
+#     # LIST
+#     # ==========================================================
+
+#     def list(self, request, *args, **kwargs):
+
+#         try:
+
+#             queryset = self.filter_queryset(
+#                 self.get_queryset()
+#             )
+
+#             serializer = self.get_serializer(
+#                 queryset,
+#                 many=True,
+#             )
+
+#             return Response(
+#                 {
+#                     "success": True,
+#                     "message": "Trips retrieved successfully.",
+#                     "count": queryset.count(),
+#                     "data": serializer.data,
+#                 },
+#                 status=status.HTTP_200_OK,
+#             )
+
+#         except ValidationError as e:
+
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Invalid search parameters.",
+#                     "errors": e.message_dict
+#                     if hasattr(e, "message_dict")
+#                     else e.messages,
+#                 },
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         except Exception:
+
+#             logger.exception(
+#                 "Failed to retrieve trips."
+#             )
+
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Unable to retrieve trips.",
+#                 },
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
+
+
+class CreateTripListView(
+    generics.ListCreateAPIView
+):
 
     serializer_class = TripSerializer
-    permission_classes = [IsAuthenticated, IsUserAllowed]
+
+    permission_classes = [
+        IsAuthenticated,
+        IsUserAllowed,
+    ]
 
     # ==========================================================
     # LIST PUBLIC TRIPS + SEARCH
     # ==========================================================
 
     def get_queryset(self):
+
         queryset = (
             Trip.objects
-            .select_related("traveler")
+            .select_related(
+                "traveler",
+                "traveler__profile",
+                "traveler__kyc",
+            )
             .filter(
                 is_active=True,
                 is_public=True,
@@ -69,26 +293,52 @@ class CreateTripListView(generics.ListCreateAPIView):
         # SEARCH PARAMETERS
         # ------------------------------------------
 
-        from_country = self.request.query_params.get("from_country")
-        from_city = self.request.query_params.get("from_city")
+        from_country = (
+            self.request.query_params.get(
+                "from_country"
+            )
+        )
 
-        to_country = self.request.query_params.get("to_country")
-        to_city = self.request.query_params.get("to_city")
+        from_city = (
+            self.request.query_params.get(
+                "from_city"
+            )
+        )
 
-        departure_date = self.request.query_params.get("departure_date")
+        to_country = (
+            self.request.query_params.get(
+                "to_country"
+            )
+        )
+
+        to_city = (
+            self.request.query_params.get(
+                "to_city"
+            )
+        )
+
+        departure_date = (
+            self.request.query_params.get(
+                "departure_date"
+            )
+        )
 
         # ------------------------------------------
         # FROM
         # ------------------------------------------
 
         if from_country:
+
             queryset = queryset.filter(
-                from_country__iexact=from_country.strip()
+                from_country__iexact=
+                from_country.strip()
             )
 
         if from_city:
+
             queryset = queryset.filter(
-                from_city__icontains=from_city.strip()
+                from_city__icontains=
+                from_city.strip()
             )
 
         # ------------------------------------------
@@ -96,13 +346,17 @@ class CreateTripListView(generics.ListCreateAPIView):
         # ------------------------------------------
 
         if to_country:
+
             queryset = queryset.filter(
-                to_country__iexact=to_country.strip()
+                to_country__iexact=
+                to_country.strip()
             )
 
         if to_city:
+
             queryset = queryset.filter(
-                to_city__icontains=to_city.strip()
+                to_city__icontains=
+                to_city.strip()
             )
 
         # ------------------------------------------
@@ -110,24 +364,31 @@ class CreateTripListView(generics.ListCreateAPIView):
         # ------------------------------------------
 
         if departure_date:
+
             try:
+
                 from datetime import datetime
 
-                parsed_date = datetime.strptime(
-                    departure_date,
-                    "%Y-%m-%d"
-                ).date()
+                parsed_date = (
+                    datetime.strptime(
+                        departure_date,
+                        "%Y-%m-%d",
+                    ).date()
+                )
 
                 queryset = queryset.filter(
                     departure_date=parsed_date
                 )
 
             except ValueError:
-                # Let the view return a clean validation error
+
                 raise ValidationError(
                     {
                         "departure_date": [
-                            "Invalid date format. Use YYYY-MM-DD."
+                            (
+                                "Invalid date format. "
+                                "Use YYYY-MM-DD."
+                            )
                         ]
                     }
                 )
@@ -135,19 +396,29 @@ class CreateTripListView(generics.ListCreateAPIView):
         return queryset
 
     # ==========================================================
-    # CREATE TRIP
+    # CREATE
     # ==========================================================
 
     @transaction.atomic
-    def create(self, request, *args, **kwargs):
+    def create(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
 
         serializer = self.get_serializer(
             data=request.data,
-            context={"request": request},
+            context={
+                "request": request
+            },
         )
 
         try:
-            serializer.is_valid(raise_exception=True)
+
+            serializer.is_valid(
+                raise_exception=True
+            )
 
             trip = serializer.save()
 
@@ -162,10 +433,14 @@ class CreateTripListView(generics.ListCreateAPIView):
             return Response(
                 {
                     "success": True,
-                    "message": "Trip created successfully.",
+                    "message": (
+                        "Trip created successfully."
+                    ),
                     "data": TripSerializer(
                         trip,
-                        context={"request": request},
+                        context={
+                            "request": request
+                        },
                     ).data,
                 },
                 status=status.HTTP_201_CREATED,
@@ -197,7 +472,10 @@ class CreateTripListView(generics.ListCreateAPIView):
             return Response(
                 {
                     "success": False,
-                    "message": "Unable to create trip at this time.",
+                    "message": (
+                        "Unable to create trip "
+                        "at this time."
+                    ),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -206,7 +484,12 @@ class CreateTripListView(generics.ListCreateAPIView):
     # LIST
     # ==========================================================
 
-    def list(self, request, *args, **kwargs):
+    def list(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
 
         try:
 
@@ -222,7 +505,10 @@ class CreateTripListView(generics.ListCreateAPIView):
             return Response(
                 {
                     "success": True,
-                    "message": "Trips retrieved successfully.",
+                    "message": (
+                        "Trips retrieved "
+                        "successfully."
+                    ),
                     "count": queryset.count(),
                     "data": serializer.data,
                 },
@@ -234,10 +520,17 @@ class CreateTripListView(generics.ListCreateAPIView):
             return Response(
                 {
                     "success": False,
-                    "message": "Invalid search parameters.",
-                    "errors": e.message_dict
-                    if hasattr(e, "message_dict")
-                    else e.messages,
+                    "message": (
+                        "Invalid search parameters."
+                    ),
+                    "errors": (
+                        e.message_dict
+                        if hasattr(
+                            e,
+                            "message_dict",
+                        )
+                        else e.messages
+                    ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -251,11 +544,12 @@ class CreateTripListView(generics.ListCreateAPIView):
             return Response(
                 {
                     "success": False,
-                    "message": "Unable to retrieve trips.",
+                    "message": (
+                        "Unable to retrieve trips."
+                    ),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
 
 
 class MyTripListView(generics.ListAPIView):
