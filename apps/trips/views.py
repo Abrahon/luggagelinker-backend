@@ -25,145 +25,24 @@ from rest_framework.views import APIView
 from apps.trips.models import Trip, TripStatus
 from apps.bookings.models import Booking, BookingStatus
 from apps.matching.models import Match
+from django.contrib.auth import get_user_model
+from django.db.models import Avg, Count, Q
+
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+
+from apps.reviews.models import Review
+
+from .models import Trip, TripStatus
+from .serializers import TravelerProfileSerializer
+
+
+User = get_user_model()
 
 from .serializers import AdminTripSerializer
 
 
 logger = logging.getLogger(__name__)
-
-
-# class CreateTripListView(generics.ListCreateAPIView):
-
-#     serializer_class = TripSerializer
-#     permission_classes = [IsAuthenticated,IsUserAllowed,]
-
-#     # ==========================================================
-#     # LIST PUBLIC TRIPS
-#     # ==========================================================
-
-#     def get_queryset(self):
-
-#         return (
-#             Trip.objects
-#             .select_related("traveler")
-#             .filter(
-#                 is_active=True,
-#                 is_public=True,
-#             )
-#             .order_by("-created_at")
-#         )
-
-#     # ==========================================================
-#     # CREATE TRIP
-#     # ==========================================================
-
-#     @transaction.atomic
-#     def create(self, request, *args, **kwargs):
-
-#         serializer = self.get_serializer(
-#             data=request.data,
-#             context={"request": request},
-#         )
-
-#         try:
-
-#             serializer.is_valid(raise_exception=True)
-
-        
-#             trip = serializer.save()
-
-#             run_trip_matching(trip)
-            
-
-#             logger.info(
-#                 f"Trip created successfully. "
-#                 f"Trip={trip.id} "
-#                 f"Traveler={request.user.id}"
-#             )
-
-#             return Response(
-#                 {
-#                     "success": True,
-#                     "message": "Trip created successfully.",
-#                     "data": TripSerializer(
-#                         trip,
-#                         context={"request": request},
-#                     ).data,
-#                 },
-#                 status=status.HTTP_201_CREATED,
-#             )
-
-#         except ValidationError as e:
-
-#             logger.warning(
-#                 f"Trip validation failed. "
-#                 f"Traveler={request.user.id}"
-#             )
-
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Validation failed.",
-#                     "errors": e.detail,
-#                 },
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         except Exception:
-
-#             logger.exception(
-#                 f"Trip creation failed. "
-#                 f"Traveler={request.user.id}"
-#             )
-
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Unable to create trip at this time.",
-#                 },
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             )
-
-#     # ==========================================================
-#     # LIST PUBLIC TRIPS
-#     # ==========================================================
-
-#     def list(self, request, *args, **kwargs):
-
-#         try:
-
-#             queryset = self.filter_queryset(
-#                 self.get_queryset()
-#             )
-
-#             serializer = self.get_serializer(
-#                 queryset,
-#                 many=True,
-#             )
-
-#             return Response(
-#                 {
-#                     "success": True,
-#                     "message": "Trips retrieved successfully.",
-#                     "count": queryset.count(),
-#                     "data": serializer.data,
-#                 },
-#                 status=status.HTTP_200_OK,
-#             )
-
-#         except Exception:
-
-#             logger.exception(
-#                 "Failed to retrieve trips."
-#             )
-
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Unable to retrieve trips.",
-#                 },
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             )
 
 class CreateTripListView(generics.ListCreateAPIView):
 
@@ -856,6 +735,400 @@ class AdminCancelTripView(APIView):
                     "bookings_cancelled": cancelled_booking_count,
                     "matches_deactivated": deactivated_matches,
                 },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+from django.contrib.auth import get_user_model
+from django.db.models import Avg, Count
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.bookings.models import Booking, BookingStatus
+from apps.disputes.models import Dispute
+from apps.disputes.enums import (
+    DisputeStatus,
+    ResolutionType,
+)
+from apps.reviews.models import Review
+
+from .serializers import TravelerProfileSerializer
+
+
+User = get_user_model()
+
+
+class TravelerProfileAPIView(APIView):
+    """
+    Retrieve a traveler's public profile and calculated statistics.
+
+    Statistics are calculated from source-of-truth models:
+
+        Booking  -> deliveries / trips
+        Dispute  -> disputed deliveries / traveler fault
+        Review   -> rating / reviews
+
+    No statistics are permanently stored on User/Profile.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, traveler_id):
+
+        # ======================================================
+        # 1. GET TRAVELER
+        # ======================================================
+
+        traveler = (
+            User.objects
+            .select_related("profile")
+            .filter(
+                id=traveler_id,
+                is_active=True,
+            )
+            .first()
+        )
+
+        if traveler is None:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Traveler not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # ======================================================
+        # 2. COMPLETED BOOKINGS
+        #
+        # One COMPLETED booking = one completed delivery.
+        # ======================================================
+
+        completed_bookings = Booking.objects.filter(
+            traveler_id=traveler.id,
+            status=BookingStatus.COMPLETED,
+        )
+
+        completed_deliveries = completed_bookings.count()
+
+        # ======================================================
+        # 3. COMPLETED TRIPS
+        #
+        # A traveler may carry multiple packages on the same
+        # trip.
+        #
+        # Therefore:
+        #
+        # 10 bookings on 6 trips = 6 completed trips
+        # ======================================================
+
+        completed_trips = (
+            completed_bookings
+            .values("trip_id")
+            .distinct()
+            .count()
+        )
+
+        # ======================================================
+        # 4. COMPLETED DELIVERIES HAVING A DISPUTE
+        #
+        # Dispute.booking is OneToOneField.
+        #
+        # Therefore one booking can have only one dispute.
+        #
+        # We count DISTINCT booking IDs because the metric is:
+        #
+        #     "How many deliveries were disputed?"
+        #
+        # NOT:
+        #
+        #     "How many dispute records exist?"
+        # ======================================================
+
+        completed_disputes = (
+            Dispute.objects
+            .filter(
+                booking__traveler_id=traveler.id,
+                booking__status=BookingStatus.COMPLETED,
+            )
+            .select_related("booking")
+        )
+
+        disputed_booking_ids = (
+            completed_disputes
+            .values_list(
+                "booking_id",
+                flat=True,
+            )
+            .distinct()
+        )
+
+        disputed_deliveries = len(
+            set(disputed_booking_ids)
+        )
+
+        # ======================================================
+        # 5. PENDING DISPUTES
+        #
+        # Pending disputes are NOT considered failures.
+        #
+        # OPEN
+        # UNDER_REVIEW
+        # WAITING_FOR_USER
+        # ======================================================
+
+        pending_disputes = (
+            completed_disputes
+            .filter(
+                status__in=[
+                    DisputeStatus.OPEN,
+                    DisputeStatus.UNDER_REVIEW,
+                    DisputeStatus.WAITING_FOR_USER,
+                ]
+            )
+            .count()
+        )
+
+        # ======================================================
+        # 6. TRAVELER-FAULT DISPUTES
+        #
+        # Your enums DO NOT contain:
+        #
+        #     DisputeResponsibleParty
+        #
+        # Therefore we do NOT use it.
+        #
+        # Existing business rule:
+        #
+        # Traveler is considered responsible only when:
+        #
+        #   1. dispute is against this traveler
+        #   2. dispute has a final resolution
+        #   3. resolution is FULL_REFUND or PARTIAL_REFUND
+        #
+        # REJECTED / NO_ACTION
+        #     -> NOT traveler fault
+        #
+        # RELEASE_PAYMENT
+        #     -> NOT traveler fault
+        #
+        # OPEN / UNDER_REVIEW / WAITING_FOR_USER
+        #     -> NOT traveler fault
+        # ======================================================
+
+        traveler_fault_disputes = (
+            completed_disputes
+            .filter(
+                against_user_id=traveler.id,
+                status__in=[
+                    DisputeStatus.RESOLVED,
+                    DisputeStatus.CLOSED,
+                ],
+                resolution__in=[
+                    ResolutionType.FULL_REFUND,
+                    ResolutionType.PARTIAL_REFUND,
+                ],
+            )
+            .count()
+        )
+
+        # ======================================================
+        # 7. SUCCESSFUL DELIVERIES
+        #
+        # Only confirmed traveler-fault deliveries are removed.
+        #
+        # Example:
+        #
+        # completed deliveries = 10
+        # traveler fault        = 2
+        #
+        # successful deliveries = 8
+        # ======================================================
+
+        successful_deliveries = max(
+            completed_deliveries
+            - traveler_fault_disputes,
+            0,
+        )
+
+        # ======================================================
+        # 8. SUCCESS RATE
+        #
+        # Pending disputes do NOT reduce success rate.
+        #
+        # Formula:
+        #
+        # successful deliveries
+        # -------------------- × 100
+        # completed deliveries
+        # ======================================================
+
+        if completed_deliveries > 0:
+            success_rate = round(
+                (
+                    successful_deliveries
+                    / completed_deliveries
+                ) * 100,
+                1,
+            )
+        else:
+            success_rate = 0.0
+
+        # ======================================================
+        # 9. REVIEWS
+        # ======================================================
+
+        reviews = (
+            Review.objects
+            .filter(
+                traveler_id=traveler.id
+            )
+            .select_related(
+                "sender",
+                "sender__profile",
+            )
+        )
+
+        # ======================================================
+        # 10. TOTAL REVIEWS
+        # ======================================================
+
+        total_reviews = reviews.count()
+
+        # ======================================================
+        # 11. AVERAGE RATING
+        # ======================================================
+
+        average_rating = (
+            reviews.aggregate(
+                average=Avg("rating")
+            )["average"]
+        )
+
+        if average_rating is None:
+            average_rating = 0.0
+        else:
+            average_rating = round(
+                float(average_rating),
+                1,
+            )
+
+        # ======================================================
+        # 12. RATING DISTRIBUTION
+        # ======================================================
+
+        rating_distribution = {
+            "5": 0,
+            "4": 0,
+            "3": 0,
+            "2": 0,
+            "1": 0,
+        }
+
+        rating_counts = (
+            reviews
+            .values("rating")
+            .annotate(
+                count=Count("id")
+            )
+        )
+
+        for item in rating_counts:
+
+            rating = str(item["rating"])
+
+            if rating in rating_distribution:
+                rating_distribution[rating] = (
+                    item["count"]
+                )
+
+        # ======================================================
+        # 13. RECENT REVIEWS
+        # ======================================================
+
+        recent_reviews = list(
+            reviews
+            .order_by("-created_at")[:5]
+        )
+
+        # ======================================================
+        # 14. TEMPORARY SERIALIZER VALUES
+        #
+        # These are request-level calculated values.
+        # Nothing is written to the database.
+        # ======================================================
+
+        traveler.average_rating_value = (
+            average_rating
+        )
+
+        traveler.total_reviews_value = (
+            total_reviews
+        )
+
+        traveler.completed_trips_value = (
+            completed_trips
+        )
+
+        traveler.total_deliveries_value = (
+            completed_deliveries
+        )
+
+        traveler.successful_deliveries_value = (
+            successful_deliveries
+        )
+
+        traveler.disputed_deliveries_value = (
+            disputed_deliveries
+        )
+
+        traveler.traveler_fault_disputes_value = (
+            traveler_fault_disputes
+        )
+
+        traveler.pending_disputes_value = (
+            pending_disputes
+        )
+
+        traveler.success_rate_value = (
+            success_rate
+        )
+
+        traveler.rating_distribution_data = (
+            rating_distribution
+        )
+
+        traveler.recent_reviews_data = (
+            recent_reviews
+        )
+
+        # ======================================================
+        # 15. SERIALIZE
+        # ======================================================
+
+        serializer = TravelerProfileSerializer(
+            traveler,
+            context={
+                "request": request,
+            },
+        )
+
+        # ======================================================
+        # 16. RESPONSE
+        # ======================================================
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Traveler profile retrieved "
+                    "successfully."
+                ),
+                "data": serializer.data,
             },
             status=status.HTTP_200_OK,
         )

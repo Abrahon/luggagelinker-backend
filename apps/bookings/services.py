@@ -526,67 +526,6 @@ class BookingService:
 
 class BookingLifecycleService:
 
-    # @classmethod
-    # def verify_and_execute_pickup(cls, booking: Booking) -> Booking:
-    #     """
-    #     Executes atomic business transitions for package pickup.
-    #     """
-
-    #     with transaction.atomic():
-
-    #         booking = Booking.objects.select_for_update().get(id=booking.id)
-
-    #         if booking.status == BookingStatus.PICKED_UP:
-    #             return booking
-
-    #         if booking.status != BookingStatus.CONFIRMED:
-    #             raise DjangoValidationError(
-    #                 f"Cannot execute pickup from status: {booking.status}"
-    #             )
-
-    #         booking.status = BookingStatus.PICKED_UP
-    #         booking.picked_up_at = timezone.now()
-    #         booking.save(update_fields=["status", "picked_up_at"])
-
-    #         create_notification(
-    #             user=booking.sender,
-    #             title="Package Picked Up",
-    #             message=(
-    #                 f"Traveler successfully picked up your package "
-    #                 f"({booking.tracking_number}). "
-    #                 "Delivery is now in progress."
-    #             ),
-    #             notification_type=NotificationType.BOOKING,
-    #             object_id=booking.id,
-    #             action_url=f"/bookings/{booking.id}/",
-    #         )
-
-    #         create_notification(
-    #             user=booking.traveler,
-    #             title="Pickup Confirmed",
-    #             message=(
-    #                 f"You successfully picked up package "
-    #                 f"{booking.tracking_number}. "
-    #                 "Please deliver it to the destination."
-    #             ),
-    #             notification_type=NotificationType.BOOKING,
-    #             object_id=booking.id,
-    #             action_url=f"/bookings/{booking.id}/",
-    #         )
-
-    #         send_delivery_pin_email(
-    #             user_email=booking.sender.email,
-    #             booking=booking,
-    #             delivery_pin=booking.delivery_verification_pin,
-    #         )
-
-    #         logger.info(
-    #             "Booking %s successfully transitioned to PICKED_UP.",
-    #             booking.id,
-    #         )
-
-    #         return booking
-
     @classmethod
     def verify_and_execute_pickup(cls, booking: Booking) -> Booking:
         """

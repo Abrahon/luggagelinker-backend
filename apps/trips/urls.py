@@ -7,7 +7,8 @@ from .views import (
     TripManageView,
     AdminTripDetailView,
     AdminCancelTripView,
-    AdminTripListView
+    AdminTripListView,
+    TravelerProfileAPIView
 )
 
 urlpatterns = [
@@ -35,6 +36,14 @@ urlpatterns = [
         TripManageView.as_view(),
         name="trip-manage",
     ),
+    # apps/trips/urls.py
+
+    path(
+        "travelers/<uuid:traveler_id>/profile/",
+        TravelerProfileAPIView.as_view(),
+        name="traveler-profile",
+    ),
+
     path(
         "admin/trips/",
         AdminTripListView.as_view(),
