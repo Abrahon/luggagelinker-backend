@@ -84,3 +84,65 @@ class Negotiation(models.Model):
             f"Negotiation {self.id} "
             f"- Booking {self.booking_id}"
         )
+
+
+class NegotiationOffer(models.Model):
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    negotiation = models.ForeignKey(
+        Negotiation,
+        on_delete=models.CASCADE,
+        related_name="offers",
+    )
+
+    offered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="negotiation_offers",
+    )
+
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+    )
+
+    currency = models.CharField(
+        max_length=10,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=OfferStatus.choices,
+        default=OfferStatus.PENDING,
+    )
+
+    message = models.TextField(
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    responded_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        db_table = "negotiation_offers"
+        ordering = ["created_at"]
+
+    def __str__(self):
+
+        return (
+            f"{self.amount} "
+            f"{self.currency} "
+            f"- {self.status}"
+        )
