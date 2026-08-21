@@ -797,7 +797,6 @@ class PackageDashboardStatsView(APIView):
 
 # apps/trips/views.py
 # apps/trips/views.py
-
 from django.contrib.auth import get_user_model
 
 from rest_framework.views import APIView
@@ -818,32 +817,17 @@ class SenderProfileAPIView(APIView):
     Public sender profile endpoint.
 
     Shows:
-    - Basic sender information
-    - Profile image
-    - Email/phone verification
-    - Package statistics
+    - Basic profile information
+    - Contact information
+    - Email verification status
+    - Sending statistics
     - Success rate
-
-    Sender identity/KYC verification is intentionally not included
-    because sender identity verification has not been implemented yet.
-
-    Success rate is calculated using only final booking outcomes:
-
-        COMPLETED = successful
-        CANCELLED = unsuccessful
-
-    Pending/in-progress bookings do not affect the success rate.
+    - Account creation date
     """
 
-    permission_classes = [
-        IsAuthenticated,
-    ]
+    permission_classes = [IsAuthenticated]
 
-    def get(
-        self,
-        request,
-        sender_id,
-    ):
+    def get(self, request, sender_id):
 
         # ======================================================
         # 1. GET SENDER
@@ -860,7 +844,6 @@ class SenderProfileAPIView(APIView):
         )
 
         if sender is None:
-
             return Response(
                 {
                     "success": False,
@@ -870,16 +853,7 @@ class SenderProfileAPIView(APIView):
             )
 
         # ======================================================
-        # 2. SENDER BOOKINGS
-        #
-        # Get all bookings belonging to this sender.
-        #
-        # We will use the final states:
-        #
-        # COMPLETED -> successful
-        # CANCELLED -> unsuccessful
-        #
-        # Other states are ignored for success-rate calculation.
+        # 2. ALL SENDER BOOKINGS
         # ======================================================
 
         sender_bookings = Booking.objects.filter(
@@ -887,68 +861,45 @@ class SenderProfileAPIView(APIView):
         )
 
         # ======================================================
-        # 3. COMPLETED BOOKINGS
-        #
-        # Successful deliveries.
+        # 3. SUCCESSFUL / COMPLETED DELIVERIES
         # ======================================================
-
-        completed_bookings = sender_bookings.filter(
-            status=BookingStatus.COMPLETED
-        )
 
         successful_deliveries = (
-            completed_bookings.count()
+            sender_bookings
+            .filter(
+                status=BookingStatus.COMPLETED
+            )
+            .count()
         )
 
         # ======================================================
-        # 4. CANCELLED BOOKINGS
-        #
-        # Cancelled packages count as unsuccessful outcomes.
+        # 4. CANCELLED DELIVERIES
         # ======================================================
 
-        cancelled_bookings = sender_bookings.filter(
-            status=BookingStatus.CANCELLED
-        )
-
-        cancelled_packages = (
-            cancelled_bookings.count()
+        cancelled_deliveries = (
+            sender_bookings
+            .filter(
+                status=BookingStatus.CANCELLED
+            )
+            .count()
         )
 
         # ======================================================
-        # 5. TOTAL PACKAGES
+        # 5. TOTAL FINALIZED PACKAGES
         #
-        # Only finalized outcomes are counted.
+        # Pending / active bookings are not included.
         #
-        # Therefore:
-        #
-        # total_packages =
-        #     completed + cancelled
-        #
-        # Pending / accepted / in-transit bookings are not
-        # counted yet.
+        # Total =
+        # completed + cancelled
         # ======================================================
 
         total_packages = (
             successful_deliveries
-            + cancelled_packages
+            + cancelled_deliveries
         )
 
         # ======================================================
         # 6. SUCCESS RATE
-        #
-        # Formula:
-        #
-        # successful deliveries
-        # --------------------- × 100
-        # completed + cancelled
-        #
-        # Example:
-        #
-        # Completed = 26
-        # Cancelled = 4
-        #
-        # 26 / (26 + 4) × 100
-        # = 86.7%
         # ======================================================
 
         if total_packages > 0:
@@ -967,11 +918,6 @@ class SenderProfileAPIView(APIView):
 
         # ======================================================
         # 7. TEMPORARY SERIALIZER VALUES
-        #
-        # These values are NOT saved to the database.
-        #
-        # They only exist during this request and are consumed
-        # by SenderProfileSerializer.
         # ======================================================
 
         sender.total_packages_value = (
@@ -982,8 +928,8 @@ class SenderProfileAPIView(APIView):
             successful_deliveries
         )
 
-        sender.cancelled_packages_value = (
-            cancelled_packages
+        sender.cancelled_deliveries_value = (
+            cancelled_deliveries
         )
 
         sender.success_rate_value = (
@@ -991,7 +937,23 @@ class SenderProfileAPIView(APIView):
         )
 
         # ======================================================
-        # 8. SERIALIZER
+        # 8. EMAIL VERIFICATION
+        #
+        # User.is_verified comes from your User model.
+        #
+        # is_verified = True
+        #     -> email verified
+        #
+        # is_verified = False
+        #     -> email not verified
+        # ======================================================
+
+        sender.is_email_verified_value = bool(
+            sender.is_verified
+        )
+
+        # ======================================================
+        # 9. SERIALIZER
         # ======================================================
 
         serializer = SenderProfileSerializer(
@@ -1002,7 +964,7 @@ class SenderProfileAPIView(APIView):
         )
 
         # ======================================================
-        # 9. RESPONSE
+        # 10. RESPONSE
         # ======================================================
 
         return Response(

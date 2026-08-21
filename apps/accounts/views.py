@@ -141,97 +141,271 @@ class SignupView(generics.GenericAPIView):
 
 
 # verify email
+# class VerifyOTPView(APIView):
+#     permission_classes = [AllowAny]
+
+#     def post(self, request):
+#         email = str(request.data.get("email") or "").strip().lower()
+#         otp = str(request.data.get("otp") or "").strip()
+
+#         if not email or not otp:
+#             return Response(
+#                 {"detail": "Email and OTP are required."},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         logger.info("VerifyOTPView called | email=%s", email)
+
+#         try:
+#             with transaction.atomic():
+#                 otp_obj = (
+#                     OTP.objects.select_for_update()
+#                     .filter(email__iexact=email, code=otp)
+#                     .order_by("-created_at")
+#                     .first()
+#                 )
+
+#                 if not otp_obj:
+#                     return Response(
+#                         {"detail": "Invalid OTP."},
+#                         status=status.HTTP_400_BAD_REQUEST,
+#                     )
+
+#                 if otp_obj.is_expired():
+#                     otp_obj.delete()
+#                     return Response(
+#                         {"detail": "OTP expired."},
+#                         status=status.HTTP_400_BAD_REQUEST,
+#                     )
+
+#                 user = User.objects.filter(email__iexact=email).first()
+#                 if not user:
+#                     return Response(
+#                         {"detail": "User not found. Please register again."},
+#                         status=status.HTTP_400_BAD_REQUEST,
+#                     )
+
+#                 if not user.is_active:
+#                     user.is_active = True
+#                     user.save(update_fields=['is_active'])
+
+#                 OTP.objects.filter(email__iexact=email).delete()
+
+#         except Exception:
+#             logger.exception("Unexpected error during OTP verification")
+#             return Response(
+#                 {"detail": "Something went wrong while verifying OTP."},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
+
+#         # =========================
+#         # FIX: FETCH SUBSCRIPTION PLAN
+#         # =========================
+#         # subscription = (
+#         #     Subscription.objects
+#         #     .select_related("plan")
+#         #     .filter(user=user)
+#         #     .first()
+#         # )
+
+#         # plan_type = (
+#         #     subscription.plan.plan_type
+#         #     if subscription and subscription.plan
+#         #     else None
+#         # )
+
+#         refresh = RefreshToken.for_user(user)
+
+#         return Response(
+#             {
+#                 "detail": "OTP verified successfully.",
+#                 "access": str(refresh.access_token),
+#                 "refresh": str(refresh),
+#                 "user": {
+#                     "id": user.id,
+#                     "email": user.email,
+#                     # "name": user.name,
+#                     "role": user.role,
+#                     # "plan_type": plan_type,
+#                 },
+#             },
+#             status=status.HTTP_201_CREATED,
+#         )
+
+
+# verify email
 class VerifyOTPView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = str(request.data.get("email") or "").strip().lower()
-        otp = str(request.data.get("otp") or "").strip()
+
+        email = str(
+            request.data.get("email") or ""
+        ).strip().lower()
+
+        otp = str(
+            request.data.get("otp") or ""
+        ).strip()
+
+        # ======================================================
+        # 1. VALIDATE INPUT
+        # ======================================================
 
         if not email or not otp:
             return Response(
-                {"detail": "Email and OTP are required."},
+                {
+                    "detail": "Email and OTP are required."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        logger.info("VerifyOTPView called | email=%s", email)
+        logger.info(
+            "VerifyOTPView called | email=%s",
+            email,
+        )
 
         try:
+
             with transaction.atomic():
+
+                # ==================================================
+                # 2. GET OTP
+                # ==================================================
+
                 otp_obj = (
-                    OTP.objects.select_for_update()
-                    .filter(email__iexact=email, code=otp)
+                    OTP.objects
+                    .select_for_update()
+                    .filter(
+                        email__iexact=email,
+                        code=otp,
+                    )
                     .order_by("-created_at")
                     .first()
                 )
 
                 if not otp_obj:
                     return Response(
-                        {"detail": "Invalid OTP."},
+                        {
+                            "detail": "Invalid OTP."
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+
+                # ==================================================
+                # 3. CHECK OTP EXPIRATION
+                # ==================================================
 
                 if otp_obj.is_expired():
+
                     otp_obj.delete()
+
                     return Response(
-                        {"detail": "OTP expired."},
+                        {
+                            "detail": "OTP expired."
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                user = User.objects.filter(email__iexact=email).first()
+                # ==================================================
+                # 4. GET USER
+                # ==================================================
+
+                user = (
+                    User.objects
+                    .select_for_update()
+                    .filter(
+                        email__iexact=email
+                    )
+                    .first()
+                )
+
                 if not user:
                     return Response(
-                        {"detail": "User not found. Please register again."},
+                        {
+                            "detail": (
+                                "User not found. "
+                                "Please register again."
+                            )
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+
+                # ==================================================
+                # 5. ACTIVATE USER
+                # ==================================================
 
                 if not user.is_active:
                     user.is_active = True
-                    user.save(update_fields=['is_active'])
 
-                OTP.objects.filter(email__iexact=email).delete()
+                # ==================================================
+                # 6. MARK EMAIL AS VERIFIED
+                #
+                # This is the important missing part.
+                # ==================================================
+
+                user.is_verified = True
+
+                user.save(
+                    update_fields=[
+                        "is_active",
+                        "is_verified",
+                        "updated_at",
+                    ]
+                )
+
+                # ==================================================
+                # 7. DELETE USED OTP
+                # ==================================================
+
+                OTP.objects.filter(
+                    email__iexact=email
+                ).delete()
 
         except Exception:
-            logger.exception("Unexpected error during OTP verification")
+
+            logger.exception(
+                "Unexpected error during OTP verification"
+            )
+
             return Response(
-                {"detail": "Something went wrong while verifying OTP."},
+                {
+                    "detail": (
+                        "Something went wrong "
+                        "while verifying OTP."
+                    )
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # =========================
-        # FIX: FETCH SUBSCRIPTION PLAN
-        # =========================
-        # subscription = (
-        #     Subscription.objects
-        #     .select_related("plan")
-        #     .filter(user=user)
-        #     .first()
-        # )
-
-        # plan_type = (
-        #     subscription.plan.plan_type
-        #     if subscription and subscription.plan
-        #     else None
-        # )
+        # ======================================================
+        # 8. GENERATE JWT
+        # ======================================================
 
         refresh = RefreshToken.for_user(user)
+
+        # ======================================================
+        # 9. RESPONSE
+        # ======================================================
 
         return Response(
             {
                 "detail": "OTP verified successfully.",
-                "access": str(refresh.access_token),
+
+                "access": str(
+                    refresh.access_token
+                ),
+
                 "refresh": str(refresh),
+
                 "user": {
-                    "id": user.id,
+                    "id": str(user.id),
                     "email": user.email,
-                    # "name": user.name,
                     "role": user.role,
-                    # "plan_type": plan_type,
+                    "is_verified": user.is_verified,
                 },
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_200_OK,
         )
-
 
 import logging
 

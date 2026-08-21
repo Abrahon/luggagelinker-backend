@@ -369,13 +369,13 @@ class PackageDashboardStatsSerializer(serializers.Serializer):
 
 
 # apps/trips/serializers.py
-
 from django.contrib.auth import get_user_model
+
 from rest_framework import serializers
 
-from apps.profiles.models import Profile
 
 User = get_user_model()
+
 
 class SenderProfileSerializer(serializers.ModelSerializer):
 
@@ -384,10 +384,23 @@ class SenderProfileSerializer(serializers.ModelSerializer):
     phone = serializers.SerializerMethodField()
     profile_image = serializers.SerializerMethodField()
 
+    # ==========================================================
+    # ACCOUNT INFORMATION
+    # ==========================================================
+
     member_since = serializers.DateTimeField(
         source="date_joined",
         read_only=True,
     )
+
+    is_email_verified = serializers.BooleanField(
+        source="is_email_verified_value",
+        read_only=True,
+    )
+
+    # ==========================================================
+    # SENDING STATISTICS
+    # ==========================================================
 
     total_packages = serializers.IntegerField(
         source="total_packages_value",
@@ -409,57 +422,78 @@ class SenderProfileSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
-    is_email_verified = serializers.BooleanField(
-        source="is_email_verified_value",
-        read_only=True,
-    )
-
     class Meta:
         model = User
 
         fields = [
             "id",
+
+            # Profile
             "name",
             "country",
-
             "email",
             "phone",
             "profile_image",
 
+            # Account
             "member_since",
+            "is_email_verified",
 
+            # Statistics
             "total_packages",
             "successful_deliveries",
             "cancelled_deliveries",
             "success_rate",
-
-            "is_email_verified",
         ]
 
+    # ==========================================================
+    # NAME
+    # ==========================================================
+
     def get_name(self, obj):
-        profile = getattr(obj, "profile", None)
+
+        profile = getattr(
+            obj,
+            "profile",
+            None,
+        )
 
         if not profile:
             return None
 
-        first_name = getattr(
-            profile,
-            "first_name",
-            "",
-        ) or ""
+        first_name = (
+            getattr(
+                profile,
+                "first_name",
+                "",
+            )
+            or ""
+        )
 
-        last_name = getattr(
-            profile,
-            "last_name",
-            "",
-        ) or ""
+        last_name = (
+            getattr(
+                profile,
+                "last_name",
+                "",
+            )
+            or ""
+        )
 
         return (
             f"{first_name} {last_name}"
         ).strip() or None
 
+    # ==========================================================
+    # COUNTRY
+    # ==========================================================
+
     def get_country(self, obj):
-        profile = getattr(obj, "profile", None)
+
+        profile = getattr(
+            obj,
+            "profile",
+            None,
+        )
 
         if not profile:
             return None
@@ -470,20 +504,41 @@ class SenderProfileSerializer(serializers.ModelSerializer):
             None,
         )
 
+    # ==========================================================
+    # PHONE
+    # ==========================================================
+
     def get_phone(self, obj):
-        profile = getattr(obj, "profile", None)
+
+        profile = getattr(
+            obj,
+            "profile",
+            None,
+        )
 
         if not profile:
             return None
 
-        return getattr(
-            profile,
-            "phone",
-            None,
-        ) or None
+        return (
+            getattr(
+                profile,
+                "phone",
+                None,
+            )
+            or None
+        )
+
+    # ==========================================================
+    # PROFILE IMAGE
+    # ==========================================================
 
     def get_profile_image(self, obj):
-        profile = getattr(obj, "profile", None)
+
+        profile = getattr(
+            obj,
+            "profile",
+            None,
+        )
 
         if not profile:
             return None
@@ -499,5 +554,9 @@ class SenderProfileSerializer(serializers.ModelSerializer):
 
         try:
             return picture.url
-        except (AttributeError, ValueError):
+
+        except (
+            AttributeError,
+            ValueError,
+        ):
             return None
