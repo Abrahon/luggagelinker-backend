@@ -25,7 +25,9 @@ from .views import (
     SenderBookingTimelineView,
     SenderRecentBookingView,
     SenderDeliveryHistoryView,
-    SenderBookingStatsView
+    SenderBookingStatsView,
+    CreateBookingPriceOfferAPIView,
+    BookingPriceOfferActionAPIView
 )
 
 app_name = "bookings"
@@ -141,6 +143,19 @@ urlpatterns = [
         "sender/delivery-history/stats/",
         SenderDeliveryHistoryStatsView.as_view(),
         name="sender-delivery-history-stats",
+    ),
+        # Traveler creates an offer
+    path(
+        "bookings/<uuid:booking_id>/price-offers/",
+        CreateBookingPriceOfferAPIView.as_view(),
+        name="create-booking-price-offer",
+    ),
+
+    # Sender accepts/rejects
+    path(
+        "price-offers/<uuid:offer_id>/",
+        BookingPriceOfferActionAPIView.as_view(),
+        name="booking-price-offer-action",
     ),
 
 

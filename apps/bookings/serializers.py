@@ -1838,3 +1838,87 @@ class SenderDeliveryHistoryStatsSerializer(serializers.Serializer):
         max_digits=12,
         decimal_places=2,
     )
+
+
+
+from decimal import Decimal
+
+from django.utils import timezone
+from rest_framework import serializers
+
+from .models import (
+    Booking,
+    BookingPriceOffer,
+    BookingPriceOfferStatus,
+)
+
+
+class BookingPriceOfferSerializer(
+    serializers.ModelSerializer
+):
+
+    class Meta:
+        model = BookingPriceOffer
+
+        fields = [
+            "id",
+            "booking",
+            "traveler",
+            "offer_reward",
+            "currency",
+            "message",
+            "status",
+            "expires_at",
+            "responded_at",
+            "created_at",
+            "updated_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "booking",
+            "traveler",
+            "currency",
+            "status",
+            "expires_at",
+            "responded_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_offer_reward(self, value):
+
+        if value <= Decimal("0"):
+            raise serializers.ValidationError(
+                "Offer reward must be greater than zero."
+            )
+
+        return value
+
+    def validate(self, attrs):
+
+        request = self.context["request"]
+        booking = self.context["booking"]
+
+        # -----------------------------------------
+        # Only traveler can create offer
+        # -----------------------------------------
+
+        if booking.traveler_id != request.user.id:
+            raise serializers.ValidationError(
+                "Only the traveler can create a price offer."
+            )
+
+        # -----------------------------------------
+        # Booking must still allow negotiation
+        # -----------------------------------------
+
+        if booking.status not in [
+            BookingStatus.PENDING,
+            BookingStatus.TRAVELER_ACCEPTED,
+        ]:
+            raise serializers.ValidationError(
+                "Price negotiation is no longer available for this booking."
+            )
+
+        return attrs

@@ -1888,3 +1888,419 @@ class SenderDeliveryHistoryStatsView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+from django.db import transaction
+from django.utils import timezone
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from .models import (
+    Booking,
+    BookingPriceOffer,
+    BookingPriceOfferStatus,
+    BookingStatus,
+)
+
+from .serializers import BookingPriceOfferSerializer
+
+class CreateBookingPriceOfferAPIView(APIView):
+
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    @transaction.atomic
+    def post(
+        self,
+        request,
+        booking_id,
+    ):
+
+        # =========================================
+        # 1. GET BOOKING
+        # =========================================
+
+        booking = (
+            Booking.objects
+            .select_for_update()
+            .select_related(
+                "traveler",
+                "sender",
+            )
+            .filter(
+                id=booking_id,
+            )
+            .first()
+        )
+
+        if booking is None:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Booking not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # =========================================
+        # 2. ONLY TRAVELER CAN CREATE OFFER
+        # =========================================
+
+        if booking.traveler_id != request.user.id:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Only the traveler can "
+                        "create a price offer."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # =========================================
+        # 3. CHECK BOOKING STATUS
+        # =========================================
+
+        if booking.status not in [
+            BookingStatus.PENDING,
+            BookingStatus.TRAVELER_ACCEPTED,
+        ]:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Price negotiation is no longer "
+                        "available for this booking."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # =========================================
+        # 4. CHECK EXISTING PENDING OFFER
+        # =========================================
+
+        existing_offer = (
+            BookingPriceOffer.objects
+            .filter(
+                booking=booking,
+                status=BookingPriceOfferStatus.PENDING,
+            )
+            .first()
+        )
+
+        if existing_offer:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "There is already a pending "
+                        "price offer for this booking."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # =========================================
+        # 5. CREATE OFFER
+        # =========================================
+
+        serializer = BookingPriceOfferSerializer(
+            data=request.data,
+            context={
+                "request": request,
+                "booking": booking,
+            },
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        offer = serializer.save(
+            booking=booking,
+            traveler=request.user,
+            currency=booking.currency,
+        )
+
+        # =========================================
+        # 6. NOTIFICATION
+        # =========================================
+
+        # Later:
+        #
+        # NotificationService.create(
+        #     user=booking.sender,
+        #     notification_type="PRICE_OFFER",
+        #     ...
+        # )
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Price offer sent successfully."
+                ),
+                "data": BookingPriceOfferSerializer(
+                    offer
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BookingPriceOfferActionAPIView(APIView):
+
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    @transaction.atomic
+    def patch(
+        self,
+        request,
+        offer_id,
+    ):
+
+        action = str(
+            request.data.get("action", "")
+        ).strip().lower()
+
+        # =========================================
+        # VALID ACTION
+        # =========================================
+
+        if action not in [
+            "accept",
+            "reject",
+        ]:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Action must be "
+                        "'accept' or 'reject'."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # =========================================
+        # GET OFFER
+        # =========================================
+
+        offer = (
+            BookingPriceOffer.objects
+            .select_for_update()
+            .select_related(
+                "booking",
+                "booking__sender",
+                "booking__traveler",
+            )
+            .filter(
+                id=offer_id,
+            )
+            .first()
+        )
+
+        if offer is None:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Price offer not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        booking = offer.booking
+
+        # =========================================
+        # ONLY SENDER
+        # =========================================
+
+        if booking.sender_id != request.user.id:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Only the sender can "
+                        "respond to this offer."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # =========================================
+        # OFFER MUST BE PENDING
+        # =========================================
+
+        if (
+            offer.status
+            != BookingPriceOfferStatus.PENDING
+        ):
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "This offer has already "
+                        "been processed."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # =========================================
+        # CHECK EXPIRATION
+        # =========================================
+
+        if (
+            offer.expires_at
+            and offer.expires_at <= timezone.now()
+        ):
+
+            offer.status = (
+                BookingPriceOfferStatus.EXPIRED
+            )
+
+            offer.save(
+                update_fields=[
+                    "status",
+                    "updated_at",
+                ]
+            )
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "This offer has expired.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # =========================================
+        # ACCEPT
+        # =========================================
+
+        if action == "accept":
+
+            # -------------------------------------
+            # UPDATE OFFER
+            # -------------------------------------
+
+            offer.status = (
+                BookingPriceOfferStatus.ACCEPTED
+            )
+
+            offer.responded_at = timezone.now()
+
+            offer.save(
+                update_fields=[
+                    "status",
+                    "responded_at",
+                    "updated_at",
+                ]
+            )
+
+            # -------------------------------------
+            # UPDATE ONLY THIS BOOKING
+            # -------------------------------------
+
+            booking.agreed_reward = (
+                offer.offer_reward
+            )
+
+            booking.save(
+                update_fields=[
+                    "agreed_reward",
+                    "updated_at",
+                ]
+            )
+
+            # -------------------------------------
+            # NOTIFY TRAVELER
+            # -------------------------------------
+
+            # NotificationService.create(
+            #     user=booking.traveler,
+            #     notification_type="PRICE_OFFER_ACCEPTED",
+            # )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": (
+                        "Price offer accepted successfully."
+                    ),
+                    "data": {
+                        "offer_id": str(offer.id),
+                        "offer_status": offer.status,
+                        "booking_id": str(booking.id),
+                        "agreed_reward": str(
+                            booking.agreed_reward
+                        ),
+                        "currency": booking.currency,
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # =========================================
+        # REJECT
+        # =========================================
+
+        offer.status = (
+            BookingPriceOfferStatus.REJECTED
+        )
+
+        offer.responded_at = timezone.now()
+
+        offer.save(
+            update_fields=[
+                "status",
+                "responded_at",
+                "updated_at",
+            ]
+        )
+
+        # -----------------------------------------
+        # IMPORTANT:
+        #
+        # Do NOT change booking.agreed_reward
+        # -----------------------------------------
+
+        # NotificationService.create(
+        #     user=booking.traveler,
+        #     notification_type="PRICE_OFFER_REJECTED",
+        # )
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Price offer rejected."
+                ),
+                "data": {
+                    "offer_id": str(offer.id),
+                    "offer_status": offer.status,
+                    "booking_id": str(booking.id),
+                    "agreed_reward": str(
+                        booking.agreed_reward
+                    ),
+                    "currency": booking.currency,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )

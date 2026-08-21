@@ -123,3 +123,131 @@ class Booking(models.Model):
 
         self.full_clean()
         super().save(*args, **kwargs)
+
+
+class BookingPriceOfferStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    ACCEPTED = "ACCEPTED", "Accepted"
+    REJECTED = "REJECTED", "Rejected"
+    EXPIRED = "EXPIRED", "Expired"
+
+
+class BookingPriceOffer(models.Model):
+    """
+    Stores a price offer made by the traveler for a specific booking.
+
+    IMPORTANT:
+    This does NOT modify the public Trip reward.
+
+    Example:
+
+        Trip.reward_per_kg = $25
+
+        Booking.agreed_reward = $25
+
+        Traveler offers $20
+
+        BookingPriceOffer.offer_reward = $20
+
+        If sender accepts:
+            Booking.agreed_reward = $20
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.CASCADE,
+        related_name="price_offers",
+    )
+
+    traveler = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="traveler_price_offers",
+    )
+
+    # Price offered for the complete booking
+    offer_reward = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+    )
+
+    currency = models.CharField(
+        max_length=10,
+        default="USD",
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=BookingPriceOfferStatus.choices,
+        default=BookingPriceOfferStatus.PENDING,
+    )
+
+    message = models.TextField(
+        blank=True,
+        null=True,
+    )
+
+    responded_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        db_table = "booking_price_offers"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return (
+            f"{self.booking.tracking_number} | "
+            f"{self.offer_reward} {self.currency} | "
+            f"{self.status}"
+        )
+
+    def clean(self):
+
+        if self.booking_id:
+
+            if self.traveler_id != self.booking.traveler_id:
+                raise ValidationError(
+                    "Only the traveler of this booking can create a price offer."
+                )
+
+            if self.currency != self.booking.currency:
+                raise ValidationError(
+                    "Offer currency must match the booking currency."
+                )
+
+        if self.offer_reward <= 0:
+            raise ValidationError(
+                "Offer reward must be greater than zero."
+            )
+
+    def save(self, *args, **kwargs):
+
+        if self.expires_at is None:
+            self.expires_at = (
+                timezone.now() + timedelta(minutes=30)
+            )
+
+        self.full_clean()
+
+        super().save(*args, **kwargs)
