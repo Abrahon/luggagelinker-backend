@@ -794,3 +794,225 @@ class PackageDashboardStatsView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+# apps/trips/views.py
+# apps/trips/views.py
+
+from django.contrib.auth import get_user_model
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.bookings.models import Booking, BookingStatus
+
+from .serializers import SenderProfileSerializer
+
+
+User = get_user_model()
+
+
+class SenderProfileAPIView(APIView):
+    """
+    Public sender profile endpoint.
+
+    Shows:
+    - Basic sender information
+    - Profile image
+    - Email/phone verification
+    - Package statistics
+    - Success rate
+
+    Sender identity/KYC verification is intentionally not included
+    because sender identity verification has not been implemented yet.
+
+    Success rate is calculated using only final booking outcomes:
+
+        COMPLETED = successful
+        CANCELLED = unsuccessful
+
+    Pending/in-progress bookings do not affect the success rate.
+    """
+
+    permission_classes = [
+        IsAuthenticated,
+    ]
+
+    def get(
+        self,
+        request,
+        sender_id,
+    ):
+
+        # ======================================================
+        # 1. GET SENDER
+        # ======================================================
+
+        sender = (
+            User.objects
+            .select_related("profile")
+            .filter(
+                id=sender_id,
+                is_active=True,
+            )
+            .first()
+        )
+
+        if sender is None:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Sender not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # ======================================================
+        # 2. SENDER BOOKINGS
+        #
+        # Get all bookings belonging to this sender.
+        #
+        # We will use the final states:
+        #
+        # COMPLETED -> successful
+        # CANCELLED -> unsuccessful
+        #
+        # Other states are ignored for success-rate calculation.
+        # ======================================================
+
+        sender_bookings = Booking.objects.filter(
+            sender_id=sender.id
+        )
+
+        # ======================================================
+        # 3. COMPLETED BOOKINGS
+        #
+        # Successful deliveries.
+        # ======================================================
+
+        completed_bookings = sender_bookings.filter(
+            status=BookingStatus.COMPLETED
+        )
+
+        successful_deliveries = (
+            completed_bookings.count()
+        )
+
+        # ======================================================
+        # 4. CANCELLED BOOKINGS
+        #
+        # Cancelled packages count as unsuccessful outcomes.
+        # ======================================================
+
+        cancelled_bookings = sender_bookings.filter(
+            status=BookingStatus.CANCELLED
+        )
+
+        cancelled_packages = (
+            cancelled_bookings.count()
+        )
+
+        # ======================================================
+        # 5. TOTAL PACKAGES
+        #
+        # Only finalized outcomes are counted.
+        #
+        # Therefore:
+        #
+        # total_packages =
+        #     completed + cancelled
+        #
+        # Pending / accepted / in-transit bookings are not
+        # counted yet.
+        # ======================================================
+
+        total_packages = (
+            successful_deliveries
+            + cancelled_packages
+        )
+
+        # ======================================================
+        # 6. SUCCESS RATE
+        #
+        # Formula:
+        #
+        # successful deliveries
+        # --------------------- × 100
+        # completed + cancelled
+        #
+        # Example:
+        #
+        # Completed = 26
+        # Cancelled = 4
+        #
+        # 26 / (26 + 4) × 100
+        # = 86.7%
+        # ======================================================
+
+        if total_packages > 0:
+
+            success_rate = round(
+                (
+                    successful_deliveries
+                    / total_packages
+                ) * 100,
+                1,
+            )
+
+        else:
+
+            success_rate = 0.0
+
+        # ======================================================
+        # 7. TEMPORARY SERIALIZER VALUES
+        #
+        # These values are NOT saved to the database.
+        #
+        # They only exist during this request and are consumed
+        # by SenderProfileSerializer.
+        # ======================================================
+
+        sender.total_packages_value = (
+            total_packages
+        )
+
+        sender.successful_deliveries_value = (
+            successful_deliveries
+        )
+
+        sender.cancelled_packages_value = (
+            cancelled_packages
+        )
+
+        sender.success_rate_value = (
+            success_rate
+        )
+
+        # ======================================================
+        # 8. SERIALIZER
+        # ======================================================
+
+        serializer = SenderProfileSerializer(
+            sender,
+            context={
+                "request": request,
+            },
+        )
+
+        # ======================================================
+        # 9. RESPONSE
+        # ======================================================
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Sender profile retrieved "
+                    "successfully."
+                ),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )

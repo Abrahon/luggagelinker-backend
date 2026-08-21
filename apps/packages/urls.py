@@ -13,7 +13,8 @@ from .views import (
     AdminPackageListView,
     AdminPackageDetailView,
     TravelerPackageListView,
-    PackageDashboardStatsView
+    PackageDashboardStatsView,
+    SenderProfileAPIView
 )
 
 urlpatterns = [
@@ -69,6 +70,11 @@ urlpatterns = [
         name="delete-package-image",
     ),
 
+    path(
+        "senders/<uuid:sender_id>/profile/",
+        SenderProfileAPIView.as_view(),
+        name="sender-profile",
+    ),
     path(
         "package/<uuid:pk>/admin-review/",
         AdminPackageReviewView.as_view(),
