@@ -26,7 +26,7 @@ from .views import (
     SenderRecentBookingView,
     SenderDeliveryHistoryView,
     SenderBookingStatsView,
-    CreateBookingPriceOfferAPIView,
+    BookingPriceOfferAPIView,
     BookingPriceOfferActionAPIView
 )
 
@@ -147,7 +147,7 @@ urlpatterns = [
         # Traveler creates an offer
     path(
         "bookings/<uuid:booking_id>/price-offers/",
-        CreateBookingPriceOfferAPIView.as_view(),
+        BookingPriceOfferAPIView.as_view(),
         name="create-booking-price-offer",
     ),
 

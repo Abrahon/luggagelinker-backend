@@ -43,6 +43,7 @@ class BookingSerializer(serializers.ModelSerializer):
         source="trip.title",
         read_only=True
     )
+    pending_price_offer = serializers.SerializerMethodField()
 
     escrow_status = serializers.SerializerMethodField()
 
@@ -114,7 +115,7 @@ class BookingSerializer(serializers.ModelSerializer):
             # Pricing
             "agreed_reward",
             "currency",
-
+            "pending_price_offer",
             # Weight
             "agreed_weight_kg",
 
@@ -134,6 +135,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "status",
             "payment_status",
             "agreed_reward",
+            "pending_price_offer",
             "currency",
             "agreed_weight_kg",
             "expires_at",
@@ -273,6 +275,29 @@ class BookingSerializer(serializers.ModelSerializer):
             return str(first.image)
 
         return None
+    
+    def get_pending_price_offer(self, obj):
+
+        offers = getattr(
+            obj,
+            "pending_price_offers",
+            [],
+        )
+
+        offer = offers[0] if offers else None
+
+        if not offer:
+            return None
+
+        return {
+            "id": str(offer.id),
+            "offer_reward": str(offer.offer_reward),
+            "currency": offer.currency,
+            "status": offer.status,
+            "message": offer.message,
+            "created_at": offer.created_at,
+            "expires_at": offer.expires_at,
+        }
 
     # ------------------------------------------------------
     # VALIDATE
@@ -946,8 +971,20 @@ from apps.bookings.models import Booking, BookingStatus, PaymentStatus
 from apps.wallets.services import WalletService
 
 
+from apps.bookings.models import (
+    Booking,
+    BookingStatus,
+    BookingPriceOffer,
+    BookingPriceOfferStatus,
+    PaymentStatus,
+)
+
+
 class MyBookingSerializer(serializers.ModelSerializer):
-    tracking_number = serializers.CharField(read_only=True)
+
+    tracking_number = serializers.CharField(
+        read_only=True
+    )
 
     package_title = serializers.CharField(
         source="package.title",
@@ -960,6 +997,7 @@ class MyBookingSerializer(serializers.ModelSerializer):
     )
 
     traveler_name = serializers.SerializerMethodField()
+
     traveler_email = serializers.CharField(
         source="traveler.email",
         read_only=True,
@@ -972,6 +1010,16 @@ class MyBookingSerializer(serializers.ModelSerializer):
 
     created_date = serializers.SerializerMethodField()
 
+    # ==================================================
+    # PRICE OFFER
+    # ==================================================
+
+    pending_price_offer = serializers.SerializerMethodField()
+
+    # ==================================================
+    # ACTIONS
+    # ==================================================
+
     can_pay = serializers.SerializerMethodField()
     can_track = serializers.SerializerMethodField()
     can_chat = serializers.SerializerMethodField()
@@ -980,8 +1028,13 @@ class MyBookingSerializer(serializers.ModelSerializer):
     can_review = serializers.SerializerMethodField()
     can_view_receipt = serializers.SerializerMethodField()
 
+    # ==================================================
+    # UI
+    # ==================================================
+
     show_progress = serializers.SerializerMethodField()
     show_payment_required = serializers.SerializerMethodField()
+
     show_delivery_verification = serializers.SerializerMethodField()
 
     current_step = serializers.SerializerMethodField()
@@ -1009,8 +1062,10 @@ class MyBookingSerializer(serializers.ModelSerializer):
             "currency",
             "agreed_reward",
 
-            "created_date",
+            # Price negotiation
+            "pending_price_offer",
 
+            "created_date",
             "current_step",
 
             "can_pay",
@@ -1026,11 +1081,12 @@ class MyBookingSerializer(serializers.ModelSerializer):
             "show_delivery_verification",
         ]
 
-    # --------------------------------------------------
-    # Basic Information
-    # --------------------------------------------------
+    # ==================================================
+    # TRAVELER
+    # ==================================================
 
     def get_traveler_name(self, obj):
+
         if (
             hasattr(obj.traveler, "profile")
             and obj.traveler.profile
@@ -1040,10 +1096,17 @@ class MyBookingSerializer(serializers.ModelSerializer):
 
         return obj.traveler.email
 
+    # ==================================================
+    # PACKAGE IMAGE
+    # ==================================================
+
     def get_package_image(self, obj):
-        primary = obj.package.images.filter(
-            is_primary=True
-        ).first()
+
+        primary = (
+            obj.package.images
+            .filter(is_primary=True)
+            .first()
+        )
 
         if primary:
             return primary.image
@@ -1055,7 +1118,12 @@ class MyBookingSerializer(serializers.ModelSerializer):
 
         return None
 
+    # ==================================================
+    # ROUTE
+    # ==================================================
+
     def get_route(self, obj):
+
         trip = obj.trip
 
         return {
@@ -1065,23 +1133,116 @@ class MyBookingSerializer(serializers.ModelSerializer):
             "to_city": trip.to_city,
         }
 
+    # ==================================================
+    # CREATED DATE
+    # ==================================================
+
     def get_created_date(self, obj):
-        return obj.created_at.strftime("%Y-%m-%d")
+
+        return obj.created_at.strftime(
+            "%Y-%m-%d"
+        )
+
+    # ==================================================
+    # ESCROW
+    # ==================================================
 
     def get_escrow_status(self, obj):
-        return WalletService.get_escrow_status(obj)
 
-    # --------------------------------------------------
-    # Button Visibility
-    # --------------------------------------------------
+        return WalletService.get_escrow_status(
+            obj
+        )
+
+    # ==================================================
+    # PENDING PRICE OFFER
+    # ==================================================
+
+    def get_pending_price_offer(self, obj):
+        """
+        Return the currently active traveler price offer.
+
+        Only PENDING offers are returned.
+
+        If there is no pending offer:
+            null
+        """
+
+        # ----------------------------------------------
+        # Use prefetched offers when available
+        # ----------------------------------------------
+
+        offers = getattr(
+            obj,
+            "pending_price_offers",
+            None,
+        )
+
+        if offers is not None:
+
+            offer = (
+                offers[0]
+                if offers
+                else None
+            )
+
+        else:
+
+            offer = (
+                BookingPriceOffer.objects
+                .filter(
+                    booking_id=obj.id,
+                    status=(
+                        BookingPriceOfferStatus.PENDING
+                    ),
+                )
+                .order_by("-created_at")
+                .first()
+            )
+
+        if not offer:
+            return None
+
+        return {
+            "id": str(offer.id),
+
+            "offer_reward": str(
+                offer.offer_reward
+            ),
+
+            "currency": offer.currency,
+
+            "status": offer.status,
+
+            "message": offer.message,
+
+            "created_at": (
+                offer.created_at.isoformat()
+                if offer.created_at
+                else None
+            ),
+
+            "expires_at": (
+                offer.expires_at.isoformat()
+                if offer.expires_at
+                else None
+            ),
+        }
+
+    # ==================================================
+    # BUTTON VISIBILITY
+    # ==================================================
 
     def get_can_pay(self, obj):
+
         return (
-            obj.status == BookingStatus.PAYMENT_PENDING
-            and obj.payment_status == PaymentStatus.UNPAID
+            obj.status
+            == BookingStatus.PAYMENT_PENDING
+            and obj.payment_status
+            == PaymentStatus.UNPAID
         )
 
     def get_can_track(self, obj):
+
         return obj.status in [
             BookingStatus.CONFIRMED,
             BookingStatus.PICKED_UP,
@@ -1090,6 +1251,7 @@ class MyBookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_can_chat(self, obj):
+
         return obj.status in [
             BookingStatus.TRAVELER_ACCEPTED,
             BookingStatus.PAYMENT_PENDING,
@@ -1100,9 +1262,14 @@ class MyBookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_can_verify_delivery(self, obj):
-        return obj.status == BookingStatus.DELIVERED
+
+        return (
+            obj.status
+            == BookingStatus.DELIVERED
+        )
 
     def get_can_cancel(self, obj):
+
         return obj.status in [
             BookingStatus.PENDING,
             BookingStatus.TRAVELER_ACCEPTED,
@@ -1110,16 +1277,25 @@ class MyBookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_can_review(self, obj):
-        return obj.status == BookingStatus.COMPLETED
+
+        return (
+            obj.status
+            == BookingStatus.COMPLETED
+        )
 
     def get_can_view_receipt(self, obj):
-        return obj.status == BookingStatus.COMPLETED
 
-    # --------------------------------------------------
-    # UI Sections
-    # --------------------------------------------------
+        return (
+            obj.status
+            == BookingStatus.COMPLETED
+        )
+
+    # ==================================================
+    # UI SECTIONS
+    # ==================================================
 
     def get_show_progress(self, obj):
+
         return obj.status in [
             BookingStatus.CONFIRMED,
             BookingStatus.PICKED_UP,
@@ -1129,17 +1305,24 @@ class MyBookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_show_payment_required(self, obj):
+
         return (
-            obj.status == BookingStatus.PAYMENT_PENDING
-            and obj.payment_status == PaymentStatus.UNPAID
+            obj.status
+            == BookingStatus.PAYMENT_PENDING
+            and obj.payment_status
+            == PaymentStatus.UNPAID
         )
 
     def get_show_delivery_verification(self, obj):
-        return obj.status == BookingStatus.DELIVERED
 
-    # --------------------------------------------------
-    # Progress Step
-    # --------------------------------------------------
+        return (
+            obj.status
+            == BookingStatus.DELIVERED
+        )
+
+    # ==================================================
+    # PROGRESS STEP
+    # ==================================================
 
     def get_current_step(self, obj):
 
@@ -1157,7 +1340,10 @@ class MyBookingSerializer(serializers.ModelSerializer):
             BookingStatus.EXPIRED: 0,
         }
 
-        return mapping.get(obj.status, 0)
+        return mapping.get(
+            obj.status,
+            0,
+        )
 
 
 

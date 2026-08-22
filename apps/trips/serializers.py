@@ -768,6 +768,7 @@ class TravelerProfileSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
     country = serializers.SerializerMethodField()
     profile_image = serializers.SerializerMethodField()
+    about = serializers.SerializerMethodField()
 
     # ==========================================================
     # RATING STATISTICS
@@ -855,6 +856,7 @@ class TravelerProfileSerializer(serializers.ModelSerializer):
             # Rating
             "average_rating",
             "total_reviews",
+            "about",
 
             # Delivery statistics
             "completed_trips",
@@ -959,6 +961,26 @@ class TravelerProfileSerializer(serializers.ModelSerializer):
             ValueError,
         ):
             return None
+
+    def get_about(self, obj):
+
+        profile = getattr(
+            obj,
+            "profile",
+            None,
+        )
+
+        if not profile:
+            return None
+
+        return (
+            getattr(
+                profile,
+                "bio",
+                None,
+            )
+            or None
+        )
 
     # ==========================================================
     # RATING DISTRIBUTION

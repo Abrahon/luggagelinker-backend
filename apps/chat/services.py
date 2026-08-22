@@ -159,3 +159,35 @@ class ChatService:
         )
 
         return chat_message
+
+# apps/chat/services.py
+@transaction.atomic
+def get_or_create_private_chat_room(
+    *,
+    sender,
+    traveler,
+):
+
+    if sender.id == traveler.id:
+        raise ValueError(
+            "You cannot create a chat room with yourself."
+        )
+
+    room = (
+        ChatRoom.objects
+        .filter(
+            sender=sender,
+            traveler=traveler,
+        )
+        .first()
+    )
+
+    if room:
+        return room, False
+
+    room = ChatRoom.objects.create(
+        sender=sender,
+        traveler=traveler,
+    )
+
+    return room, True

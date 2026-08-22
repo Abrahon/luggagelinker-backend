@@ -201,3 +201,170 @@ class SearchMessageView(generics.ListAPIView):
             )
             .order_by("-created_at")
         )
+
+
+# apps/chat/views.py
+
+from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.bookings.models import Booking, BookingStatus
+
+from .models import ChatRoom
+
+User = get_user_model()
+
+class ContactTravelerChatRoomAPIView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, traveler_id):
+
+        traveler = (
+            User.objects
+            .filter(
+                id=traveler_id,
+                is_active=True,
+            )
+            .first()
+        )
+
+        if traveler is None:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Traveler not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if traveler.id == request.user.id:
+            return Response(
+                {
+                    "success": False,
+                    "message": "You cannot contact yourself.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==================================================
+        # CHECK BOOKING
+        # ==================================================
+
+        booking = (
+            Booking.objects
+            .filter(
+                sender=request.user,
+                traveler=traveler,
+                is_active=True,
+                status__in=[
+                    BookingStatus.PENDING,
+                    BookingStatus.TRAVELER_ACCEPTED,
+                    BookingStatus.PAYMENT_PENDING,
+                    BookingStatus.CONFIRMED,
+                    BookingStatus.PICKED_UP,
+                    BookingStatus.IN_TRANSIT,
+                    BookingStatus.DELIVERED,
+                ],
+            )
+            .order_by("-created_at")
+            .first()
+        )
+
+        if booking is None:
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Please create a booking with "
+                        "this traveler before starting a chat."
+                    ),
+                    "code": "BOOKING_REQUIRED",
+                    "traveler_id": str(traveler.id),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==================================================
+        # GET EXISTING ROOM
+        # ==================================================
+
+        room = (
+            ChatRoom.objects
+            .filter(
+                sender=request.user,
+                traveler=traveler,
+            )
+            .first()
+        )
+
+        # ==================================================
+        # CREATE ONLY IF NOT EXISTS
+        # ==================================================
+
+        if room is None:
+
+            try:
+                with transaction.atomic():
+                    room = ChatRoom.objects.create(
+                        sender=request.user,
+                        traveler=traveler,
+                        booking=booking,
+                    )
+
+                created = True
+
+            except IntegrityError:
+                # Another request may have created the room
+                # simultaneously.
+                room = (
+                    ChatRoom.objects
+                    .get(
+                        sender=request.user,
+                        traveler=traveler,
+                    )
+                )
+
+                created = False
+
+        else:
+            created = False
+
+            # If the room exists but has no booking,
+            # associate the current valid booking.
+            if room.booking_id is None:
+
+                room.booking = booking
+
+                room.save(
+                    update_fields=[
+                        "booking",
+                        "updated_at",
+                    ]
+                )
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Chat room created successfully."
+                    if created
+                    else
+                    "Chat room opened successfully."
+                ),
+                "data": {
+                    "room_id": str(room.id),
+                    "booking_id": str(booking.id),
+                    "created": created,
+                    "action_url": (
+                        f"/chat/rooms/{room.id}/"
+                    ),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )

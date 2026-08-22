@@ -15,6 +15,7 @@ from django.db import transaction
 from .serializers import StartTransitSerializer
 from apps.bookings.models import BookingStatus
 from apps.notifications.models import Notification, NotificationType
+from apps.notifications.services import notify_sender_price_offer,notify_traveler_price_offer_rejected,notify_traveler_price_offer_accepted
 # 🟢 Import the validation serializer
 from .serializers import VerifyDeliveryPinSerializer
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -49,6 +50,7 @@ from rest_framework import status
 
 from .models import Booking, BookingStatus, PaymentStatus
 from .serializers import SenderActionRequiredSerializer
+from django.db.models import Q, Prefetch
 
 from .serializers import MyBookingSerializer
 from apps.bookings.models import Booking
@@ -66,70 +68,25 @@ from django.utils import timezone
 from apps.bookings.models import Booking
 from apps.bookings.serializers import BookingSerializer
 from apps.bookings.services import BookingLifecycleService
+from django.db import transaction
+from django.utils import timezone
 
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
 
+from .models import (
+    Booking,
+    BookingPriceOffer,
+    BookingPriceOfferStatus,
+    BookingStatus,
+)
 
-
-# class BookingCreateView(generics.CreateAPIView):
-#     """
-#     API Endpoint to initiate a secure P2P shipping transaction from a Match instance.
-#     """
-#     serializer_class = BookingSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def create(self, request, *args, **kwargs):
-#         # Pass request context down directly to handle authority flow checks
-#         serializer = self.get_serializer(data=request.data, context={"request": request})
-        
-#         if not serializer.is_valid():
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Invalid booking request parameters.",
-#                     "errors": serializer.errors,
-#                 },
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         try:
-#             # Creation logic drops into Service layer inside serializer.save()
-#             instance = serializer.save()
-            
-#             return Response(
-#                 {
-#                     "success": True,
-#                     "message": "Booking request initialized successfully. Valid for 20 minutes.",
-#                     "data": self.get_serializer(instance).data,
-#                 },
-#                 status=status.HTTP_201_CREATED,
-#             )
-            
-#         except DRFValidationError as e:
-#             # 🟢 FIXED: Intercept validation errors and return a clean 400 with the exact message
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "Booking validation failed.",
-#                     "errors": e.detail,
-#                 },
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-            
-#         except Exception as e:
-#             # Fallback capture if anything drops at low-level runtime execution bounds
-#             logger.error(f"Critical execution crash inside BookingCreateView: {str(e)}", exc_info=True)
-#             return Response(
-#                 {
-#                     "success": False,
-#                     "message": "An internal system error occurred while setting up the transaction.",
-#                     "error_details": str(e) # Show the underlying systemic exception details
-#                 },
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             )
-
-
+from .serializers import BookingPriceOfferSerializer
 
 logger = logging.getLogger(__name__)
+
 
 
 class BookingCreateView(generics.CreateAPIView):
@@ -480,15 +437,43 @@ class MyBookingListView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        
-        # High Performance Optimization: Pre-fetch SQL relationships in one clean join
-        return Booking.objects.filter(is_active=True).select_related(
-            "match",
-            "package__sender",
-            "trip__traveler"
-        ).filter(
-            Q(sender=user) | Q(traveler=user)
-        ).order_by("-created_at")
+
+        pending_offers = (
+            BookingPriceOffer.objects
+            .filter(
+                status=BookingPriceOfferStatus.PENDING
+            )
+            .order_by("-created_at")
+        )
+
+        return (
+            Booking.objects
+            .filter(
+                is_active=True,
+            )
+            .select_related(
+                "match",
+                "package",
+                "package__sender",
+                "trip",
+                "trip__traveler",
+                "sender",
+                "sender__profile",
+                "traveler",
+                "traveler__profile",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "price_offers",
+                    queryset=pending_offers,
+                    to_attr="pending_price_offers",
+                )
+            )
+            .filter(
+                Q(sender=user) | Q(traveler=user)
+            )
+            .order_by("-created_at")
+        )
 
     def list(self, request, *args, **kwargs):
         try:
@@ -583,14 +568,94 @@ from apps.bookings.models import Booking
 from apps.bookings.serializers import MyBookingSerializer
 
 
+# class SenderMyBookingListView(generics.ListAPIView):
+#     """
+#     Sender → My Bookings
+
+#     Optional Query Params
+
+#     ?status=IN_TRANSIT
+#     ?search=macbook
+#     """
+
+#     serializer_class = MyBookingSerializer
+#     permission_classes = [IsAuthenticated]
+
+#     def get_queryset(self):
+
+#         queryset = (
+#             Booking.objects.filter(
+#                 sender=self.request.user,
+#                 is_active=True,
+#             )
+#             .select_related(
+#                 "package",
+#                 "trip",
+#                 "traveler",
+#                 "traveler__profile",
+#                 "match",
+#             )
+#             .prefetch_related(
+#                 "package__images",
+#             )
+#             .order_by("-created_at")
+#         )
+
+#         # --------------------------
+#         # Filter by Booking Status
+#         # --------------------------
+
+#         status_param = self.request.query_params.get("status")
+
+#         if status_param:
+#             queryset = queryset.filter(
+#                 status=status_param.upper()
+#             )
+
+#         # --------------------------
+#         # Search
+#         # --------------------------
+
+#         search = self.request.query_params.get("search")
+
+#         if search:
+#             queryset = queryset.filter(
+#                 Q(tracking_number__icontains=search)
+#                 | Q(package__title__icontains=search)
+#                 | Q(trip__title__icontains=search)
+#                 | Q(trip__from_city__icontains=search)
+#                 | Q(trip__to_city__icontains=search)
+#                 | Q(traveler__email__icontains=search)
+#                 | Q(traveler__profile__first_name__icontains=search)
+#                 | Q(traveler__profile__last_name__icontains=search)
+#             ).distinct()
+
+#         return queryset
+
+from django.db.models import Q, Prefetch
+
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+
+from apps.bookings.models import (
+    Booking,
+    BookingPriceOffer,
+    BookingPriceOfferStatus,
+)
+
+from .serializers import MyBookingSerializer
+
+
 class SenderMyBookingListView(generics.ListAPIView):
     """
     Sender → My Bookings
 
-    Optional Query Params
+    Optional Query Params:
+        ?status=IN_TRANSIT
+        ?search=macbook
 
-    ?status=IN_TRANSIT
-    ?search=macbook
+    Includes the current pending traveler price offer
+    for each booking, when one exists.
     """
 
     serializer_class = MyBookingSerializer
@@ -598,8 +663,25 @@ class SenderMyBookingListView(generics.ListAPIView):
 
     def get_queryset(self):
 
+        # ==================================================
+        # PENDING PRICE OFFERS
+        # ==================================================
+
+        pending_price_offers = (
+            BookingPriceOffer.objects
+            .filter(
+                status=BookingPriceOfferStatus.PENDING
+            )
+            .order_by("-created_at")
+        )
+
+        # ==================================================
+        # BOOKINGS
+        # ==================================================
+
         queryset = (
-            Booking.objects.filter(
+            Booking.objects
+            .filter(
                 sender=self.request.user,
                 is_active=True,
             )
@@ -612,37 +694,67 @@ class SenderMyBookingListView(generics.ListAPIView):
             )
             .prefetch_related(
                 "package__images",
+
+                # ------------------------------------------
+                # Pending traveler price offer
+                # ------------------------------------------
+                Prefetch(
+                    "price_offers",
+                    queryset=pending_price_offers,
+                    to_attr="pending_price_offers",
+                ),
             )
             .order_by("-created_at")
         )
 
-        # --------------------------
-        # Filter by Booking Status
-        # --------------------------
+        # ==================================================
+        # FILTER BY BOOKING STATUS
+        # ==================================================
 
-        status_param = self.request.query_params.get("status")
+        status_param = (
+            self.request.query_params.get("status")
+        )
 
         if status_param:
             queryset = queryset.filter(
                 status=status_param.upper()
             )
 
-        # --------------------------
-        # Search
-        # --------------------------
+        # ==================================================
+        # SEARCH
+        # ==================================================
 
-        search = self.request.query_params.get("search")
+        search = (
+            self.request.query_params.get("search")
+        )
 
         if search:
+
             queryset = queryset.filter(
-                Q(tracking_number__icontains=search)
-                | Q(package__title__icontains=search)
-                | Q(trip__title__icontains=search)
-                | Q(trip__from_city__icontains=search)
-                | Q(trip__to_city__icontains=search)
-                | Q(traveler__email__icontains=search)
-                | Q(traveler__profile__first_name__icontains=search)
-                | Q(traveler__profile__last_name__icontains=search)
+                Q(
+                    tracking_number__icontains=search
+                )
+                | Q(
+                    package__title__icontains=search
+                )
+                | Q(
+                    trip__title__icontains=search
+                )
+                | Q(
+                    trip__from_city__icontains=search
+                )
+                | Q(
+                    trip__to_city__icontains=search
+                )
+                | Q(
+                    traveler__email__icontains=search
+                )
+                | Q(
+                    traveler__profile__first_name__icontains=search
+                )
+                | Q(
+                    traveler__profile__last_name__icontains=search
+                )
             ).distinct()
 
         return queryset
@@ -1890,39 +2002,104 @@ class SenderDeliveryHistoryStatsView(APIView):
         )
 
 
-from django.db import transaction
-from django.utils import timezone
 
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
+class BookingPriceOfferAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
-from .models import (
-    Booking,
-    BookingPriceOffer,
-    BookingPriceOfferStatus,
-    BookingStatus,
-)
+    # ======================================================
+    # GET — BOTH TRAVELER AND SENDER CAN SEE OFFERS
+    # ======================================================
 
-from .serializers import BookingPriceOfferSerializer
+    def get(self, request, booking_id):
 
-class CreateBookingPriceOfferAPIView(APIView):
+        booking = (
+            Booking.objects
+            .select_related(
+                "traveler",
+                "sender",
+            )
+            .filter(
+                id=booking_id,
+            )
+            .first()
+        )
 
-    permission_classes = [
-        IsAuthenticated
-    ]
+        if booking is None:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Booking not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if request.user.id not in [
+            booking.traveler_id,
+            booking.sender_id,
+        ]:
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "You are not a participant "
+                        "of this booking."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        offers = (
+            BookingPriceOffer.objects
+            .filter(
+                booking=booking,
+            )
+            .select_related(
+                "traveler",
+                "traveler__profile",
+            )
+            .order_by("created_at")
+        )
+
+        serializer = BookingPriceOfferSerializer(
+            offers,
+            many=True,
+            context={
+                "request": request,
+            },
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Price offers retrieved successfully."
+                ),
+                "data": {
+                    "booking_id": str(
+                        booking.id
+                    ),
+                    "original_price": str(
+                        booking.agreed_reward
+                    ),
+                    "current_price": str(
+                        booking.agreed_reward
+                    ),
+                    "offers": serializer.data,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # ======================================================
+    # POST — ONLY TRAVELER CAN CREATE OFFER
+    # ======================================================
 
     @transaction.atomic
-    def post(
-        self,
-        request,
-        booking_id,
-    ):
+    def post(self, request, booking_id):
 
-        # =========================================
-        # 1. GET BOOKING
-        # =========================================
+        # ==================================================
+        # 1. FETCH BOOKING FOR UPDATE
+        # ==================================================
 
         booking = (
             Booking.objects
@@ -1938,7 +2115,6 @@ class CreateBookingPriceOfferAPIView(APIView):
         )
 
         if booking is None:
-
             return Response(
                 {
                     "success": False,
@@ -1947,12 +2123,11 @@ class CreateBookingPriceOfferAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # =========================================
+        # ==================================================
         # 2. ONLY TRAVELER CAN CREATE OFFER
-        # =========================================
+        # ==================================================
 
         if booking.traveler_id != request.user.id:
-
             return Response(
                 {
                     "success": False,
@@ -1964,15 +2139,14 @@ class CreateBookingPriceOfferAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # =========================================
+        # ==================================================
         # 3. CHECK BOOKING STATUS
-        # =========================================
+        # ==================================================
 
         if booking.status not in [
             BookingStatus.PENDING,
             BookingStatus.TRAVELER_ACCEPTED,
         ]:
-
             return Response(
                 {
                     "success": False,
@@ -1984,21 +2158,57 @@ class CreateBookingPriceOfferAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # =========================================
-        # 4. CHECK EXISTING PENDING OFFER
-        # =========================================
+        # ==================================================
+        # 4. CHECK IF AN OFFER WAS ALREADY ACCEPTED
+        #
+        # Once the sender accepts an offer, the negotiated
+        # price is FINAL for this booking.
+        #
+        # Therefore no new offer can be created.
+        # ==================================================
+
+        accepted_offer_exists = (
+            BookingPriceOffer.objects
+            .filter(
+                booking=booking,
+                status=(
+                    BookingPriceOfferStatus.ACCEPTED
+                ),
+            )
+            .exists()
+        )
+
+        if accepted_offer_exists:
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "This booking already has an "
+                        "accepted price offer. "
+                        "Price negotiation is closed."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==================================================
+        # 5. CHECK EXISTING PENDING OFFER
+        #
+        # Only one active offer is allowed at a time.
+        # ==================================================
 
         existing_offer = (
             BookingPriceOffer.objects
             .filter(
                 booking=booking,
-                status=BookingPriceOfferStatus.PENDING,
+                status=(
+                    BookingPriceOfferStatus.PENDING
+                ),
             )
             .first()
         )
 
         if existing_offer:
-
             return Response(
                 {
                     "success": False,
@@ -2010,9 +2220,9 @@ class CreateBookingPriceOfferAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # =========================================
-        # 5. CREATE OFFER
-        # =========================================
+        # ==================================================
+        # 6. VALIDATE AND CREATE OFFER
+        # ==================================================
 
         serializer = BookingPriceOfferSerializer(
             data=request.data,
@@ -2032,17 +2242,20 @@ class CreateBookingPriceOfferAPIView(APIView):
             currency=booking.currency,
         )
 
-        # =========================================
-        # 6. NOTIFICATION
-        # =========================================
+        # ==================================================
+        # 7. NOTIFY SENDER AFTER COMMIT
+        # ==================================================
 
-        # Later:
-        #
-        # NotificationService.create(
-        #     user=booking.sender,
-        #     notification_type="PRICE_OFFER",
-        #     ...
-        # )
+        transaction.on_commit(
+            lambda: notify_sender_price_offer(
+                booking=booking,
+                offer=offer,
+            )
+        )
+
+        # ==================================================
+        # 8. RESPONSE
+        # ==================================================
 
         return Response(
             {
@@ -2051,13 +2264,17 @@ class CreateBookingPriceOfferAPIView(APIView):
                     "Price offer sent successfully."
                 ),
                 "data": BookingPriceOfferSerializer(
-                    offer
+                    offer,
+                    context={
+                        "request": request,
+                    },
                 ).data,
             },
             status=status.HTTP_201_CREATED,
         )
+    
 
-
+# actions
 class BookingPriceOfferActionAPIView(APIView):
 
     permission_classes = [
@@ -2072,18 +2289,20 @@ class BookingPriceOfferActionAPIView(APIView):
     ):
 
         action = str(
-            request.data.get("action", "")
+            request.data.get(
+                "action",
+                "",
+            )
         ).strip().lower()
 
-        # =========================================
+        # ==================================================
         # VALID ACTION
-        # =========================================
+        # ==================================================
 
         if action not in [
             "accept",
             "reject",
         ]:
-
             return Response(
                 {
                     "success": False,
@@ -2095,9 +2314,9 @@ class BookingPriceOfferActionAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # =========================================
+        # ==================================================
         # GET OFFER
-        # =========================================
+        # ==================================================
 
         offer = (
             BookingPriceOffer.objects
@@ -2114,23 +2333,23 @@ class BookingPriceOfferActionAPIView(APIView):
         )
 
         if offer is None:
-
             return Response(
                 {
                     "success": False,
-                    "message": "Price offer not found.",
+                    "message": (
+                        "Price offer not found."
+                    ),
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
 
         booking = offer.booking
 
-        # =========================================
-        # ONLY SENDER
-        # =========================================
+        # ==================================================
+        # ONLY SENDER CAN RESPOND
+        # ==================================================
 
         if booking.sender_id != request.user.id:
-
             return Response(
                 {
                     "success": False,
@@ -2142,63 +2361,30 @@ class BookingPriceOfferActionAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # =========================================
+        # ==================================================
         # OFFER MUST BE PENDING
-        # =========================================
+        # ==================================================
 
         if (
             offer.status
             != BookingPriceOfferStatus.PENDING
         ):
-
             return Response(
                 {
                     "success": False,
                     "message": (
-                        "This offer has already "
-                        "been processed."
+                        "This price offer has "
+                        "already been processed."
                     ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # =========================================
-        # CHECK EXPIRATION
-        # =========================================
-
-        if (
-            offer.expires_at
-            and offer.expires_at <= timezone.now()
-        ):
-
-            offer.status = (
-                BookingPriceOfferStatus.EXPIRED
-            )
-
-            offer.save(
-                update_fields=[
-                    "status",
-                    "updated_at",
-                ]
-            )
-
-            return Response(
-                {
-                    "success": False,
-                    "message": "This offer has expired.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # =========================================
+        # ==================================================
         # ACCEPT
-        # =========================================
+        # ==================================================
 
         if action == "accept":
-
-            # -------------------------------------
-            # UPDATE OFFER
-            # -------------------------------------
 
             offer.status = (
                 BookingPriceOfferStatus.ACCEPTED
@@ -2214,9 +2400,9 @@ class BookingPriceOfferActionAPIView(APIView):
                 ]
             )
 
-            # -------------------------------------
+            # ----------------------------------------------
             # UPDATE ONLY THIS BOOKING
-            # -------------------------------------
+            # ----------------------------------------------
 
             booking.agreed_reward = (
                 offer.offer_reward
@@ -2229,37 +2415,50 @@ class BookingPriceOfferActionAPIView(APIView):
                 ]
             )
 
-            # -------------------------------------
-            # NOTIFY TRAVELER
-            # -------------------------------------
+            # ----------------------------------------------
+            # NOTIFY TRAVELER AFTER COMMIT
+            # ----------------------------------------------
 
-            # NotificationService.create(
-            #     user=booking.traveler,
-            #     notification_type="PRICE_OFFER_ACCEPTED",
-            # )
+            transaction.on_commit(
+                lambda: (
+                    notify_traveler_price_offer_accepted(
+                        booking=booking,
+                        offer=offer,
+                    )
+                )
+            )
 
             return Response(
                 {
                     "success": True,
                     "message": (
-                        "Price offer accepted successfully."
+                        "Price offer accepted "
+                        "successfully."
                     ),
                     "data": {
-                        "offer_id": str(offer.id),
-                        "offer_status": offer.status,
-                        "booking_id": str(booking.id),
+                        "offer_id": str(
+                            offer.id
+                        ),
+                        "offer_status": (
+                            offer.status
+                        ),
+                        "booking_id": str(
+                            booking.id
+                        ),
                         "agreed_reward": str(
                             booking.agreed_reward
                         ),
-                        "currency": booking.currency,
+                        "currency": (
+                            booking.currency
+                        ),
                     },
                 },
                 status=status.HTTP_200_OK,
             )
 
-        # =========================================
+        # ==================================================
         # REJECT
-        # =========================================
+        # ==================================================
 
         offer.status = (
             BookingPriceOfferStatus.REJECTED
@@ -2275,16 +2474,20 @@ class BookingPriceOfferActionAPIView(APIView):
             ]
         )
 
-        # -----------------------------------------
-        # IMPORTANT:
+        # ==================================================
+        # IMPORTANT
         #
-        # Do NOT change booking.agreed_reward
-        # -----------------------------------------
+        # DO NOT CHANGE booking.agreed_reward
+        # ==================================================
 
-        # NotificationService.create(
-        #     user=booking.traveler,
-        #     notification_type="PRICE_OFFER_REJECTED",
-        # )
+        transaction.on_commit(
+            lambda: (
+                notify_traveler_price_offer_rejected(
+                    booking=booking,
+                    offer=offer,
+                )
+            )
+        )
 
         return Response(
             {
@@ -2293,13 +2496,21 @@ class BookingPriceOfferActionAPIView(APIView):
                     "Price offer rejected."
                 ),
                 "data": {
-                    "offer_id": str(offer.id),
-                    "offer_status": offer.status,
-                    "booking_id": str(booking.id),
+                    "offer_id": str(
+                        offer.id
+                    ),
+                    "offer_status": (
+                        offer.status
+                    ),
+                    "booking_id": str(
+                        booking.id
+                    ),
                     "agreed_reward": str(
                         booking.agreed_reward
                     ),
-                    "currency": booking.currency,
+                    "currency": (
+                        booking.currency
+                    ),
                 },
             },
             status=status.HTTP_200_OK,

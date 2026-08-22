@@ -602,3 +602,113 @@ def notify_wallet_topup_success(*, user, amount, reference=None):
         notification_type=notif_type,
         action_url="/wallet/",
     )
+
+
+
+# ==========================================================
+# HELPER FUNCTIONS
+# ==========================================================
+
+def _get_display_name(user, fallback_role="The user"):
+    """
+    Extract full name from profile, defaulting to email or a fallback role.
+    """
+    profile = getattr(user, "profile", None)
+    if profile:
+        full_name = getattr(profile, "full_name", None)
+        if full_name:
+            return full_name
+
+    return getattr(user, "email", None) or fallback_role
+
+
+# ==========================================================
+# PRICE OFFER NOTIFICATIONS
+# ==========================================================
+
+@transaction.atomic
+def notify_sender_price_offer(*, booking, offer):
+    """
+    Notify sender that traveler created a new price offer.
+    """
+    traveler_name = _get_display_name(booking.traveler, fallback_role="The traveler")
+
+    notification = create_notification(
+        user=booking.sender,
+        title="New Price Offer",
+        message=(
+            f"{traveler_name} offered "
+            f"{offer.offer_reward} {offer.currency} "
+            f"for your booking."
+        ),
+        notification_type=NotificationType.BOOKING,
+        object_id=offer.id,
+        action_url=f"/bookings/{booking.id}/?offer={offer.id}",
+    )
+
+    logger.info(
+        "Price offer notification sent to sender | Booking=%s | Offer=%s | Sender=%s",
+        booking.id,
+        offer.id,
+        booking.sender_id,
+    )
+
+    return notification
+
+
+@transaction.atomic
+def notify_traveler_price_offer_accepted(*, booking, offer):
+    """
+    Notify traveler that sender accepted the price offer.
+    """
+    sender_name = _get_display_name(booking.sender, fallback_role="The sender")
+
+    notification = create_notification(
+        user=booking.traveler,
+        title="Price Offer Accepted",
+        message=(
+            f"{sender_name} accepted your price offer "
+            f"of {offer.offer_reward} {offer.currency}."
+        ),
+        notification_type=NotificationType.BOOKING,
+        object_id=offer.id,
+        action_url=f"/bookings/{booking.id}/?offer={offer.id}",
+    )
+
+    logger.info(
+        "Price offer accepted notification sent to traveler | Booking=%s | Offer=%s | Traveler=%s",
+        booking.id,
+        offer.id,
+        booking.traveler_id,
+    )
+
+    return notification
+
+
+@transaction.atomic
+def notify_traveler_price_offer_rejected(*, booking, offer):
+    """
+    Notify traveler that sender rejected the price offer.
+    """
+    sender_name = _get_display_name(booking.sender, fallback_role="The sender")
+
+    notification = create_notification(
+        user=booking.traveler,
+        title="Price Offer Rejected",
+        message=(
+            f"{sender_name} rejected your price offer "
+            f"of {offer.offer_reward} {offer.currency}."
+        ),
+        notification_type=NotificationType.BOOKING,
+        object_id=offer.id,
+        action_url=f"/bookings/{booking.id}/?offer={offer.id}",
+    )
+
+    logger.info(
+        "Price offer rejected notification sent to traveler | Booking=%s | Offer=%s | Traveler=%s",
+        booking.id,
+        offer.id,
+        booking.traveler_id,
+    )
+
+    return notification
