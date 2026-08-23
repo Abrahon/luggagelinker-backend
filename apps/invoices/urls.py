@@ -7,6 +7,7 @@ from apps.invoices.views import (
     InvoiceDownloadView,
     AdminPaymentInvoiceDetailView,
     AdminPaymentInvoiceDownloadView,
+    BookingInvoiceDataView
 )
 
 
@@ -47,4 +48,9 @@ urlpatterns = [
         AdminPaymentInvoiceDownloadView.as_view(),
         name="admin-payment-invoice-download",
     ),
+    path(
+        "bookings/<uuid:booking_id>/",
+        BookingInvoiceDataView.as_view(),
+        name="booking-invoice-data",
+    )
 ]

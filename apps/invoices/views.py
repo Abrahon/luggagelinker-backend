@@ -105,110 +105,15 @@ class InvoiceDetailView(generics.RetrieveAPIView):
 
 # ReportLab Engine Elements
 
-from django.utils import timezone
 from django.http import FileResponse
+from django.utils import timezone
+
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
 from apps.invoices.models import Invoice
-
-
-class InvoiceDownloadView(APIView):
-    """
-    Download an invoice PDF.
-
-    GET /invoices/<uuid:id>/download/
-
-    The PDF is returned as an attachment so the browser
-    downloads the file.
-    """
-
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, id):
-
-        # =========================================================
-        # GET INVOICE
-        # =========================================================
-
-        try:
-            invoice = (
-                Invoice.objects
-                .select_related(
-                    "booking",
-                    "payment",
-                    "sender",
-                    "traveler",
-                    "package",
-                    "trip",
-                )
-                .get(id=id)
-            )
-
-        except Invoice.DoesNotExist:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Invoice not found.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # =========================================================
-        # AUTHORIZATION
-        # =========================================================
-
-        if (
-            invoice.sender_id != request.user.id
-            and invoice.traveler_id != request.user.id
-        ):
-            return Response(
-                {
-                    "success": False,
-                    "message": (
-                        "You do not have permission "
-                        "to download this invoice."
-                    ),
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        # =========================================================
-        # CHECK PDF
-        # =========================================================
-
-        if not invoice.pdf:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Invoice PDF is not available.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # =========================================================
-        # TRACK DOWNLOAD
-        # =========================================================
-
-        invoice.last_downloaded_at = timezone.now()
-
-        invoice.save(
-            update_fields=["last_downloaded_at"]
-        )
-
-        # =========================================================
-        # RETURN PDF AS DOWNLOAD
-        # =========================================================
-
-        return FileResponse(
-            invoice.pdf.open("rb"),
-            as_attachment=True,
-            filename=f"Invoice_{invoice.invoice_number}.pdf",
-            content_type="application/pdf",
-        )
-
 
 from rest_framework import generics, status
 from rest_framework.permissions import IsAdminUser
@@ -473,23 +378,27 @@ class AdminPaymentInvoiceDownloadView(APIView):
             content_type="application/pdf",
         )
 
-from django.http import FileResponse
-class InvoiceViewPDFView(APIView):
-    """
-    View an invoice PDF directly in the browser.
+import urllib.request
+from django.http import HttpResponse, FileResponse
+from django.utils import timezone
 
-    GET /invoices/<uuid:id>/view/
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
 
-    The PDF is opened inline in the browser.
-    """
+from apps.invoices.models import Invoice
+
+
+# =============================================================
+# INVOICE DOWNLOAD VIEW
+# =============================================================
+
+class InvoiceDownloadView(APIView):
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request, id):
-
-        # =========================================================
-        # GET INVOICE
-        # =========================================================
 
         try:
             invoice = (
@@ -514,10 +423,7 @@ class InvoiceViewPDFView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # =========================================================
-        # AUTHORIZATION
-        # =========================================================
-
+        # Authorization Check
         if (
             invoice.sender_id != request.user.id
             and invoice.traveler_id != request.user.id
@@ -525,18 +431,12 @@ class InvoiceViewPDFView(APIView):
             return Response(
                 {
                     "success": False,
-                    "message": (
-                        "You do not have permission "
-                        "to view this invoice."
-                    ),
+                    "message": "You do not have permission to download this invoice.",
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # =========================================================
-        # CHECK PDF
-        # =========================================================
-
+        # PDF check
         if not invoice.pdf:
             return Response(
                 {
@@ -546,13 +446,213 @@ class InvoiceViewPDFView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # =========================================================
-        # RETURN PDF INLINE
-        # =========================================================
+        # Track download time
+        invoice.last_downloaded_at = timezone.now()
+        invoice.save(update_fields=["last_downloaded_at"])
 
-        return FileResponse(
-            invoice.pdf.open("rb"),
-            as_attachment=False,
-            filename=f"Invoice_{invoice.invoice_number}.pdf",
+        try:
+            # Stream/Download file binary data from Cloudinary safely
+            req = urllib.request.Request(
+                invoice.pdf.url, 
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req) as response:
+                pdf_data = response.read()
+
+            file_name = f"Invoice_{invoice.invoice_number}.pdf"
+            
+            # Send direct attachment response
+            http_response = HttpResponse(pdf_data, content_type="application/pdf")
+            http_response["Content-Disposition"] = f'attachment; filename="{file_name}"'
+            return http_response
+
+        except Exception as e:
+            return Response(
+                {
+                    "success": False,
+                    "message": f"Failed to retrieve PDF file: {str(e)}",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+# =============================================================
+# INVOICE INLINE VIEW (VIEW IN BROWSER)
+# =============================================================
+from .services import InvoiceService
+
+class InvoiceViewPDFView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id):
+
+        try:
+            invoice = Invoice.objects.get(id=id)
+        except Invoice.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invoice not found.",
+                },
+                status=404,
+            )
+
+        if (
+            invoice.sender_id != request.user.id
+            and invoice.traveler_id != request.user.id
+        ):
+            return Response(
+                {
+                    "success": False,
+                    "message": "You do not have permission to view this invoice.",
+                },
+                status=403,
+            )
+
+        pdf_bytes = InvoiceService.generate_pdf_bytes(invoice)
+
+        response = HttpResponse(
+            pdf_bytes,
             content_type="application/pdf",
+        )
+
+        response["Content-Disposition"] = (
+            f'inline; filename="Invoice_{invoice.invoice_number}.pdf"'
+        )
+
+        return response
+
+
+from decimal import Decimal
+
+from django.shortcuts import get_object_or_404
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, permissions
+
+from apps.bookings.models import Booking
+from apps.invoices.models import Invoice
+
+
+class BookingInvoiceDataView(APIView):
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, booking_id):
+
+        try:
+            booking = (
+                Booking.objects
+                .select_related(
+                    "sender",
+                    "traveler",
+                    "package",
+                    "trip",
+                )
+                .get(id=booking_id)
+            )
+
+        except Booking.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Booking record not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Permission Check
+        if request.user.id not in [
+            booking.sender_id,
+            booking.traveler_id,
+        ]:
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "You do not have permission "
+                        "to access this invoice."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Get actual invoice or handle if missing
+        try:
+            invoice = Invoice.objects.get(booking=booking)
+            invoice_number = invoice.invoice_number
+            invoice_id = str(invoice.id)
+            issue_date = invoice.invoice_date.strftime("%b %d, %Y") if hasattr(invoice, 'invoice_date') and invoice.invoice_date else booking.created_at.strftime("%b %d, %Y")
+        except Invoice.DoesNotExist:
+            # Fallback values if Invoice object is not yet created in DB
+            invoice_id = None
+            invoice_number = f"INV-{booking.tracking_number}"
+            issue_date = booking.created_at.strftime("%b %d, %Y")
+
+        # Financial Calculations
+        reward = Decimal(booking.agreed_reward or 0)
+
+        platform_fee = (reward * Decimal("0.10")).quantize(Decimal("0.01"))
+        vat_tax = (reward * Decimal("0.05")).quantize(Decimal("0.01"))
+        total_amount = reward + platform_fee + vat_tax
+
+        # Helper names
+        sender_name = booking.sender.get_full_name().strip() if booking.sender.get_full_name() else booking.sender.username
+        traveler_name = booking.traveler.get_full_name().strip() if booking.traveler.get_full_name() else booking.traveler.username
+
+        invoice_data = {
+            "invoice_id": invoice_id,
+            "invoice_number": invoice_number,
+            "tracking_number": booking.tracking_number,
+            "issue_date": issue_date,
+            "payment_status": booking.payment_status,
+            "booking_status": booking.status,
+            "payment_method": getattr(booking, "payment_method", "Escrow System"),
+
+            "sender": {
+                "name": sender_name,
+                "email": booking.sender.email,
+                "address": getattr(
+                    booking.package,
+                    "pickup_location",
+                    "As per agreement",
+                ),
+            },
+
+            "traveler": {
+                "name": traveler_name,
+                "email": booking.traveler.email,
+                "route": (
+                    f"{getattr(booking.trip, 'from_city', 'Origin')}, {getattr(booking.trip, 'from_country', '')}"
+                    f" -> "
+                    f"{getattr(booking.trip, 'to_city', 'Destination')}, {getattr(booking.trip, 'to_country', '')}"
+                ),
+            },
+
+            "package": {
+                "title": getattr(
+                    booking.package,
+                    "title",
+                    "General Package",
+                ),
+                "weight_kg": str(booking.agreed_weight_kg or 0),
+            },
+
+            "pricing": {
+                "agreed_reward": str(reward),
+                "platform_fee": str(platform_fee),
+                "vat_tax": str(vat_tax),
+                "total": str(total_amount),
+                "currency": booking.currency or "USD",
+            },
+        }
+
+        return Response(
+            {
+                "success": True,
+                "message": "Invoice data retrieved successfully.",
+                "data": invoice_data,
+            },
+            status=status.HTTP_200_OK,
         )

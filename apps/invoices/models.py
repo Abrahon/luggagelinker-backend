@@ -1,7 +1,9 @@
 import uuid
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
+from django.core.files.storage import FileSystemStorage
+from django.utils import timezone
 
 from apps.payment.models import (
     BookingPayment,
@@ -9,11 +11,29 @@ from apps.payment.models import (
 )
 
 
+# =============================================================
+# LOCAL INVOICE PDF STORAGE
+# =============================================================
+
+invoice_pdf_storage = FileSystemStorage(
+    location=settings.MEDIA_ROOT,
+    base_url=settings.MEDIA_URL,
+)
+
+
+# =============================================================
+# INVOICE STATUS
+# =============================================================
+
 class InvoiceStatus(models.TextChoices):
     ACTIVE = "ACTIVE", "Active"
     REFUNDED = "REFUNDED", "Refunded"
     CANCELLED = "CANCELLED", "Cancelled"
 
+
+# =============================================================
+# INVOICE
+# =============================================================
 
 class Invoice(models.Model):
 
@@ -127,16 +147,6 @@ class Invoice(models.Model):
     # PDF
     # =========================================================
 
-    pdf_generated_at = models.DateTimeField(
-        null=True,
-        blank=True,
-    )
-
-    pdf = models.FileField(
-        upload_to="invoices/",
-        blank=True,
-        null=True,
-    )
 
     # =========================================================
     # DOWNLOAD TRACKING
@@ -200,9 +210,6 @@ class Invoice(models.Model):
 
         if not self.invoice_number:
 
-            from django.utils import timezone
-            from django.db import transaction
-
             year = timezone.now().year
             prefix = f"INV-{year}-"
 
@@ -210,23 +217,19 @@ class Invoice(models.Model):
 
                 last_invoice = (
                     Invoice.objects
+                    .select_for_update()
                     .filter(
                         invoice_number__startswith=prefix
                     )
-                    .select_for_update()
-                    .order_by("invoice_date")
-                    .last()
+                    .order_by("-invoice_number")
+                    .first()
                 )
 
                 if last_invoice:
-
                     last_number = int(
-                        last_invoice.invoice_number
-                        .split("-")[-1]
+                        last_invoice.invoice_number.split("-")[-1]
                     )
-
                     new_number = last_number + 1
-
                 else:
                     new_number = 1
 
