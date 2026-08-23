@@ -4,20 +4,50 @@ from apps.invoices.models import Invoice
 
 class InvoiceUserSerializer(serializers.Serializer):
     """
-    Renders clean, readable participant metadata for the invoice layout.
+    Renders clean participant metadata for the invoice.
     """
-    id = serializers.UUIDField(read_only=True)
-    email = serializers.EmailField(read_only=True)
+
+    id = serializers.UUIDField(
+        read_only=True
+    )
+
+    email = serializers.EmailField(
+        read_only=True
+    )
+
     full_name = serializers.SerializerMethodField()
 
     def get_full_name(self, obj):
-        if hasattr(obj, 'profile'):
-            first = getattr(obj.profile, 'first_name', '')
-            last = getattr(obj.profile, 'last_name', '')
-            full = f"{first} {last}".strip()
-            if full:
-                return full
-        return obj.email.split('@')[0] if obj.email else "User"
+        """
+        Get the user's name from Profile.
+
+        User model does not contain first_name/last_name.
+        Profile is the source of the user's display name.
+        """
+
+        profile = getattr(
+            obj,
+            "profile",
+            None,
+        )
+
+        if profile:
+            full_name = profile.full_name
+
+            if full_name:
+                return full_name
+
+        # Fallback to email username
+        email = getattr(
+            obj,
+            "email",
+            None,
+        )
+
+        if email:
+            return email.split("@")[0]
+
+        return "User"
 
 
 class PackageDetailSerializer(serializers.Serializer):

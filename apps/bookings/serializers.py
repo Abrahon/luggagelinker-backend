@@ -1765,6 +1765,7 @@ class SenderBookingDetailSerializer(serializers.ModelSerializer):
 # timeline 
 # serializers.py
 
+from apps.invoices.models import Invoice
 
 class BookingTimelineItemSerializer(serializers.Serializer):
     title = serializers.CharField()
@@ -1772,6 +1773,22 @@ class BookingTimelineItemSerializer(serializers.Serializer):
     completed = serializers.BooleanField()
     timestamp = serializers.DateTimeField(allow_null=True)
 
+
+class InvoiceTimelineSerializer(serializers.ModelSerializer):
+    """
+    Small invoice representation used inside the booking timeline response.
+    """
+
+    class Meta:
+        model = Invoice
+        fields = [
+            "id",
+            "invoice_number",
+            "total_paid",
+            "currency",
+            "status",
+            "invoice_date",
+        ]
 
 
 

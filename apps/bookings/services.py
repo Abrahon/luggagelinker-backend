@@ -703,47 +703,64 @@ class BookingLifecycleService:
             return booking
 
 
-
     @classmethod
     def verify_and_execute_delivery(cls, booking_or_id) -> Booking:
 
         from django.db import transaction
         from django.utils import timezone
         from rest_framework.exceptions import ValidationError
+
         from apps.wallets.services import WalletService
         from apps.bookings.models import BookingStatus
+        from apps.invoices.services import InvoiceService
 
         with transaction.atomic():
-            
-            # 🟢 FIXED: Extract UUID cleanly if instance object is passed
+
+            # 1. Extract UUID cleanly if instance object is passed
             if isinstance(booking_or_id, Booking):
                 booking_id = booking_or_id.id
             else:
                 booking_id = booking_or_id
 
-            booking = Booking.objects.select_for_update().get(id=booking_id)
+            booking = Booking.objects.select_for_update().get(
+                id=booking_id
+            )
 
-            # 1. Prevent double execution
+            # 2. Prevent double execution
             if booking.status == BookingStatus.COMPLETED:
-                raise ValidationError("This delivery is already completed.")
+                raise ValidationError(
+                    "This delivery is already completed."
+                )
 
-            # 2. Accept validation directly from the IN_TRANSIT workflow status state
+            # 3. Validate current booking state
             if booking.status != BookingStatus.IN_TRANSIT:
                 raise ValidationError(
                     f"Booking is not in a valid state for delivery confirmation. "
                     f"Current status is: {booking.status}"
                 )
 
-            # 3 & 4. 🟢 UPDATED: Let your clean central service layer handle escrow validation and payout logic safely
+            # 4. Release escrow and execute payout
             WalletService.release_escrow(booking)
 
-            # 5. Update both delivery and completion timestamps at the same time
-            # booking.payment_status = PaymentStatus.PAID
+            # 5. Mark delivery as completed
+            now = timezone.now()
+
             booking.status = BookingStatus.COMPLETED
-            booking.delivered_at = timezone.now()  
-            booking.completed_at = timezone.now()  
-            
-            booking.save(update_fields=["status", "delivered_at", "completed_at"])
+            booking.delivered_at = now
+            booking.completed_at = now
+
+            booking.save(
+                update_fields=[
+                    "status",
+                    "delivered_at",
+                    "completed_at",
+                ]
+            )
+
+            # 6. Automatically create invoice
+            invoice = InvoiceService.create_for_booking(
+                booking=booking
+            )
 
             return booking
 
