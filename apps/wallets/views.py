@@ -1386,3 +1386,92 @@ class SenderWalletTopupAPIView(APIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+# widrwal history  satst views
+
+
+from .models import WithdrawalRequest
+from .serializers import WithdrawalStatsSerializer
+
+
+class WithdrawalStatsAPIView(APIView):
+    """
+    Returns withdrawal statistics for the authenticated user.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        withdrawals = (
+            WithdrawalRequest.objects
+            .filter(
+                wallet__user=request.user
+            )
+        )
+
+        # ==================================================
+        # TOTAL WITHDRAWAL REQUESTS
+        # ==================================================
+
+        total_withdrawals = withdrawals.count()
+
+        # ==================================================
+        # COMPLETED
+        # ==================================================
+
+        completed = withdrawals.filter(
+            status=WithdrawalRequest.WithdrawalStatus.COMPLETED
+        ).count()
+
+        # ==================================================
+        # PENDING
+        #
+        # PENDING + APPROVED + PROCESSING are still
+        # in the withdrawal pipeline.
+        # ==================================================
+
+        pending = withdrawals.filter(
+            status__in=[
+                WithdrawalRequest.WithdrawalStatus.PENDING,
+                WithdrawalRequest.WithdrawalStatus.APPROVED,
+                WithdrawalRequest.WithdrawalStatus.PROCESSING,
+            ]
+        ).count()
+
+        # ==================================================
+        # FAILED / REJECTED
+        # ==================================================
+
+        failed_rejected = withdrawals.filter(
+            status__in=[
+                WithdrawalRequest.WithdrawalStatus.FAILED,
+                WithdrawalRequest.WithdrawalStatus.REJECTED,
+            ]
+        ).count()
+
+        # ==================================================
+        # RESPONSE DATA
+        # ==================================================
+
+        data = {
+            "total_withdrawals": total_withdrawals,
+            "completed": completed,
+            "pending": pending,
+            "failed_rejected": failed_rejected,
+        }
+
+        serializer = WithdrawalStatsSerializer(data)
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Withdrawal statistics "
+                    "retrieved successfully."
+                ),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )

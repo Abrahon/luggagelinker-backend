@@ -355,58 +355,6 @@ from rest_framework import serializers
 from apps.wallets.models import WithdrawalRequest
 
 
-# class AdminWithdrawalListSerializer(serializers.ModelSerializer):
-#     traveler_name = serializers.SerializerMethodField()
-#     traveler_email = serializers.EmailField(
-#         source="wallet.user.email",
-#         read_only=True,
-#     )
-
-#     withdrawal_method_details = serializers.SerializerMethodField()
-
-#     class Meta:
-#         model = WithdrawalRequest
-#         fields = (
-#             "id",
-#             "traveler_name",
-#             "traveler_email",
-#             "withdrawal_method",
-#             "withdrawal_method_details",
-#             "amount",
-#             "status",
-#             "processed_by",
-#             "processed_at",
-#             "completed_at",
-#             "created_at",
-#         )
-
-#     def get_traveler_name(self, obj):
-#         user = obj.wallet.user
-
-#         if hasattr(user, "profile"):
-#             first = getattr(user.profile, "first_name", "")
-#             last = getattr(user.profile, "last_name", "")
-#             full_name = f"{first} {last}".strip()
-#             if full_name:
-#                 return full_name
-
-#         return user.email
-
-#     def get_withdrawal_method_details(self, obj):
-#         method = obj.withdrawal_method
-
-#         if not method:
-#             return None
-
-#         return {
-#             "type": method.get_type_display(),
-#             "account_name": method.account_name,
-#             "account_number": method.account_number,
-#             "bank_name": method.bank_name,
-#             "branch_name": method.branch_name,
-#             "is_verified": method.is_verified,
-#         }
-
 
 class AdminWithdrawalListSerializer(serializers.ModelSerializer):
     traveler_name = serializers.SerializerMethodField()
@@ -1061,3 +1009,14 @@ class WalletTopupSerializer(serializers.Serializer):
             )
 
         return value
+
+
+# widrwal stas card
+
+
+
+class WithdrawalStatsSerializer(serializers.Serializer):
+    total_withdrawals = serializers.IntegerField()
+    completed = serializers.IntegerField()
+    pending = serializers.IntegerField()
+    failed_rejected = serializers.IntegerField()

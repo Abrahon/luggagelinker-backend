@@ -33,6 +33,7 @@ from .views import (
     RecentCompletedBookingView,
 
     AdminAdjustBalanceView,
+    WithdrawalStatsAPIView
 )
 
 urlpatterns = [
@@ -230,6 +231,13 @@ urlpatterns = [
         SenderWalletTransactionDetailAPIView.as_view(),
         name="sender-wallet-transaction-detail",
     ),
+
+    path(
+        "withdrawals/stats/",
+        WithdrawalStatsAPIView.as_view(),
+        name="withdrawal-stats",
+    ),
+
 
 
 ]
