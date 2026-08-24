@@ -1776,11 +1776,13 @@ class BookingTimelineItemSerializer(serializers.Serializer):
 
 class InvoiceTimelineSerializer(serializers.ModelSerializer):
     """
-    Small invoice representation used inside the booking timeline response.
+    Small invoice representation used inside
+    the booking timeline response.
     """
 
     class Meta:
         model = Invoice
+
         fields = [
             "id",
             "invoice_number",
@@ -1789,7 +1791,6 @@ class InvoiceTimelineSerializer(serializers.ModelSerializer):
             "status",
             "invoice_date",
         ]
-
 
 
 

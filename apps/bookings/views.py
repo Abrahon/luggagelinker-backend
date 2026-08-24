@@ -1661,12 +1661,13 @@ class SenderBookingDetailView(generics.RetrieveAPIView):
 #         )
 
 from apps.invoices.models import Invoice
+from apps.payment.models import BookingPayment
 
 from apps.bookings.serializers import (
     BookingTimelineItemSerializer,
     InvoiceTimelineSerializer,
 )
-
+from decimal import Decimal, ROUND_HALF_UP
 
 class SenderBookingTimelineView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1777,10 +1778,6 @@ class SenderBookingTimelineView(APIView):
             BookingStatus.EXPIRED,
         ]:
 
-            # ----------------------------------------------
-            # Refund
-            # ----------------------------------------------
-
             refund = (
                 WalletTransaction.objects
                 .filter(
@@ -1801,10 +1798,6 @@ class SenderBookingTimelineView(APIView):
                         "timestamp": refund.created_at,
                     }
                 )
-
-            # ----------------------------------------------
-            # Booking Cancelled
-            # ----------------------------------------------
 
             timeline.append(
                 {
@@ -1882,7 +1875,111 @@ class SenderBookingTimelineView(APIView):
         )
 
         # --------------------------------------------------
-        # 4. Serialize Timeline
+        # 4. Get Booking Payment
+        # --------------------------------------------------
+
+        booking_payment = (
+            BookingPayment.objects
+            .filter(
+                booking=booking,
+            )
+            .first()
+        )
+        # --------------------------------------------------
+        # 5. Calculate Actual Invoice Total
+        # --------------------------------------------------
+
+        if invoice and booking_payment:
+
+            # --------------------------------------------------
+            # IMPORTANT:
+            #
+            # BookingPayment.amount represents the amount that
+            # was charged/processed, which may already include
+            # the platform fee.
+            #
+            # Example:
+            #
+            # amount = 102.00
+            # fee    = 2%
+            #
+            # Original traveler reward:
+            #
+            # 102 / 1.02 = 100
+            #
+            # Platform fee:
+            #
+            # 100 * 2% = 2
+            #
+            # Total:
+            #
+            # 100 + 2 = 102
+            # --------------------------------------------------
+
+            paid_amount = Decimal(
+                str(booking_payment.amount or "0.00")
+            )
+
+            fee_percentage = Decimal(
+                str(
+                    booking_payment.platform_fee_percentage
+                    or "2.00"
+                )
+            )
+
+            # --------------------------------------------------
+            # Convert percentage to decimal
+            # --------------------------------------------------
+
+            fee_multiplier = (
+                Decimal("1.00")
+                + (
+                    fee_percentage
+                    / Decimal("100")
+                )
+            )
+
+            # --------------------------------------------------
+            # Calculate original traveler reward
+            # --------------------------------------------------
+
+            reward = (
+                paid_amount / fee_multiplier
+            ).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+
+            # --------------------------------------------------
+            # Calculate platform fee
+            # --------------------------------------------------
+
+            platform_fee = (
+                reward
+                * fee_percentage
+                / Decimal("100")
+            ).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+
+            # --------------------------------------------------
+            # Correct total sender payment
+            # --------------------------------------------------
+
+            total_paid = (
+                reward + platform_fee
+            ).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+
+            # Only modify serialized object.
+            # Database is NOT changed.
+            invoice.total_paid = total_paid
+
+        # --------------------------------------------------
+        # 6. Serialize Timeline
         # --------------------------------------------------
 
         timeline_data = BookingTimelineItemSerializer(
@@ -1891,7 +1988,7 @@ class SenderBookingTimelineView(APIView):
         ).data
 
         # --------------------------------------------------
-        # 5. Serialize Invoice
+        # 7. Serialize Invoice
         # --------------------------------------------------
 
         invoice_data = None
@@ -1903,7 +2000,7 @@ class SenderBookingTimelineView(APIView):
             ).data
 
         # --------------------------------------------------
-        # 6. Final Response
+        # 8. Final Response
         # --------------------------------------------------
 
         return Response(
@@ -1917,8 +2014,7 @@ class SenderBookingTimelineView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-
-
+    
 
 class SenderRecentBookingView(generics.ListAPIView):
 
