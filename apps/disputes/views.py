@@ -750,3 +750,122 @@ class AdminDisputeNoteAPIView(APIView):
                 "message": "Admin note added successfully.",
             }
         )
+
+
+from django.db.models import Q
+from django.shortcuts import get_object_or_404
+
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import Dispute, DisputeHistory
+from .serializers import DisputeHistorySerializer
+
+
+# =============================================================
+# DISPUTE HISTORY
+# =============================================================
+
+class DisputeHistoryView(APIView):
+    """
+    Return the complete history/timeline of a dispute.
+
+    Accessible by:
+        - dispute sender
+        - dispute traveler
+        - dispute opener
+        - assigned admin
+        - resolved admin
+    """
+
+    permission_classes = [
+        IsAuthenticated,
+    ]
+
+    def get(self, request, dispute_id):
+
+        # ---------------------------------------------------------
+        # 1. Get dispute
+        # ---------------------------------------------------------
+
+        dispute = get_object_or_404(
+            Dispute.objects.select_related(
+                "booking",
+                "opened_by",
+                "against_user",
+                "assigned_admin",
+                "resolved_by",
+            ),
+            id=dispute_id,
+        )
+
+        # ---------------------------------------------------------
+        # 2. Permission check
+        # ---------------------------------------------------------
+
+        user = request.user
+
+        is_participant = user in [
+            dispute.booking.sender,
+            dispute.booking.traveler,
+            dispute.opened_by,
+            dispute.against_user,
+        ]
+
+        is_admin = (
+            user == dispute.assigned_admin
+            or user == dispute.resolved_by
+            or getattr(user, "is_staff", False)
+            or getattr(user, "is_superuser", False)
+        )
+
+        if not is_participant and not is_admin:
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "You do not have permission "
+                        "to view this dispute history."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ---------------------------------------------------------
+        # 3. Get history
+        # ---------------------------------------------------------
+
+        history = (
+            DisputeHistory.objects
+            .filter(dispute=dispute)
+            .select_related("actor", "dispute")
+            .order_by("created_at")
+        )
+
+        # ---------------------------------------------------------
+        # 4. Serialize
+        # ---------------------------------------------------------
+
+        serializer = DisputeHistorySerializer(
+            history,
+            many=True,
+        )
+
+        # ---------------------------------------------------------
+        # 5. Response
+        # ---------------------------------------------------------
+
+        return Response(
+            {
+                "success": True,
+                "message": "Dispute history retrieved successfully.",
+                "data": {
+                    "dispute_id": str(dispute.id),
+                    "total": history.count(),
+                    "history": serializer.data,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )

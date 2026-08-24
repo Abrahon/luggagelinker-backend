@@ -1343,10 +1343,9 @@ class TravelerProfileAPIView(APIView):
         # ======================================================
         # 13. RECENT REVIEWS
         # ======================================================
-
         recent_reviews = list(
             reviews
-            .order_by("-created_at")[:5]
+            .order_by("-created_at")
         )
 
         # ======================================================

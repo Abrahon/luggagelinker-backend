@@ -770,3 +770,259 @@ class AdminResolveDisputeSerializer(serializers.Serializer):
             attrs["refund_ratio"] = Decimal("0.00")
 
         return attrs
+
+
+
+from rest_framework import serializers
+
+from .models import (
+    Dispute,
+    DisputeEvidence,
+    DisputeMessage,
+    DisputeHistory,
+)
+
+
+# =============================================================
+# USER SERIALIZER
+# =============================================================
+
+class DisputeHistoryUserSerializer(serializers.Serializer):
+    """
+    Lightweight user representation for dispute history.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    email = serializers.EmailField(read_only=True)
+    name = serializers.SerializerMethodField()
+
+    def get_name(self, user):
+        profile = getattr(user, "profile", None)
+
+        if profile:
+            full_name = getattr(profile, "full_name", None)
+
+            if full_name:
+                return str(full_name).strip()
+
+            first_name = (
+                getattr(profile, "first_name", None)
+                or ""
+            ).strip()
+
+            last_name = (
+                getattr(profile, "last_name", None)
+                or ""
+            ).strip()
+
+            full_name = f"{first_name} {last_name}".strip()
+
+            if full_name:
+                return full_name
+
+        return (
+            getattr(user, "email", None)
+            or "Unknown User"
+        )
+
+
+# =============================================================
+# DISPUTE HISTORY SERIALIZER
+# =============================================================
+
+class DisputeHistorySerializer(serializers.ModelSerializer):
+    """
+    Serializer for dispute history timeline.
+    """
+
+    actor = DisputeHistoryUserSerializer(read_only=True)
+
+    action_display = serializers.CharField(
+        source="get_action_display",
+        read_only=True,
+    )
+
+    status_from_display = serializers.SerializerMethodField()
+
+    status_to_display = serializers.CharField(
+        source="get_status_to_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = DisputeHistory
+
+        fields = [
+            "id",
+            "dispute",
+            "actor",
+
+            "action",
+            "action_display",
+
+            "status_from",
+            "status_from_display",
+
+            "status_to",
+            "status_to_display",
+
+            "notes",
+            "created_at",
+        ]
+
+        read_only_fields = fields
+
+    def get_status_from_display(self, obj):
+        if not obj.status_from:
+            return None
+
+        return obj.get_status_from_display()
+
+
+# =============================================================
+# DISPUTE EVIDENCE SERIALIZER
+# =============================================================
+
+class DisputeEvidenceSerializer(serializers.ModelSerializer):
+
+    uploaded_by_email = serializers.EmailField(
+        source="uploaded_by.email",
+        read_only=True,
+    )
+
+    class Meta:
+        model = DisputeEvidence
+
+        fields = [
+            "id",
+            "dispute",
+            "uploaded_by",
+            "uploaded_by_email",
+            "evidence_type",
+            "file_attachment",
+            "description",
+            "created_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "uploaded_by",
+            "created_at",
+        ]
+
+
+# =============================================================
+# DISPUTE MESSAGE SERIALIZER
+# =============================================================
+
+class DisputeMessageSerializer(serializers.ModelSerializer):
+
+    sender_email = serializers.EmailField(
+        source="sender.email",
+        read_only=True,
+    )
+
+    class Meta:
+        model = DisputeMessage
+
+        fields = [
+            "id",
+            "dispute",
+            "sender",
+            "sender_email",
+            "message_text",
+            "is_admin_note",
+            "is_read",
+            "created_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "sender",
+            "is_admin_note",
+            "created_at",
+        ]
+
+
+# =============================================================
+# DISPUTE SERIALIZER
+# =============================================================
+
+class DisputeSerializer(serializers.ModelSerializer):
+
+    opened_by_email = serializers.EmailField(
+        source="opened_by.email",
+        read_only=True,
+    )
+
+    against_user_email = serializers.EmailField(
+        source="against_user.email",
+        read_only=True,
+    )
+
+    assigned_admin_email = serializers.EmailField(
+        source="assigned_admin.email",
+        read_only=True,
+        allow_null=True,
+    )
+
+    resolved_by_email = serializers.EmailField(
+        source="resolved_by.email",
+        read_only=True,
+        allow_null=True,
+    )
+
+    class Meta:
+        model = Dispute
+
+        fields = [
+            "id",
+            "booking",
+
+            "opened_by",
+            "opened_by_email",
+
+            "against_user",
+            "against_user_email",
+
+            "assigned_admin",
+            "assigned_admin_email",
+
+            "resolved_by",
+            "resolved_by_email",
+
+            "last_updated_by",
+
+            "reason",
+            "status",
+            "resolution",
+
+            "description",
+            "admin_notes",
+
+            "disputed_amount",
+
+            "is_reopened",
+            "sender_notified",
+            "traveler_notified",
+
+            "created_at",
+            "updated_at",
+            "resolved_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "opened_by",
+            "assigned_admin",
+            "resolved_by",
+            "last_updated_by",
+            "status",
+            "resolution",
+            "is_reopened",
+            "sender_notified",
+            "traveler_notified",
+            "created_at",
+            "updated_at",
+            "resolved_at",
+        ]

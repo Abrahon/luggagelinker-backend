@@ -11,7 +11,8 @@ from .views import (
     AdminDisputeResolveAPIView,
     DisputeWithdrawAPIView,
     AdminDisputeStatusAPIView,
-    AdminDisputeNoteAPIView
+    AdminDisputeNoteAPIView,
+    DisputeHistoryView
 )
 
 urlpatterns = [
@@ -46,5 +47,12 @@ urlpatterns = [
         AdminDisputeNoteAPIView.as_view(),
         name="admin-dispute-note",
     ),
+
+    path(
+        "disputes/<uuid:dispute_id>/history/",
+        DisputeHistoryView.as_view(),
+        name="dispute-history",
+    ),
+
 
 ]

@@ -1277,39 +1277,25 @@
 #         return invoice
 
 
-import io
 from decimal import Decimal
 
-from django.core.files.base import ContentFile
 from django.db import transaction
-from django.utils import timezone
-
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import (
-    ParagraphStyle,
-    getSampleStyleSheet,
-)
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-)
 
 from apps.invoices.models import Invoice, InvoiceStatus
 
 
 class InvoiceService:
     """
-    Handles the complete invoice lifecycle:
+    Handles the complete invoice lifecycle.
 
     1. Create invoice for completed booking
-    2. Generate unique invoice number
-    3. Generate invoice PDF
-    4. Store PDF in invoice.pdf
+    2. Generate unique invoice number through the Invoice model
+    3. Store booking, payment, participant, and financial snapshot
+
+    PDF generation is NOT handled by the backend.
+
+    The frontend is responsible for generating the invoice PDF
+    using the invoice API data.
 
     Invoice generation is idempotent:
     calling create_for_booking() multiple times for the same
@@ -1326,11 +1312,10 @@ class InvoiceService:
         """
         Create an invoice for a completed booking.
 
-        If an invoice already exists for this booking, return
-        the existing invoice.
+        If an invoice already exists for this booking,
+        return the existing invoice.
 
-        If the invoice exists but its PDF is missing, generate
-        the PDF automatically.
+        No PDF is generated or stored.
         """
 
         # ---------------------------------------------------------
@@ -1344,11 +1329,6 @@ class InvoiceService:
         )
 
         if existing_invoice:
-
-            # Existing invoice but PDF is missing
-            if not existing_invoice.pdf:
-                cls.generate_pdf(existing_invoice)
-
             return existing_invoice
 
         # ---------------------------------------------------------
@@ -1396,12 +1376,6 @@ class InvoiceService:
 
             status=InvoiceStatus.ACTIVE,
         )
-
-        # ---------------------------------------------------------
-        # 6. Generate PDF immediately
-        # ---------------------------------------------------------
-
-        cls.generate_pdf(invoice)
 
         return invoice
 
@@ -1463,6 +1437,10 @@ class InvoiceService:
                 .first()
             )
 
+        # ---------------------------------------------------------
+        # Validation
+        # ---------------------------------------------------------
+
         if payment is None:
             raise ValueError(
                 "Cannot generate invoice because no payment was found."
@@ -1480,9 +1458,9 @@ class InvoiceService:
         Build invoice relationships and financial snapshot.
         """
 
-        # ---------------------------------------------------------
-        # Sender
-        # ---------------------------------------------------------
+        # =========================================================
+        # SENDER
+        # =========================================================
 
         sender = getattr(
             booking,
@@ -1497,9 +1475,9 @@ class InvoiceService:
                 None,
             )
 
-        # ---------------------------------------------------------
-        # Traveler
-        # ---------------------------------------------------------
+        # =========================================================
+        # TRAVELER
+        # =========================================================
 
         traveler = getattr(
             booking,
@@ -1522,9 +1500,9 @@ class InvoiceService:
                     None,
                 )
 
-        # ---------------------------------------------------------
-        # Package
-        # ---------------------------------------------------------
+        # =========================================================
+        # PACKAGE
+        # =========================================================
 
         package = getattr(
             booking,
@@ -1547,9 +1525,9 @@ class InvoiceService:
                     None,
                 )
 
-        # ---------------------------------------------------------
-        # Trip
-        # ---------------------------------------------------------
+        # =========================================================
+        # TRIP
+        # =========================================================
 
         trip = getattr(
             booking,
@@ -1557,9 +1535,9 @@ class InvoiceService:
             None,
         )
 
-        # ---------------------------------------------------------
-        # Validation
-        # ---------------------------------------------------------
+        # =========================================================
+        # VALIDATION
+        # =========================================================
 
         if sender is None:
             raise ValueError(
@@ -1615,9 +1593,9 @@ class InvoiceService:
             default=reward + platform_fee,
         )
 
-        # ---------------------------------------------------------
-        # Currency
-        # ---------------------------------------------------------
+        # =========================================================
+        # CURRENCY
+        # =========================================================
 
         currency = (
             getattr(
@@ -1628,9 +1606,9 @@ class InvoiceService:
             or "USD"
         )
 
-        # ---------------------------------------------------------
-        # Payment method
-        # ---------------------------------------------------------
+        # =========================================================
+        # PAYMENT METHOD
+        # =========================================================
 
         payment_method = getattr(
             payment,
@@ -1645,15 +1623,17 @@ class InvoiceService:
                 "UNKNOWN",
             )
 
+        # Handle Django enum / TextChoices
+
         payment_method = getattr(
             payment_method,
             "value",
             payment_method,
         )
 
-        # ---------------------------------------------------------
-        # Transaction ID
-        # ---------------------------------------------------------
+        # =========================================================
+        # TRANSACTION ID
+        # =========================================================
 
         transaction_id = (
             getattr(
@@ -1673,6 +1653,10 @@ class InvoiceService:
             )
             or ""
         )
+
+        # =========================================================
+        # RETURN SNAPSHOT
+        # =========================================================
 
         return {
             "sender": sender,
@@ -1715,7 +1699,7 @@ class InvoiceService:
 
                 try:
                     return Decimal(str(value))
-                except Exception:
+                except (TypeError, ValueError, ArithmeticError):
                     continue
 
         return default
@@ -1728,776 +1712,79 @@ class InvoiceService:
     def _get_user_display_name(user):
         """
         Get user's display name from the related Profile.
+
+        This helper can still be used by serializers or other
+        invoice-related services if needed.
         """
 
         if not user:
             return "N/A"
 
-        profile = getattr(user, "profile", None)
+        # ---------------------------------------------------------
+        # Profile
+        # ---------------------------------------------------------
+
+        profile = getattr(
+            user,
+            "profile",
+            None,
+        )
 
         if profile:
 
-            full_name = getattr(profile, "full_name", None)
+            # -----------------------------------------------------
+            # Full name
+            # -----------------------------------------------------
+
+            full_name = getattr(
+                profile,
+                "full_name",
+                None,
+            )
 
             if full_name:
                 return str(full_name).strip()
 
+            # -----------------------------------------------------
+            # First + Last name
+            # -----------------------------------------------------
+
             first_name = (
-                getattr(profile, "first_name", None)
+                getattr(
+                    profile,
+                    "first_name",
+                    None,
+                )
                 or ""
             ).strip()
 
             last_name = (
-                getattr(profile, "last_name", None)
+                getattr(
+                    profile,
+                    "last_name",
+                    None,
+                )
                 or ""
             ).strip()
 
-            full_name = f"{first_name} {last_name}".strip()
+            full_name = (
+                f"{first_name} {last_name}"
+            ).strip()
 
             if full_name:
                 return full_name
 
-        email = getattr(user, "email", None)
+        # ---------------------------------------------------------
+        # User email fallback
+        # ---------------------------------------------------------
+
+        email = getattr(
+            user,
+            "email",
+            None,
+        )
 
         if email:
             return email
 
         return "N/A"
-
-    # =============================================================
-    # PDF GENERATION
-    # =============================================================
-
-    @classmethod
-    def generate_pdf(cls, invoice):
-        """
-        Generate and permanently store the invoice PDF.
-
-        If PDF already exists, it will not be regenerated.
-        """
-
-        if invoice.pdf:
-            return invoice
-
-        buffer = io.BytesIO()
-
-        document = SimpleDocTemplate(
-            buffer,
-            pagesize=letter,
-            rightMargin=45,
-            leftMargin=45,
-            topMargin=45,
-            bottomMargin=45,
-            title=(
-                f"LuggageLinker Invoice "
-                f"{invoice.invoice_number}"
-            ),
-            author="LuggageLinker",
-        )
-
-        # =========================================================
-        # STYLES
-        # =========================================================
-
-        styles = getSampleStyleSheet()
-
-        title_style = ParagraphStyle(
-            "InvoiceTitle",
-            parent=styles["Heading1"],
-            fontSize=18,
-            leading=22,
-            alignment=TA_CENTER,
-            spaceAfter=5,
-        )
-
-        subtitle_style = ParagraphStyle(
-            "InvoiceSubtitle",
-            parent=styles["Normal"],
-            fontSize=9,
-            leading=12,
-            alignment=TA_CENTER,
-        )
-
-        section_style = ParagraphStyle(
-            "Section",
-            parent=styles["Heading2"],
-            fontSize=10,
-            leading=13,
-            spaceBefore=8,
-            spaceAfter=5,
-        )
-
-        normal_style = ParagraphStyle(
-            "NormalInvoice",
-            parent=styles["Normal"],
-            fontSize=9,
-            leading=12,
-        )
-
-        right_style = ParagraphStyle(
-            "RightInvoice",
-            parent=normal_style,
-            alignment=TA_RIGHT,
-        )
-
-        bold_style = ParagraphStyle(
-            "BoldInvoice",
-            parent=normal_style,
-            fontName="Helvetica-Bold",
-        )
-
-        # =========================================================
-        # STORY
-        # =========================================================
-
-        elements = []
-
-        # =========================================================
-        # HEADER
-        # =========================================================
-
-        elements.append(
-            Paragraph(
-                "LUGGAGELINKER",
-                title_style,
-            )
-        )
-
-        elements.append(
-            Paragraph(
-                "Official Delivery Invoice",
-                subtitle_style,
-            )
-        )
-
-        elements.append(
-            Paragraph(
-                "Peer-to-Peer Logistics & Parcel Delivery Network",
-                subtitle_style,
-            )
-        )
-
-        elements.append(
-            Spacer(1, 15)
-        )
-
-        # =========================================================
-        # INVOICE INFORMATION
-        # =========================================================
-
-        invoice_info = [
-            [
-                Paragraph(
-                    "<b>Invoice Number</b>",
-                    normal_style,
-                ),
-                Paragraph(
-                    str(invoice.invoice_number),
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "<b>Invoice Date</b>",
-                    normal_style,
-                ),
-                Paragraph(
-                    invoice.invoice_date.strftime(
-                        "%d %b %Y, %H:%M UTC"
-                    ),
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "<b>Booking ID</b>",
-                    normal_style,
-                ),
-                Paragraph(
-                    str(invoice.booking.id),
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "<b>Invoice Status</b>",
-                    normal_style,
-                ),
-                Paragraph(
-                    invoice.get_status_display(),
-                    normal_style,
-                ),
-            ],
-        ]
-
-        invoice_table = Table(
-            invoice_info,
-            colWidths=[130, 370],
-        )
-
-        invoice_table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        colors.grey,
-                    ),
-                    (
-                        "BACKGROUND",
-                        (0, 0),
-                        (0, -1),
-                        colors.whitesmoke,
-                    ),
-                    (
-                        "VALIGN",
-                        (0, 0),
-                        (-1, -1),
-                        "TOP",
-                    ),
-                    (
-                        "PADDING",
-                        (0, 0),
-                        (-1, -1),
-                        6,
-                    ),
-                ]
-            )
-        )
-
-        elements.append(invoice_table)
-
-        # =========================================================
-        # ROUTE
-        # =========================================================
-
-        elements.append(
-            Paragraph(
-                "1. ROUTE & TRIP DETAILS",
-                section_style,
-            )
-        )
-
-        from_city = (
-            getattr(invoice.trip, "from_city", None)
-            or getattr(invoice.trip, "departure_city", None)
-            or "N/A"
-        )
-
-        to_city = (
-            getattr(invoice.trip, "to_city", None)
-            or getattr(invoice.trip, "arrival_city", None)
-            or "N/A"
-        )
-
-        from_country = getattr(
-            invoice.trip,
-            "from_country",
-            "",
-        )
-
-        to_country = getattr(
-            invoice.trip,
-            "to_country",
-            "",
-        )
-
-        departure_date = getattr(
-            invoice.trip,
-            "departure_date",
-            None,
-        )
-
-        arrival_date = getattr(
-            invoice.trip,
-            "arrival_date",
-            None,
-        )
-
-        route_data = [
-            [
-                Paragraph(
-                    "Route",
-                    normal_style,
-                ),
-                Paragraph(
-                    f"{from_city}, {from_country} → "
-                    f"{to_city}, {to_country}",
-                    bold_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "Departure",
-                    normal_style,
-                ),
-                Paragraph(
-                    departure_date.strftime("%d %b %Y")
-                    if departure_date
-                    else "N/A",
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "Arrival",
-                    normal_style,
-                ),
-                Paragraph(
-                    arrival_date.strftime("%d %b %Y")
-                    if arrival_date
-                    else "N/A",
-                    normal_style,
-                ),
-            ],
-        ]
-
-        route_table = Table(
-            route_data,
-            colWidths=[130, 370],
-        )
-
-        route_table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        colors.grey,
-                    ),
-                    (
-                        "PADDING",
-                        (0, 0),
-                        (-1, -1),
-                        6,
-                    ),
-                ]
-            )
-        )
-
-        elements.append(route_table)
-
-        # =========================================================
-        # PACKAGE
-        # =========================================================
-
-        elements.append(
-            Paragraph(
-                "2. PACKAGE DETAILS",
-                section_style,
-            )
-        )
-
-        package_title = getattr(
-            invoice.package,
-            "title",
-            "N/A",
-        )
-
-        package_description = (
-            getattr(
-                invoice.package,
-                "description",
-                "N/A",
-            )
-            or "N/A"
-        )
-
-        package_weight = getattr(
-            invoice.package,
-            "weight",
-            "N/A",
-        )
-
-        if hasattr(
-            invoice.package,
-            "get_category_display",
-        ):
-            package_category = (
-                invoice.package.get_category_display()
-            )
-        else:
-            package_category = getattr(
-                invoice.package,
-                "category",
-                "N/A",
-            )
-
-        package_data = [
-            [
-                Paragraph(
-                    "Package",
-                    normal_style,
-                ),
-                Paragraph(
-                    str(package_title),
-                    bold_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "Category",
-                    normal_style,
-                ),
-                Paragraph(
-                    str(package_category),
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "Weight",
-                    normal_style,
-                ),
-                Paragraph(
-                    f"{package_weight} kg",
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "Description",
-                    normal_style,
-                ),
-                Paragraph(
-                    str(package_description)[:300],
-                    normal_style,
-                ),
-            ],
-        ]
-
-        package_table = Table(
-            package_data,
-            colWidths=[130, 370],
-        )
-
-        package_table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        colors.grey,
-                    ),
-                    (
-                        "PADDING",
-                        (0, 0),
-                        (-1, -1),
-                        6,
-                    ),
-                ]
-            )
-        )
-
-        elements.append(package_table)
-
-        # =========================================================
-        # PARTICIPANTS
-        # =========================================================
-
-        elements.append(
-            Paragraph(
-                "3. PARTICIPANTS",
-                section_style,
-            )
-        )
-
-        sender_name = cls._get_user_display_name(
-            invoice.sender
-        )
-
-        traveler_name = cls._get_user_display_name(
-            invoice.traveler
-        )
-
-        sender_email = (
-            getattr(invoice.sender, "email", None)
-            or "N/A"
-        )
-
-        traveler_email = (
-            getattr(invoice.traveler, "email", None)
-            or "N/A"
-        )
-
-        participant_data = [
-            [
-                Paragraph(
-                    "Sender",
-                    normal_style,
-                ),
-                Paragraph(
-                    f"{sender_name} ({sender_email})",
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "Traveler",
-                    normal_style,
-                ),
-                Paragraph(
-                    f"{traveler_name} ({traveler_email})",
-                    normal_style,
-                ),
-            ],
-        ]
-
-        participant_table = Table(
-            participant_data,
-            colWidths=[130, 370],
-        )
-
-        participant_table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        colors.grey,
-                    ),
-                    (
-                        "PADDING",
-                        (0, 0),
-                        (-1, -1),
-                        6,
-                    ),
-                ]
-            )
-        )
-
-        elements.append(participant_table)
-
-        # =========================================================
-        # FINANCIAL BREAKDOWN
-        # =========================================================
-
-        elements.append(
-            Paragraph(
-                "4. FINANCIAL BREAKDOWN",
-                section_style,
-            )
-        )
-
-        currency = invoice.currency or "USD"
-
-        reward = (
-            f"{currency} "
-            f"{invoice.reward:.2f}"
-        )
-
-        platform_fee = (
-            f"{currency} "
-            f"{invoice.platform_fee:.2f}"
-        )
-
-        total_paid = (
-            f"{currency} "
-            f"{invoice.total_paid:.2f}"
-        )
-
-        financial_data = [
-            [
-                Paragraph(
-                    "Traveler Delivery Reward",
-                    normal_style,
-                ),
-                Paragraph(
-                    reward,
-                    right_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "LuggageLinker Platform Fee",
-                    normal_style,
-                ),
-                Paragraph(
-                    platform_fee,
-                    right_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "<b>Total Amount Paid</b>",
-                    bold_style,
-                ),
-                Paragraph(
-                    f"<b>{total_paid}</b>",
-                    right_style,
-                ),
-            ],
-        ]
-
-        financial_table = Table(
-            financial_data,
-            colWidths=[350, 150],
-        )
-
-        financial_table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        colors.grey,
-                    ),
-                    (
-                        "BACKGROUND",
-                        (0, 2),
-                        (-1, 2),
-                        colors.whitesmoke,
-                    ),
-                    (
-                        "PADDING",
-                        (0, 0),
-                        (-1, -1),
-                        7,
-                    ),
-                    (
-                        "ALIGN",
-                        (1, 0),
-                        (1, -1),
-                        "RIGHT",
-                    ),
-                ]
-            )
-        )
-
-        elements.append(financial_table)
-
-        # =========================================================
-        # PAYMENT DETAILS
-        # =========================================================
-
-        elements.append(
-            Paragraph(
-                "5. PAYMENT DETAILS",
-                section_style,
-            )
-        )
-
-        if hasattr(
-            invoice,
-            "get_payment_method_display",
-        ):
-            payment_method = (
-                invoice.get_payment_method_display()
-            )
-        else:
-            payment_method = invoice.payment_method
-
-        payment_data = [
-            [
-                Paragraph(
-                    "Payment Method",
-                    normal_style,
-                ),
-                Paragraph(
-                    str(payment_method),
-                    normal_style,
-                ),
-            ],
-            [
-                Paragraph(
-                    "Transaction ID",
-                    normal_style,
-                ),
-                Paragraph(
-                    invoice.transaction_id or "N/A",
-                    normal_style,
-                ),
-            ],
-        ]
-
-        payment_table = Table(
-            payment_data,
-            colWidths=[130, 370],
-        )
-
-        payment_table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        colors.grey,
-                    ),
-                    (
-                        "PADDING",
-                        (0, 0),
-                        (-1, -1),
-                        6,
-                    ),
-                ]
-            )
-        )
-
-        elements.append(payment_table)
-
-        # =========================================================
-        # FOOTER
-        # =========================================================
-
-        elements.append(
-            Spacer(1, 20)
-        )
-
-        elements.append(
-            Paragraph(
-                "Thank you for using LuggageLinker.",
-                subtitle_style,
-            )
-        )
-
-        elements.append(
-            Paragraph(
-                "support@luggagelinker.com",
-                subtitle_style,
-            )
-        )
-
-        # =========================================================
-        # BUILD PDF & SAVE TO CLOUDINARY
-        # =========================================================
-
-        document.build(elements)
-
-        buffer.seek(0)
-        pdf_content = buffer.getvalue()
-
-        if not pdf_content:
-            raise ValueError(
-                "Invoice PDF generation produced an empty file."
-            )
-
-        file_name = f"Invoice_{invoice.invoice_number}.pdf"
-
-        # Save binary PDF stream directly to Cloudinary model field
-        invoice.pdf.save(
-            file_name,
-            ContentFile(pdf_content),
-            save=False,
-        )
-
-        invoice.pdf_generated_at = timezone.now()
-        invoice.save(
-            update_fields=[
-                "pdf",
-                "pdf_generated_at",
-            ]
-        )
-
-        return invoice
