@@ -1122,3 +1122,52 @@ class TravelerAddEvidenceAPIView(
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class AdminDisputeAddMessageAPIView(
+    DisputeErrorFormatMixin,
+    generics.CreateAPIView,
+):
+    permission_classes = [IsAuthenticated]
+    serializer_class = DisputeMessageSerializer
+
+    def get_queryset(self):
+        return Dispute.objects.all()
+
+    def create(self, request, *args, **kwargs):
+
+        dispute = get_object_or_404(
+            Dispute,
+            id=kwargs["id"]
+        )
+
+        # Replace with your actual admin permission
+        if not request.user.is_staff:
+            return Response(
+                {"detail": "Admin access required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = self.get_serializer(
+            data=request.data
+        )
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        message = DisputeService.add_message(
+            dispute_id=dispute.id,
+            sender=request.user,
+            message_text=serializer.validated_data["message_text"],
+        )
+
+        return Response(
+            {
+                "message": "Message sent successfully.",
+                "message_detail": DisputeMessageSerializer(
+                    message,
+                    context={"request": request}
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
