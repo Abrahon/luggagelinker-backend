@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from .serializers import SenderDisputeDetailSerializer,TravelerEvidenceSerializer
 
 from apps.disputes.models import (
     Dispute,
@@ -121,58 +122,184 @@ class DisputeListCreateAPIView(DisputeErrorFormatMixin, generics.ListCreateAPIVi
 
 
         
+
+
+
+
 class DisputeRetrieveAPIView(generics.RetrieveAPIView):
-    """Retrieves full view tracking parameters for a specific dispute case file."""
-    permission_classes = [IsAuthenticated]
-    serializer_class = DisputeSerializer
+    """
+    Sender / Traveler dispute detail API.
+    """
+
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    serializer_class = SenderDisputeDetailSerializer
+
     lookup_field = "id"
 
     def get_queryset(self):
+
         user = self.request.user
-        return Dispute.objects.filter(
-            Q(opened_by=user) | Q(against_user=user)
-        ).select_related(
-            "booking", "opened_by", "against_user", "assigned_admin"
-        ).prefetch_related(
-            "messages__sender",
-            "evidence__uploaded_by"
+
+        return (
+            Dispute.objects
+            .filter(
+                Q(opened_by=user) |
+                Q(against_user=user)
+            )
+            .select_related(
+                "booking",
+                "opened_by",
+                "against_user",
+            )
+            .prefetch_related(
+                "messages__sender",
+                "evidence__uploaded_by",
+                "history__actor",
+            )
         )
 
+class DisputeAddMessageAPIView(
+    DisputeErrorFormatMixin,
+    generics.CreateAPIView
+):
+    """
+    Add a message to an existing dispute conversation.
 
-class DisputeAddMessageAPIView(DisputeErrorFormatMixin, generics.CreateAPIView):
-    """Appends a new conversation comment thread item to an active user dispute claim."""
+    URL:
+        POST /api/disputes/<dispute_id>/message/
+
+    Request body:
+        {
+            "message_text": "Where are you now?"
+        }
+
+    The authenticated user becomes the sender automatically.
+    """
+
     permission_classes = [IsAuthenticated]
+
     serializer_class = DisputeMessageSerializer
+
     lookup_field = "id"
 
+    # ============================================================
+    # DISPUTE ACCESS
+    # ============================================================
+
     def get_queryset(self):
+
         user = self.request.user
-        return Dispute.objects.filter(Q(opened_by=user) | Q(against_user=user))
+
+        return (
+            Dispute.objects
+            .filter(
+                Q(opened_by=user)
+                | Q(against_user=user)
+            )
+            .select_related(
+                "opened_by",
+                "against_user",
+                "assigned_admin",
+            )
+        )
+
+    # ============================================================
+    # CREATE MESSAGE
+    # ============================================================
 
     def create(self, request, *args, **kwargs):
+
+        # --------------------------------------------------------
+        # Get dispute
+        # --------------------------------------------------------
+
         dispute = self.get_object()
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+
+        # --------------------------------------------------------
+        # Validate request body
+        # --------------------------------------------------------
+
+        serializer = self.get_serializer(
+            data=request.data,
+            context={
+                "request": request,
+                "dispute": dispute,
+            }
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        # --------------------------------------------------------
+        # Create message through service
+        # --------------------------------------------------------
 
         try:
+
             message = DisputeService.add_message(
                 dispute_id=dispute.id,
                 sender=request.user,
-                message_text=serializer.validated_data["message_text"]
+                message_text=serializer.validated_data[
+                    "message_text"
+                ],
             )
-            output_serializer = DisputeMessageSerializer(message)
-            return Response({
-                "message": "Comment successfully attached to the dispute thread.",
-                "message_detail": output_serializer.data
-            }, status=status.HTTP_201_CREATED)
+
+            # ----------------------------------------------------
+            # Serialize created message
+            # ----------------------------------------------------
+
+            output_serializer = DisputeMessageSerializer(
+                message,
+                context={
+                    "request": request,
+                }
+            )
+
+            return Response(
+                {
+                    "message": (
+                        "Comment successfully attached "
+                        "to the dispute thread."
+                    ),
+                    "message_detail": output_serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        # --------------------------------------------------------
+        # Business validation errors
+        # --------------------------------------------------------
 
         except DjangoValidationError as e:
-            return Response(self._format_error(e), status=status.HTTP_400_BAD_REQUEST)
+
+            return Response(
+                self._format_error(e),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --------------------------------------------------------
+        # Unexpected error
+        # --------------------------------------------------------
+
         except Exception:
-            logger.exception("Unexpected exception inside append message path for dispute %s", dispute.id)
-            return Response({"detail": "Internal server error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+            logger.exception(
+                "Unexpected exception inside append "
+                "message path for dispute %s",
+                dispute.id,
+            )
 
+            return Response(
+                {
+                    "detail": "Internal server error."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        
 
 
 class DisputeAddEvidenceAPIView(DisputeErrorFormatMixin, generics.CreateAPIView):
@@ -869,3 +996,129 @@ class DisputeHistoryView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class TravelerAddEvidenceAPIView(
+    DisputeErrorFormatMixin,
+    generics.CreateAPIView,
+):
+    """
+    Allows the Traveler involved in a dispute to upload
+    additional evidence.
+
+    Traveler does NOT provide evidence_type.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    serializer_class = TravelerEvidenceSerializer
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+    ]
+
+    lookup_field = "id"
+
+    def get_queryset(self):
+        """
+        Only the Traveler involved in the dispute
+        can access this endpoint.
+        """
+        user = self.request.user
+
+        return Dispute.objects.filter(
+            against_user=user
+        ).select_related(
+            "opened_by",
+            "against_user",
+        )
+
+    def create(self, request, *args, **kwargs):
+
+        dispute = self.get_object()
+
+        # ---------------------------------------------------------
+        # Make absolutely sure requester is the Traveler
+        # ---------------------------------------------------------
+
+        if request.user != dispute.against_user:
+            return Response(
+                {
+                    "detail": (
+                        "Only the traveler involved in this "
+                        "dispute can upload traveler evidence."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ---------------------------------------------------------
+        # Validate request
+        # ---------------------------------------------------------
+
+        serializer = self.get_serializer(
+            data=request.data,
+            context={
+                "request": request,
+                "dispute": dispute,
+            },
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        try:
+
+            evidence = DisputeService.add_evidence(
+                dispute_id=dispute.id,
+                uploaded_by=request.user,
+                file_object=serializer.validated_data[
+                    "file_attachment"
+                ],
+                evidence_type=None,
+                description=serializer.validated_data.get(
+                    "description",
+                    "",
+                ),
+            )
+
+            output_serializer = TravelerEvidenceSerializer(
+                evidence,
+                context={
+                    "request": request,
+                },
+            )
+
+            return Response(
+                {
+                    "message": (
+                        "Evidence uploaded successfully."
+                    ),
+                    "evidence_detail": output_serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except DjangoValidationError as exc:
+
+            return Response(
+                self._format_error(exc),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Unexpected error uploading traveler evidence "
+                "for dispute %s",
+                dispute.id,
+            )
+
+            return Response(
+                {
+                    "detail": "Internal server error."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
