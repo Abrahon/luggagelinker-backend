@@ -5,20 +5,47 @@ from .match_service import (
     create_or_update_match,
 )
 
-from .filters import filter_trips
-
 logger = logging.getLogger(__name__)
 
 
 def run_package_matching(package):
+    """
+    Find and create all compatible trip matches for a package.
+
+    MatchService is the single source of truth for eligibility
+    and compatibility.
+    """
+
     matches = []
 
-    eligible_trips = filter_trips(package).iterator()
+    # --------------------------------------------------
+    # PACKAGE ELIGIBILITY
+    # --------------------------------------------------
 
-    for trip in eligible_trips:
+    if not MatchService.package_can_match(package):
+        logger.info(
+            "Package not eligible for matching | package=%s",
+            package.id,
+        )
+        return []
 
-        if not MatchService.is_compatible(package, trip):
-            continue
+    # --------------------------------------------------
+    # FIND COMPATIBLE TRIPS
+    # --------------------------------------------------
+
+    trips = MatchService.find_compatible_trips(package)
+
+    logger.info(
+        "Compatible trips found | package=%s | count=%s",
+        package.id,
+        len(trips),
+    )
+
+    # --------------------------------------------------
+    # CREATE MATCHES
+    # --------------------------------------------------
+
+    for trip in trips:
 
         score = MatchService.calculate_score(
             package,
@@ -26,6 +53,13 @@ def run_package_matching(package):
         )
 
         if score < 70:
+            logger.info(
+                "Trip skipped because score < 70 | "
+                "package=%s | trip=%s | score=%s",
+                package.id,
+                trip.id,
+                score,
+            )
             continue
 
         match = create_or_update_match(
@@ -36,5 +70,11 @@ def run_package_matching(package):
 
         if match:
             matches.append(match)
+
+    logger.info(
+        "Package matching completed | package=%s | matches=%s",
+        package.id,
+        len(matches),
+    )
 
     return matches

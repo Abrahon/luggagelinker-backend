@@ -443,24 +443,100 @@ class PackageManageView(generics.RetrieveUpdateDestroyAPIView):
 # =========================
 # UPLOAD IMAGE
 # =========================
+# class UploadPackageImageView(generics.CreateAPIView):
+#     serializer_class = PackageImageUploadSerializer
+#     permission_classes = [IsAuthenticated]
+#     parser_classes = (
+#         MultiPartParser,
+#         FormParser,
+#     )
+#     MAX_IMAGES = 5
+
+#     @transaction.atomic
+#     def create(self, request, *args, **kwargs):
+#         # REMOVED is_active=True so owners can upload images while package is under review/inactive
+#         package = Package.objects.filter(
+#             id=kwargs["package_id"],
+#             sender=request.user,
+#         ).first()
+
+#         if not package:
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Package not found.",
+#                 },
+#                 status=status.HTTP_404_NOT_FOUND,
+#             )
+
+#         if package.images.count() >= self.MAX_IMAGES:
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": f"You can upload a maximum of {self.MAX_IMAGES} images.",
+#                 },
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         serializer = self.get_serializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+#         image = serializer.validated_data["image"]
+
+#         try:
+#             result = upload(
+#                 image,
+#                 folder="packages",
+#             )
+#         except Exception:
+#             return Response(
+#                 {
+#                     "success": False,
+#                     "message": "Failed to upload image to Cloudinary.",
+#                 },
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
+
+#         package_image = PackageImage.objects.create(
+#             package=package,
+#             image=result["secure_url"],
+#             is_primary=package.images.count() == 0,
+#         )
+
+#         return Response(
+#             {
+#                 "success": True,
+#                 "message": "Image uploaded successfully.",
+#                 "data": PackageImageSerializer(package_image).data,
+#             },
+#             status=status.HTTP_201_CREATED,
+#         )
+
 class UploadPackageImageView(generics.CreateAPIView):
     serializer_class = PackageImageUploadSerializer
     permission_classes = [IsAuthenticated]
+
     parser_classes = (
         MultiPartParser,
         FormParser,
     )
+
     MAX_IMAGES = 5
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        # REMOVED is_active=True so owners can upload images while package is under review/inactive
-        package = Package.objects.filter(
-            id=kwargs["package_id"],
-            sender=request.user,
-        ).first()
 
-        if not package:
+        package_id = kwargs.get("package_id")
+
+        # ==========================================================
+        # 1. CHECK PACKAGE EXISTS
+        # ==========================================================
+
+        try:
+            package = Package.objects.get(
+                id=package_id
+            )
+        except Package.DoesNotExist:
+
             return Response(
                 {
                     "success": False,
@@ -469,48 +545,110 @@ class UploadPackageImageView(generics.CreateAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if package.images.count() >= self.MAX_IMAGES:
+        # ==========================================================
+        # 2. CHECK OWNERSHIP
+        # ==========================================================
+
+        if package.sender_id != request.user.id:
+
             return Response(
                 {
                     "success": False,
-                    "message": f"You can upload a maximum of {self.MAX_IMAGES} images.",
+                    "message": (
+                        "You do not have permission to upload "
+                        "images to this package."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ==========================================================
+        # 3. CHECK IMAGE LIMIT
+        # ==========================================================
+
+        if package.images.count() >= self.MAX_IMAGES:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        f"You can upload a maximum of "
+                        f"{self.MAX_IMAGES} images."
+                    ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        # ==========================================================
+        # 4. VALIDATE IMAGE
+        # ==========================================================
+
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
         image = serializer.validated_data["image"]
 
+        # ==========================================================
+        # 5. CLOUDINARY UPLOAD
+        # ==========================================================
+
         try:
+
             result = upload(
                 image,
                 folder="packages",
             )
+
         except Exception:
+
+            logger.exception(
+                "Cloudinary package image upload failed. "
+                "Package=%s User=%s",
+                package.id,
+                request.user.id,
+            )
+
             return Response(
                 {
                     "success": False,
-                    "message": "Failed to upload image to Cloudinary.",
+                    "message": (
+                        "Failed to upload image to Cloudinary."
+                    ),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # ==========================================================
+        # 6. SAVE PACKAGE IMAGE
+        # ==========================================================
+
         package_image = PackageImage.objects.create(
             package=package,
             image=result["secure_url"],
-            is_primary=package.images.count() == 0,
+            is_primary=(
+                package.images.count() == 0
+            ),
         )
+
+        # ==========================================================
+        # 7. RESPONSE
+        # ==========================================================
 
         return Response(
             {
                 "success": True,
                 "message": "Image uploaded successfully.",
-                "data": PackageImageSerializer(package_image).data,
+                "data": PackageImageSerializer(
+                    package_image
+                ).data,
             },
             status=status.HTTP_201_CREATED,
         )
-
 
 # =========================
 # LIST PACKAGE IMAGES

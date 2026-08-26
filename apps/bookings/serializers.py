@@ -348,6 +348,32 @@ class BookingSerializer(serializers.ModelSerializer):
                     "exists for this match."
                 )
             })
+            
+    def validate(self, attrs):
+
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError(
+                "Authentication is required."
+            )
+
+        user = request.user
+
+        # ==================================================
+        # ONLY SENDER CAN CREATE BOOKING REQUEST
+        # ==================================================
+
+        if user.role != "SENDER":
+            raise serializers.ValidationError(
+                {
+                    "role": (
+                        "Only senders can create booking requests. "
+                        "Travelers can create trips but cannot "
+                        "create booking requests."
+                    )
+                }
+            )
 
         return attrs
 

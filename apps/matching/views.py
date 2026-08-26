@@ -17,13 +17,15 @@ from rest_framework.response import Response
 from .models import Match
 from .serializers import MatchSerializer
 import uuid
+from django.utils import timezone
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from django.db import models
-from .models import Match
+from .models import Match,MatchStatus
 from .serializers import MatchSerializer
 from collections import OrderedDict
 from apps.packages.models import PackageStatus
+from apps.trips.models import TripStatus
 
 # from .utils import success_response, error_response
 
@@ -50,49 +52,34 @@ def error_response(message, status_code=400, errors=None):
         status=status_code,
     )
 
-
-from django.db.models import Q
-from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated
-
-from apps.matching.models import Match
-from apps.packages.models import PackageStatus
-
-
-from .serializers import MatchSerializer
-
-
 class MyMatchListView(generics.ListAPIView):
-    """
-    Return matches relevant to the authenticated user.
-
-    User can see a match when:
-        - They are the package sender
-        OR
-        - They are the trip traveler
-
-    Only active and currently eligible matches are returned.
-    """
 
     serializer_class = MatchSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
 
-        queryset = (
+        user = self.request.user
+        today = timezone.localdate()
+
+        return (
             Match.objects
             .filter(
+                # Match
                 is_active=True,
 
-                # Package must still be eligible
+                # Package eligibility
                 package__status=PackageStatus.PUBLISHED,
                 package__is_active=True,
                 package__is_public=True,
 
-                # Trip must still be eligible
+                # Trip eligibility
+                trip__status=TripStatus.PLANNED,
                 trip__is_active=True,
                 trip__is_public=True,
+
+                # No past trips
+                trip__departure_date__gte=today,
             )
             .filter(
                 Q(package__sender_id=user.id)
@@ -105,13 +92,14 @@ class MyMatchListView(generics.ListAPIView):
                 "trip",
                 "trip__traveler",
             )
-            .order_by("-score", "-created_at")
+            .order_by(
+                "trip__departure_date",
+                "-score",
+                "-created_at",
+            )
         )
-
-        return queryset
-
     
-    
+      
 class PackageMatchListView(generics.ListAPIView):
 
     serializer_class = MatchSerializer

@@ -88,27 +88,70 @@ from .serializers import BookingPriceOfferSerializer
 logger = logging.getLogger(__name__)
 
 
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError as DRFValidationError
+
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class BookingCreateView(generics.CreateAPIView):
     """
     Create a booking request from an existing Match.
 
-    Pricing architecture:
+    ONLY SENDERS can create booking requests.
+
+    Traveler:
+        - Can create trips
+        - Cannot create booking requests
+
+    Pricing:
         Package -> NO price
         Trip -> reward_per_kg
         Booking -> offered_reward / agreed_reward
 
-    Initial offer is calculated from:
-
+    Initial offer:
         package.weight * trip.reward_per_kg
-
-    Negotiation can later change the final agreed_reward.
     """
 
     serializer_class = BookingSerializer
     permission_classes = [IsAuthenticated]
 
     def create(self, request, *args, **kwargs):
+
+        # ==================================================
+        # 1. ROLE VALIDATION
+        # ==================================================
+
+        user = request.user
+
+        # Adjust this according to your actual role implementation.
+        # Example:
+        # user.role == "SENDER"
+        # user.role == "TRAVELER"
+
+        if user.role != "SENDER":
+            return Response(
+                {
+                    "success": False,
+                    "message": "Only senders can create booking requests.",
+                    "errors": {
+                        "role": [
+                            "Travelers cannot create booking requests. "
+                            "Only senders can send booking requests to travelers."
+                        ]
+                    },
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ==================================================
+        # 2. SERIALIZER VALIDATION
+        # ==================================================
+
         serializer = self.get_serializer(
             data=request.data,
             context={
@@ -116,11 +159,8 @@ class BookingCreateView(generics.CreateAPIView):
             },
         )
 
-        # --------------------------------------------------
-        # VALIDATE REQUEST
-        # --------------------------------------------------
-
         if not serializer.is_valid():
+
             return Response(
                 {
                     "success": False,
@@ -132,15 +172,15 @@ class BookingCreateView(generics.CreateAPIView):
 
         try:
 
-            # --------------------------------------------------
-            # CREATE BOOKING
-            # --------------------------------------------------
+            # ==================================================
+            # 3. CREATE BOOKING
+            # ==================================================
 
             instance = serializer.save()
 
-            # --------------------------------------------------
-            # RESPONSE
-            # --------------------------------------------------
+            # ==================================================
+            # 4. RESPONSE
+            # ==================================================
 
             response_serializer = self.get_serializer(
                 instance
@@ -158,9 +198,9 @@ class BookingCreateView(generics.CreateAPIView):
                 status=status.HTTP_201_CREATED,
             )
 
-        # ------------------------------------------------------
+        # ==================================================
         # BUSINESS VALIDATION ERROR
-        # ------------------------------------------------------
+        # ==================================================
 
         except DRFValidationError as exc:
 
@@ -170,20 +210,57 @@ class BookingCreateView(generics.CreateAPIView):
                 exc.detail,
             )
 
+            # --------------------------------------------------
+            # Extract a user-friendly message
+            # --------------------------------------------------
+
+            detail = exc.detail
+
+            if isinstance(detail, dict):
+
+                # Get the first validation message
+                first_error = next(
+                    iter(detail.values()),
+                    None
+                )
+
+                if isinstance(first_error, list) and first_error:
+                    error_message = str(first_error[0])
+
+                elif first_error:
+                    error_message = str(first_error)
+
+                else:
+                    error_message = "Invalid booking request."
+
+            elif isinstance(detail, list) and detail:
+
+                error_message = str(detail[0])
+
+            else:
+
+                error_message = str(detail)
+
             return Response(
                 {
                     "success": False,
-                    "message": "Booking validation failed.",
-                    "errors": exc.detail,
+
+                    # IMPORTANT:
+                    # Frontend can directly display this
+                    "message": error_message,
+
+                    # Keep complete validation details
+                    "errors": detail,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ------------------------------------------------------
-        # UNEXPECTED ERROR
-        # ------------------------------------------------------
 
-        except Exception as exc:
+        # ==================================================
+        # UNEXPECTED ERROR
+        # ==================================================
+
+        except Exception:
 
             logger.exception(
                 "Booking creation failed | User=%s",
@@ -194,19 +271,15 @@ class BookingCreateView(generics.CreateAPIView):
                 {
                     "success": False,
                     "message": (
-                        "An internal system error occurred "
+                        "An internal server error occurred "
                         "while creating the booking request."
                     ),
+                    "errors": None,
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-
+              
 # apps/bookings/views.py
-
-
-
-
 class PublicTripBookingRequestView(generics.CreateAPIView):
     """
     POST /api/bookings/public-trip-request/

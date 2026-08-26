@@ -277,6 +277,7 @@ class DisputeSerializer(serializers.ModelSerializer):
     opened_by = UserBriefSerializer(read_only=True)
     against_user = UserBriefSerializer(read_only=True)
     assigned_admin = UserBriefSerializer(read_only=True)
+    tracking_number = serializers.CharField(source="booking.tracking_number", read_only=True)
 
     reason_display = serializers.CharField(
         source="get_reason_display",
@@ -310,6 +311,7 @@ class DisputeSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "booking",
+            "tracking_number",
             "opened_by",
             "against_user",
             "assigned_admin",
