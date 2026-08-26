@@ -144,3 +144,6 @@ class PackageImage(models.Model):
 
     def __str__(self):
         return self.package.title
+
+
+

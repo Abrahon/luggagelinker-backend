@@ -38,7 +38,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from apps.packages.models import Package, PackageStatus
-from apps.packages.serializers import PackageDashboardStatsSerializer
+from apps.packages.serializers import PackageDashboardStatsSerializer,AdminPackageReviewSerializer
 from .models import PackageImage
 from .models import Package
 from .serializers import PackageSerializer
@@ -1112,6 +1112,50 @@ class SenderProfileAPIView(APIView):
                     "Sender profile retrieved "
                     "successfully."
                 ),
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+class AdminPackageReviewDetailView(APIView):
+    """
+    GET /api/admin/packages/<uuid:pk>/review/
+
+    Return complete package information required
+    by the Admin Review modal.
+    """
+
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminUser,
+    ]
+
+    def get(self, request, pk):
+
+        package = get_object_or_404(
+            Package.objects
+            .select_related(
+                "sender",
+                "sender__profile",
+            )
+            .prefetch_related(
+                "images",
+            ),
+            pk=pk,
+        )
+
+        serializer = AdminPackageReviewSerializer(
+            package
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Package review details fetched successfully.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,

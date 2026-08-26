@@ -14,7 +14,8 @@ from .views import (
     AdminPackageDetailView,
     TravelerPackageListView,
     PackageDashboardStatsView,
-    SenderProfileAPIView
+    SenderProfileAPIView,
+    AdminPackageReviewDetailView
 )
 
 urlpatterns = [
@@ -97,6 +98,11 @@ urlpatterns = [
         "package/dashboard-stats/",
         PackageDashboardStatsView.as_view(),
         name="my-package-dashboard-stats",
+    ),
+    path(
+        "admin/packages/<uuid:pk>/review/",
+        AdminPackageReviewDetailView.as_view(),
+        name="admin-package-review-detail",
     ),
 
 ]

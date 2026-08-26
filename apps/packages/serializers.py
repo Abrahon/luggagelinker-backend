@@ -9,6 +9,8 @@ from .models import PackageImage
 from decimal import Decimal
 from rest_framework import serializers
 from apps.packages.models import Package
+from apps.packages.services import PackageService
+from apps.bookings.models import Booking, BookingStatus
 
 
 # ===========================================================
@@ -560,3 +562,106 @@ class SenderProfileSerializer(serializers.ModelSerializer):
             ValueError,
         ):
             return None
+
+
+class AdminPackageReviewSerializer(serializers.ModelSerializer):
+
+    pickup = serializers.SerializerMethodField()
+    destination = serializers.SerializerMethodField()
+    sender = serializers.SerializerMethodField()
+    verification = serializers.SerializerMethodField()
+    risk_factors = serializers.SerializerMethodField()
+
+    images = AdminPackageImageSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = Package
+
+        fields = [
+            "id",
+            "title",
+            "description",
+            "category",
+            "weight",
+            "pickup",
+            "destination",
+            "sender",
+            "verification",
+            "risk_factors",
+            "images",
+        ]
+
+    def get_pickup(self, obj):
+        return {
+            "country": obj.pickup_country,
+            "city": obj.pickup_city,
+            "address": obj.pickup_address,
+            "date": obj.pickup_date,
+        }
+
+    def get_destination(self, obj):
+        return {
+            "country": obj.destination_country,
+            "city": obj.destination_city,
+            "address": obj.destination_address,
+            "latest_delivery_date": obj.latest_delivery_date,
+        }
+    
+
+    def get_sender(self, obj):
+        user = obj.sender
+        profile = getattr(user, "profile", None)
+
+        # ---------------------------------------------
+        # NAME
+        # ---------------------------------------------
+
+        name = ""
+
+        if profile:
+            first_name = getattr(profile, "first_name", "") or ""
+            last_name = getattr(profile, "last_name", "") or ""
+
+            name = f"{first_name} {last_name}".strip()
+
+        if not name:
+            name = getattr(user, "email", None) or str(user)
+
+        # ---------------------------------------------
+        # COMPLETED DELIVERIES
+        # ---------------------------------------------
+        # Count actual completed bookings where this
+        # user's package was successfully delivered.
+
+        completed_deliveries = Booking.objects.filter(
+            package__sender_id=user.id,
+            status=BookingStatus.COMPLETED,
+        ).count()
+
+        # ---------------------------------------------
+        # SENDER RESPONSE
+        # ---------------------------------------------
+
+        return {
+            "id": str(user.id),
+            "name": name,
+            "email": user.email,
+            "completed_deliveries": completed_deliveries,
+        }
+
+
+    def get_verification(self, obj):
+
+        return {
+            "status": obj.verification_status,
+            "risk_score": obj.risk_score,
+            "declared_as_legal": obj.declared_as_legal,
+            "terms_accepted": obj.terms_accepted,
+        }
+
+
+    def get_risk_factors(self, obj):
+        return PackageService.get_risk_factors(obj)
