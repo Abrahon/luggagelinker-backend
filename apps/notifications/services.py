@@ -87,15 +87,77 @@ def create_notification(
 # KYC MODULE INTEGRATIONS 🪪
 # ==========================================================
 
+
+
+@transaction.atomic
+def notify_admins_kyc_submitted(*, traveler, kyc):
+    """
+    Notify all staff/superadmin users when a traveler submits or updates 
+    a KYC verification request.
+    """
+    # Fetch active admin/staff accounts
+    admins = User.objects.filter(is_staff=True, is_active=True)
+
+    is_update = getattr(kyc, "is_updated", False) or kyc.status == "pending"
+    action_type = "updated" if is_update else "submitted"
+    
+    title = f"New KYC Application ({action_type.capitalize()})"
+    message = (
+        f"Traveler {traveler.get_full_name() or traveler.email} has {action_type} "
+        "their KYC documents for verification."
+    )
+    
+    notifications = []
+    for admin in admins:
+        notification = create_notification(
+            user=admin,
+            title=title,
+            message=message,
+            notification_type=NotificationType.KYC,
+            object_id=kyc.id,
+            action_url=f"/admin/kyc/{kyc.id}/",
+        )
+        notifications.append(notification)
+
+    logger.info(
+        "KYC submission notification sent to %d admin(s) | KYC=%s | Traveler=%s",
+        len(notifications),
+        kyc.id,
+        traveler.id,
+    )
+
+    return notifications
+
+
+@transaction.atomic
+def notify_kyc_approved(*, user, kyc):
+    """
+    Notify the KYC owner that their KYC application was approved.
+    """
+    notification = create_notification(
+        user=user,
+        title="KYC Verification Approved",
+        message="Your KYC verification has been successfully approved.",
+        notification_type=NotificationType.KYC,
+        object_id=kyc.id,
+        action_url="/verification/review/",
+    )
+
+    logger.info(
+        "KYC approval notification created | KYC=%s | User=%s | Notification=%s",
+        kyc.id,
+        user.id,
+        notification.id,
+    )
+
+    return notification
+
+
 @transaction.atomic
 def notify_kyc_rejected(*, user, kyc):
     """
     Notify the KYC owner that their KYC application was rejected.
-
-    The notification includes the rejection reason provided
-    by the admin and directs the user to their KYC page.
     """
-
     rejection_reason = (
         kyc.rejection_reason
         or "No rejection reason was provided."
@@ -103,24 +165,18 @@ def notify_kyc_rejected(*, user, kyc):
 
     notification = create_notification(
         user=user,
-
         title="KYC Verification Rejected",
-
         message=(
             "Your KYC verification has been rejected. "
             f"Reason: {rejection_reason}"
         ),
-
         notification_type=NotificationType.KYC,
-
         object_id=kyc.id,
-
-        action_url="/kyc/",
+        action_url="/verification/review/",
     )
 
     logger.info(
-        "KYC rejection notification created | "
-        "KYC=%s | User=%s | Notification=%s",
+        "KYC rejection notification created | KYC=%s | User=%s | Notification=%s",
         kyc.id,
         user.id,
         notification.id,

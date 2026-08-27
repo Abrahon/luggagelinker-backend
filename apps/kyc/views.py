@@ -28,6 +28,8 @@ from apps.kyc.serializers import AdminKYCDetailSerializer, KYCRejectSerializer,K
 
 from apps.notifications.services import (
     notify_kyc_rejected,
+    notify_admins_kyc_submitted,
+    notify_kyc_approved
 )
 
 
@@ -48,7 +50,10 @@ class KYCCreateView(generics.CreateAPIView):
         # Step 1: Write safely to database once
         kyc = serializer.save()
 
-        # Step 2: Isolation protection wrapper for third party operations
+        # Step 2: Notify Admins of the new submission
+        notify_admins_kyc_submitted(traveler=self.request.user, kyc=kyc)
+
+        # Step 3: Isolation protection wrapper for third party operations
         if kyc.document_front:
             try:
                 text = extract_text_from_url(kyc.document_front.url)
@@ -170,6 +175,9 @@ class AdminKYCApproveView(APIView):
         kyc.verified_at = timezone.now()
         kyc.verified_by = request.user
         kyc.save()
+
+        # Notify the user that their KYC was approved
+        notify_kyc_approved(user=kyc.user, kyc=kyc)
 
         serializer = AdminKYCDetailSerializer(kyc)
         return Response({
@@ -363,75 +371,37 @@ class MyKYCUpdateView(generics.UpdateAPIView):
     """
 
     serializer_class = KYCUpdateSerializer
-
-    permission_classes = [
-        IsAuthenticated,
-    ]
+    permission_classes = [IsAuthenticated]
 
     def get_object(self):
-
         try:
-            return KYC.objects.get(
-                user=self.request.user
-            )
-
+            return KYC.objects.get(user=self.request.user)
         except KYC.DoesNotExist:
+            raise NotFound("No KYC record found.")
 
-            raise NotFound(
-                "No KYC record found."
-            )
-
-    def update(
-        self,
-        request,
-        *args,
-        **kwargs,
-    ):
-
-        partial = kwargs.pop(
-            "partial",
-            False,
-        )
-
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
         kyc = self.get_object()
 
-        # ==================================================
-        # APPROVED
-        # ==================================================
-
+        # APPROVED check
         if kyc.status == KYCStatus.APPROVED:
-
             return Response(
                 {
                     "success": False,
-                    "message": (
-                        "Your KYC has already been "
-                        "approved and cannot be modified."
-                    ),
+                    "message": "Your KYC has already been approved and cannot be modified.",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ==================================================
-        # UNDER REVIEW
-        # ==================================================
-
+        # UNDER REVIEW check
         if kyc.status == KYCStatus.UNDER_REVIEW:
-
             return Response(
                 {
                     "success": False,
-                    "message": (
-                        "Your KYC is currently under review "
-                        "and cannot be modified."
-                    ),
+                    "message": "Your KYC is currently under review and cannot be modified.",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        # ==================================================
-        # PENDING / REJECTED
-        # ==================================================
 
         serializer = self.get_serializer(
             kyc,
@@ -439,65 +409,38 @@ class MyKYCUpdateView(generics.UpdateAPIView):
             partial=partial,
         )
 
-        serializer.is_valid(
-            raise_exception=True
-        )
-
-        # --------------------------------------------------
-        # If rejected, updating means resubmitting
-        # --------------------------------------------------
+        serializer.is_valid(raise_exception=True)
 
         if kyc.status == KYCStatus.REJECTED:
-
-            serializer.save(
+            updated_kyc = serializer.save(
                 status=KYCStatus.PENDING,
                 rejection_reason=None,
                 verified_at=None,
                 verified_by=None,
             )
-
             message = (
                 "KYC updated and resubmitted successfully. "
                 "Your documents are waiting for admin review."
             )
-
         else:
-
-            serializer.save(
+            updated_kyc = serializer.save(
                 status=KYCStatus.PENDING,
                 rejection_reason=None,
             )
+            message = "KYC updated successfully."
 
-            message = (
-                "KYC updated successfully."
-            )
+        # Notify Admins when a user updates/resubmits their KYC
+        notify_admins_kyc_submitted(traveler=request.user, kyc=updated_kyc)
 
         return Response(
             {
                 "success": True,
                 "message": message,
-                "data": KYCSerializer(
-                    kyc
-                ).data,
+                "data": KYCSerializer(updated_kyc).data,
             },
             status=status.HTTP_200_OK,
         )
 
-    # ======================================================
-    # PATCH
-    # ======================================================
-
-    def partial_update(
-        self,
-        request,
-        *args,
-        **kwargs,
-    ):
-
+    def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
-
-        return self.update(
-            request,
-            *args,
-            **kwargs,
-        )
+        return self.update(request, *args, **kwargs)
