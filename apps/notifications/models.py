@@ -19,6 +19,7 @@ class NotificationType(models.TextChoices):
     CHAT = "CHAT", "Chat"
     REPORT = "REPORT", "Report"
     MODERATION = "MODERATION", "Moderation"
+    KYC= "KYC", "KYC"
     SYSTEM = "SYSTEM", "System"
 
 

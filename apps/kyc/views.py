@@ -13,6 +13,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound
 
 from apps.kyc.models import KYC, KYCStatus
 from rest_framework.exceptions import ValidationError
@@ -24,6 +25,11 @@ from rest_framework.permissions import IsAdminUser
 
 from apps.kyc.models import KYC, KYCStatus
 from apps.kyc.serializers import AdminKYCDetailSerializer, KYCRejectSerializer,KYCUpdateSerializer
+
+from apps.notifications.services import (
+    notify_kyc_rejected,
+)
+
 
 
 
@@ -59,24 +65,6 @@ class KYCCreateView(generics.CreateAPIView):
 
 
 
-# class MyKYCView(generics.RetrieveUpdateAPIView):
-#     """
-#     Manage user context KYC asset instances
-#     GET /api/kyc/me/
-#     PATCH /api/kyc/me/
-#     """
-#     serializer_class = KYCSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_object(self):
-#         # Clean execution flow instead of an unhandled HTTP 500 error
-#         return get_object_or_404(KYC, user=self.request.user)
-
-#     def perform_update(self, serializer):
-#         kyc = self.get_object()
-#         if kyc.status == KYCStatus.APPROVED:
-#             raise ValidationError({"detail": "Approved KYC records cannot be modified."})
-#         serializer.save()
 
 class MyKYCView(generics.RetrieveUpdateAPIView):
     """
@@ -190,47 +178,129 @@ class AdminKYCApproveView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+
+
+
 class AdminKYCRejectView(APIView):
     """
     POST /admin/kyc/<id>/reject/
+
+    Admin rejects a KYC application and provides
+    a rejection reason.
+
+    After successful rejection:
+        - KYC status becomes REJECTED
+        - rejection reason is stored
+        - verified_by stores the admin
+        - verified_at stores the rejection time
+        - KYC owner receives a notification
     """
+
     permission_classes = [IsAdminUser]
 
     def post(self, request, id):
+
+        # ======================================================
+        # FIND KYC APPLICATION
+        # ======================================================
+
         try:
-            kyc = KYC.objects.get(id=id)
+            kyc = KYC.objects.select_related(
+                "user"
+            ).get(id=id)
+
         except KYC.DoesNotExist:
             return Response(
-                {"error": "KYC application not found."}, 
-                status=status.HTTP_404_NOT_FOUND
+                {
+                    "error": "KYC application not found."
+                },
+                status=status.HTTP_404_NOT_FOUND,
             )
+
+        # ======================================================
+        # PREVENT DUPLICATE REJECTION
+        # ======================================================
 
         if kyc.status == KYCStatus.REJECTED:
             return Response(
-                {"error": "Action failed. This KYC application is already marked as rejected."},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "error": (
+                        "Action failed. This KYC application "
+                        "is already marked as rejected."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Triggers dynamic validation for rejection_reason structure
-        serializer = KYCRejectSerializer(data=request.data)
+        # ======================================================
+        # VALIDATE REJECTION REASON
+        # ======================================================
+
+        serializer = KYCRejectSerializer(
+            data=request.data
+        )
+
         if not serializer.is_valid():
-            return Response({
-                "error": "Validation failed.",
-                "details": serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "error": "Validation failed.",
+                    "details": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ======================================================
+        # REJECT KYC
+        # ======================================================
 
         kyc.status = KYCStatus.REJECTED
-        kyc.rejection_reason = serializer.validated_data["rejection_reason"]
+
+        kyc.rejection_reason = (
+            serializer.validated_data["rejection_reason"]
+        )
+
         kyc.verified_at = timezone.now()
+
         kyc.verified_by = request.user
-        kyc.save()
 
-        response_serializer = AdminKYCDetailSerializer(kyc)
-        return Response({
-            "message": "KYC application has been successfully rejected.",
-            "data": response_serializer.data
-        }, status=status.HTTP_200_OK)
+        kyc.save(
+            update_fields=[
+                "status",
+                "rejection_reason",
+                "verified_at",
+                "verified_by",
+                "updated_at",
+            ]
+        )
 
+        # ======================================================
+        # SEND NOTIFICATION TO KYC OWNER
+        # ======================================================
+
+        notify_kyc_rejected(
+            user=kyc.user,
+            kyc=kyc,
+        )
+
+        # ======================================================
+        # RESPONSE
+        # ======================================================
+
+        response_serializer = AdminKYCDetailSerializer(
+            kyc
+        )
+
+        return Response(
+            {
+                "message": (
+                    "KYC application has been "
+                    "successfully rejected."
+                ),
+                "data": response_serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+    
 
 class AdminKYCRequestResubmissionView(APIView):
     """
@@ -273,3 +343,161 @@ class AdminKYCRequestResubmissionView(APIView):
             "message": "Resubmission request sent successfully. Status reverted to pending.",
             "data": response_serializer.data
         }, status=status.HTTP_200_OK)
+
+
+
+class MyKYCUpdateView(generics.UpdateAPIView):
+    """
+    Update KYC information for the authenticated user.
+
+    PATCH /api/kyc/me/update/
+    PUT   /api/kyc/me/update/
+
+    Allowed:
+        PENDING
+        REJECTED
+
+    Not allowed:
+        UNDER_REVIEW
+        APPROVED
+    """
+
+    serializer_class = KYCUpdateSerializer
+
+    permission_classes = [
+        IsAuthenticated,
+    ]
+
+    def get_object(self):
+
+        try:
+            return KYC.objects.get(
+                user=self.request.user
+            )
+
+        except KYC.DoesNotExist:
+
+            raise NotFound(
+                "No KYC record found."
+            )
+
+    def update(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
+
+        partial = kwargs.pop(
+            "partial",
+            False,
+        )
+
+        kyc = self.get_object()
+
+        # ==================================================
+        # APPROVED
+        # ==================================================
+
+        if kyc.status == KYCStatus.APPROVED:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Your KYC has already been "
+                        "approved and cannot be modified."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==================================================
+        # UNDER REVIEW
+        # ==================================================
+
+        if kyc.status == KYCStatus.UNDER_REVIEW:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Your KYC is currently under review "
+                        "and cannot be modified."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ==================================================
+        # PENDING / REJECTED
+        # ==================================================
+
+        serializer = self.get_serializer(
+            kyc,
+            data=request.data,
+            partial=partial,
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        # --------------------------------------------------
+        # If rejected, updating means resubmitting
+        # --------------------------------------------------
+
+        if kyc.status == KYCStatus.REJECTED:
+
+            serializer.save(
+                status=KYCStatus.PENDING,
+                rejection_reason=None,
+                verified_at=None,
+                verified_by=None,
+            )
+
+            message = (
+                "KYC updated and resubmitted successfully. "
+                "Your documents are waiting for admin review."
+            )
+
+        else:
+
+            serializer.save(
+                status=KYCStatus.PENDING,
+                rejection_reason=None,
+            )
+
+            message = (
+                "KYC updated successfully."
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": message,
+                "data": KYCSerializer(
+                    kyc
+                ).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # ======================================================
+    # PATCH
+    # ======================================================
+
+    def partial_update(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
+
+        kwargs["partial"] = True
+
+        return self.update(
+            request,
+            *args,
+            **kwargs,
+        )

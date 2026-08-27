@@ -326,3 +326,310 @@ class KYCRejectSerializer(serializers.Serializer):
             "blank": "Rejection reason cannot be empty."
         }
     )
+
+
+
+
+class KYCUpdateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = KYC
+
+        fields = (
+            "id",
+            "id_type",
+            "id_number",
+            "document_front",
+            "document_back",
+            "selfie",
+        )
+
+        read_only_fields = (
+            "id",
+        )
+
+        extra_kwargs = {
+            "id_type": {
+                "error_messages": {
+                    "required": "ID type is required.",
+                    "blank": "ID type cannot be blank.",
+                    "invalid_choice": (
+                        "Please select a valid ID type."
+                    ),
+                }
+            },
+            "id_number": {
+                "error_messages": {
+                    "required": "ID number is required.",
+                    "blank": "ID number cannot be blank.",
+                }
+            },
+            "document_front": {
+                "error_messages": {
+                    "required": (
+                        "Front side of your ID is required."
+                    )
+                }
+            },
+            "document_back": {
+                "error_messages": {
+                    "required": (
+                        "Back side of your ID is required."
+                    )
+                }
+            },
+            "selfie": {
+                "error_messages": {
+                    "required": "Selfie is required."
+                }
+            },
+        }
+
+    # ==========================================================
+    # ID NUMBER VALIDATION
+    # ==========================================================
+
+    def validate_id_number(self, value):
+
+        value = value.strip()
+
+        if len(value) < 6:
+            raise serializers.ValidationError(
+                "ID number is too short."
+            )
+
+        queryset = KYC.objects.filter(
+            id_number__iexact=value
+        )
+
+        # Exclude current user's KYC
+        if self.instance:
+            queryset = queryset.exclude(
+                pk=self.instance.pk
+            )
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                "This ID number is already registered."
+            )
+
+        return value
+
+    # ==========================================================
+    # OBJECT VALIDATION
+    # ==========================================================
+
+    def validate(self, attrs):
+
+        instance = self.instance
+
+        if not instance:
+            raise serializers.ValidationError({
+                "detail": (
+                    "KYC record is required for an update."
+                )
+            })
+
+        # ======================================================
+        # STATUS CHECK
+        # ======================================================
+
+        if instance.status == KYCStatus.APPROVED:
+            raise serializers.ValidationError({
+                "detail": (
+                    "Approved KYC cannot be modified."
+                )
+            })
+
+        # ------------------------------------------------------
+        # Recommended:
+        # Don't allow modification while admin is reviewing.
+        # ------------------------------------------------------
+
+        if instance.status == KYCStatus.UNDER_REVIEW:
+            raise serializers.ValidationError({
+                "detail": (
+                    "Your KYC is currently under review "
+                    "and cannot be modified."
+                )
+            })
+
+        # ======================================================
+        # USE EXISTING VALUES FOR PATCH
+        # ======================================================
+
+        id_type = attrs.get(
+            "id_type",
+            instance.id_type,
+        )
+
+        document_front = attrs.get(
+            "document_front",
+            instance.document_front,
+        )
+
+        document_back = attrs.get(
+            "document_back",
+            instance.document_back,
+        )
+
+        selfie = attrs.get(
+            "selfie",
+            instance.selfie,
+        )
+
+        # ======================================================
+        # FRONT DOCUMENT
+        # ======================================================
+
+        if not document_front:
+            raise serializers.ValidationError({
+                "document_front": (
+                    "Front document is required."
+                )
+            })
+
+        # ======================================================
+        # SELFIE
+        # ======================================================
+
+        if not selfie:
+            raise serializers.ValidationError({
+                "selfie": (
+                    "Selfie is required."
+                )
+            })
+
+        # ======================================================
+        # BACK DOCUMENT
+        # Passport doesn't require back side.
+        # ======================================================
+
+        if (
+            id_type != IDType.PASSPORT
+            and not document_back
+        ):
+            raise serializers.ValidationError({
+                "document_back": (
+                    "Back document is required."
+                )
+            })
+
+        return attrs
+
+    # ==========================================================
+    # UPDATE
+    # ==========================================================
+
+    def update(self, instance, validated_data):
+
+        # ------------------------------------------------------
+        # APPROVED KYC
+        # ------------------------------------------------------
+
+        if instance.status == KYCStatus.APPROVED:
+            raise serializers.ValidationError({
+                "detail": (
+                    "Approved KYC cannot be modified."
+                )
+            })
+
+        # ------------------------------------------------------
+        # UNDER REVIEW
+        # ------------------------------------------------------
+
+        if instance.status == KYCStatus.UNDER_REVIEW:
+            raise serializers.ValidationError({
+                "detail": (
+                    "KYC cannot be modified while "
+                    "it is under review."
+                )
+            })
+
+        # ------------------------------------------------------
+        # UPDATE USER KYC DATA
+        # ------------------------------------------------------
+
+        instance.id_type = validated_data.get(
+            "id_type",
+            instance.id_type,
+        )
+
+        instance.id_number = validated_data.get(
+            "id_number",
+            instance.id_number,
+        )
+
+        instance.document_front = validated_data.get(
+            "document_front",
+            instance.document_front,
+        )
+
+        instance.document_back = validated_data.get(
+            "document_back",
+            instance.document_back,
+        )
+
+        instance.selfie = validated_data.get(
+            "selfie",
+            instance.selfie,
+        )
+
+        # ------------------------------------------------------
+        # RESET VERIFICATION STATE
+        #
+        # If rejected KYC is corrected and resubmitted,
+        # it goes back to PENDING.
+        # ------------------------------------------------------
+
+        instance.status = KYCStatus.PENDING
+
+        instance.rejection_reason = None
+
+        instance.verified_at = None
+
+        instance.verified_by = None
+
+        instance.save()
+
+        return instance
+
+    # ==========================================================
+    # RESPONSE
+    # ==========================================================
+
+    def to_representation(self, instance):
+
+        data = super().to_representation(instance)
+
+        # ------------------------------------------------------
+        # CLOUDINARY DOCUMENT FRONT URL
+        # ------------------------------------------------------
+
+        data["document_front"] = (
+            instance.document_front.url
+            if instance.document_front
+            else None
+        )
+
+        # ------------------------------------------------------
+        # CLOUDINARY DOCUMENT BACK URL
+        # ------------------------------------------------------
+
+        data["document_back"] = (
+            instance.document_back.url
+            if instance.document_back
+            else None
+        )
+
+        # ------------------------------------------------------
+        # CLOUDINARY SELFIE URL
+        # ------------------------------------------------------
+
+        data["selfie"] = (
+            instance.selfie.url
+            if instance.selfie
+            else None
+        )
+
+        return data

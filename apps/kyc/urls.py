@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     KYCCreateView, 
     MyKYCView,
+    MyKYCUpdateView,
     AdminKYCListView,
     AdminKYCDetailView,
     AdminKYCApproveView,
@@ -13,6 +14,11 @@ urlpatterns = [
     # Traveler (Unchanged)
     path("kyc/", KYCCreateView.as_view(), name="kyc-create"),
     path("kyc/me/", MyKYCView.as_view(), name="my-kyc"),
+    path(
+        "kyc/me/update/",
+        MyKYCUpdateView.as_view(),
+        name="my-kyc-update",
+    ),
     
     # Admin
     path(

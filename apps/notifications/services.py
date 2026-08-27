@@ -84,6 +84,51 @@ def create_notification(
 
 
 # ==========================================================
+# KYC MODULE INTEGRATIONS 🪪
+# ==========================================================
+
+@transaction.atomic
+def notify_kyc_rejected(*, user, kyc):
+    """
+    Notify the KYC owner that their KYC application was rejected.
+
+    The notification includes the rejection reason provided
+    by the admin and directs the user to their KYC page.
+    """
+
+    rejection_reason = (
+        kyc.rejection_reason
+        or "No rejection reason was provided."
+    )
+
+    notification = create_notification(
+        user=user,
+
+        title="KYC Verification Rejected",
+
+        message=(
+            "Your KYC verification has been rejected. "
+            f"Reason: {rejection_reason}"
+        ),
+
+        notification_type=NotificationType.KYC,
+
+        object_id=kyc.id,
+
+        action_url="/kyc/",
+    )
+
+    logger.info(
+        "KYC rejection notification created | "
+        "KYC=%s | User=%s | Notification=%s",
+        kyc.id,
+        user.id,
+        notification.id,
+    )
+
+    return notification
+
+# ==========================================================
 # BOOKING REQUEST NOTIFICATION
 # ==========================================================
 @transaction.atomic
