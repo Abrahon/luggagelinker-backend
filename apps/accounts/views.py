@@ -64,34 +64,198 @@ logger = logging.getLogger(__name__)
 
 
 
+# class SignupView(generics.GenericAPIView):
+#     serializer_class = SignupSerializer
+#     permission_classes = [AllowAny]
+
+#     def post(self, request, *args, **kwargs):
+#         serializer = self.get_serializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+
+#         data = serializer.validated_data
+#         email = data["email"].strip().lower()
+
+#         with transaction.atomic():
+
+#             existing_user = User.objects.filter(email__iexact=email).first()
+#             if existing_user:
+#                 if existing_user.is_active:
+#                     return Response(
+#                         {"detail": "User with this email already exists."},
+#                         status=status.HTTP_400_BAD_REQUEST,
+#                     )
+#                 else:
+#                     existing_user.delete()
+
+#             OTP.objects.filter(email__iexact=email).delete()
+
+#             otp_code = generate_otp()
+
+#             # ✅ CREATE USER
+#             user = User.objects.create_user(
+#                 email=email,
+#                 password=data["password"],
+#                 role=data["role"],
+#                 is_active=False,
+#             )
+
+#             # ✅ GET FREE PLAN
+#             # free_plan = Plan.objects.filter(
+#             #     plan_type=Plan.PLAN_FREE,
+#             #     is_active=True
+#             # ).first()
+
+#             # if not free_plan:
+#             #     raise Exception("Free plan not configured in database")
+
+#             # ✅ CREATE SUBSCRIPTION
+#             # Subscription.objects.create(
+#             #     user=user,
+#             #     plan=free_plan,
+#             #     billing_cycle=Subscription.BILLING_MONTHLY,
+#             #     status=Subscription.STATUS_ACTIVE,
+#             #     started_at=timezone.now(),
+#             #     expires_at=timezone.now() + timedelta(days=365 * 10),  # long free access
+#             #     auto_renew=False,
+#             # )
+
+#             # OTP create
+#             OTP.objects.create(
+#                 user=user,
+#                 email=email,
+#                 code=otp_code,
+#             )
+
+#         # send OTP async
+#         threading.Thread(
+#             target=send_otp_email,
+#             args=(email, otp_code),
+#             daemon=True,
+#         ).start()
+
+#         return Response(
+#             {"detail": f"Verification OTP sent to {email}."},
+#             status=status.HTTP_200_OK,
+#         )
+
+
+import threading
+
+
 class SignupView(generics.GenericAPIView):
+
     serializer_class = SignupSerializer
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
 
         data = serializer.validated_data
+
         email = data["email"].strip().lower()
 
         with transaction.atomic():
 
-            existing_user = User.objects.filter(email__iexact=email).first()
+            # ==================================================
+            # 1. CHECK EXISTING USER
+            # ==================================================
+
+            existing_user = (
+                User.objects
+                .filter(email__iexact=email)
+                .first()
+            )
+
             if existing_user:
+
+                # ----------------------------------------------
+                # VERIFIED / ACTIVE USER
+                # ----------------------------------------------
+
                 if existing_user.is_active:
+
                     return Response(
-                        {"detail": "User with this email already exists."},
+                        {
+                            "success": False,
+                            "message": (
+                                "An account with this email "
+                                "already exists. Please login."
+                            ),
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                else:
-                    existing_user.delete()
 
-            OTP.objects.filter(email__iexact=email).delete()
+                # ----------------------------------------------
+                # INACTIVE USER
+                # ----------------------------------------------
+
+                # Check whether there is already an active
+                # verification process for this email.
+                existing_otp = (
+                    OTP.objects
+                    .filter(
+                        email__iexact=email,
+                        user=existing_user,
+                    )
+                    .order_by("-created_at")
+                    .first()
+                )
+
+                if existing_otp:
+
+                    # ==========================================
+                    # OTP EXPIRY CHECK
+                    # ==========================================
+
+                    # Change this according to your OTP model.
+                    otp_age = (
+                        timezone.now()
+                        - existing_otp.created_at
+                    )
+
+                    # Example: OTP valid for 5 minutes
+                    if otp_age.total_seconds() < 300:
+
+                        return Response(
+                            {
+                                "success": False,
+                                "message": (
+                                    "Signup already in progress. "
+                                    "Please verify the OTP sent "
+                                    "to your email."
+                                ),
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    # ==========================================
+                    # OTP EXPIRED
+                    # ==========================================
+
+                    existing_otp.delete()
+
+                # If inactive user exists but OTP expired,
+                # allow creation of a new verification process.
+
+                existing_user.delete()
+
+            # ==================================================
+            # 2. GENERATE OTP
+            # ==================================================
 
             otp_code = generate_otp()
 
-            # ✅ CREATE USER
+            # ==================================================
+            # 3. CREATE USER
+            # ==================================================
+
             user = User.objects.create_user(
                 email=email,
                 password=data["password"],
@@ -99,138 +263,42 @@ class SignupView(generics.GenericAPIView):
                 is_active=False,
             )
 
-            # ✅ GET FREE PLAN
-            # free_plan = Plan.objects.filter(
-            #     plan_type=Plan.PLAN_FREE,
-            #     is_active=True
-            # ).first()
+            # ==================================================
+            # 4. CREATE OTP
+            # ==================================================
 
-            # if not free_plan:
-            #     raise Exception("Free plan not configured in database")
-
-            # ✅ CREATE SUBSCRIPTION
-            # Subscription.objects.create(
-            #     user=user,
-            #     plan=free_plan,
-            #     billing_cycle=Subscription.BILLING_MONTHLY,
-            #     status=Subscription.STATUS_ACTIVE,
-            #     started_at=timezone.now(),
-            #     expires_at=timezone.now() + timedelta(days=365 * 10),  # long free access
-            #     auto_renew=False,
-            # )
-
-            # OTP create
             OTP.objects.create(
                 user=user,
                 email=email,
                 code=otp_code,
             )
 
-        # send OTP async
+        # ======================================================
+        # 5. SEND OTP ASYNC
+        # ======================================================
+
         threading.Thread(
             target=send_otp_email,
             args=(email, otp_code),
             daemon=True,
         ).start()
 
+        # ======================================================
+        # 6. SUCCESS RESPONSE
+        # ======================================================
+
         return Response(
-            {"detail": f"Verification OTP sent to {email}."},
+            {
+                "success": True,
+                "message": (
+                    f"Verification OTP sent to {email}."
+                ),
+            },
             status=status.HTTP_200_OK,
         )
-    
 
 
-# verify email
-# class VerifyOTPView(APIView):
-#     permission_classes = [AllowAny]
 
-#     def post(self, request):
-#         email = str(request.data.get("email") or "").strip().lower()
-#         otp = str(request.data.get("otp") or "").strip()
-
-#         if not email or not otp:
-#             return Response(
-#                 {"detail": "Email and OTP are required."},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         logger.info("VerifyOTPView called | email=%s", email)
-
-#         try:
-#             with transaction.atomic():
-#                 otp_obj = (
-#                     OTP.objects.select_for_update()
-#                     .filter(email__iexact=email, code=otp)
-#                     .order_by("-created_at")
-#                     .first()
-#                 )
-
-#                 if not otp_obj:
-#                     return Response(
-#                         {"detail": "Invalid OTP."},
-#                         status=status.HTTP_400_BAD_REQUEST,
-#                     )
-
-#                 if otp_obj.is_expired():
-#                     otp_obj.delete()
-#                     return Response(
-#                         {"detail": "OTP expired."},
-#                         status=status.HTTP_400_BAD_REQUEST,
-#                     )
-
-#                 user = User.objects.filter(email__iexact=email).first()
-#                 if not user:
-#                     return Response(
-#                         {"detail": "User not found. Please register again."},
-#                         status=status.HTTP_400_BAD_REQUEST,
-#                     )
-
-#                 if not user.is_active:
-#                     user.is_active = True
-#                     user.save(update_fields=['is_active'])
-
-#                 OTP.objects.filter(email__iexact=email).delete()
-
-#         except Exception:
-#             logger.exception("Unexpected error during OTP verification")
-#             return Response(
-#                 {"detail": "Something went wrong while verifying OTP."},
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             )
-
-#         # =========================
-#         # FIX: FETCH SUBSCRIPTION PLAN
-#         # =========================
-#         # subscription = (
-#         #     Subscription.objects
-#         #     .select_related("plan")
-#         #     .filter(user=user)
-#         #     .first()
-#         # )
-
-#         # plan_type = (
-#         #     subscription.plan.plan_type
-#         #     if subscription and subscription.plan
-#         #     else None
-#         # )
-
-#         refresh = RefreshToken.for_user(user)
-
-#         return Response(
-#             {
-#                 "detail": "OTP verified successfully.",
-#                 "access": str(refresh.access_token),
-#                 "refresh": str(refresh),
-#                 "user": {
-#                     "id": user.id,
-#                     "email": user.email,
-#                     # "name": user.name,
-#                     "role": user.role,
-#                     # "plan_type": plan_type,
-#                 },
-#             },
-#             status=status.HTTP_201_CREATED,
-#         )
 
 
 # verify email

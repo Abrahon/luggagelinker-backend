@@ -35,6 +35,7 @@ from apps.reviews.models import Review
 
 from .models import Trip, TripStatus
 from .serializers import TravelerProfileSerializer
+from apps.kyc.models import KYC, KYCStatus
 
 
 User = get_user_model()
@@ -53,13 +54,10 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
+from shared.constants.roles import UserRole
 
-# your existing imports
-# from .models import Trip
-# from .serializers import TripSerializer
-# from .enums import TripStatus
-# from .permissions import IsUserAllowed
-# from .services import run_trip_matching
+
+
 
 
 class CreateTripListView(
@@ -92,15 +90,12 @@ class CreateTripListView(
                 is_active=True,
                 is_public=True,
                 status=TripStatus.PLANNED,
-
-                # ==========================================
-                # IMPORTANT:
-                # Don't show trips whose departure date
-                # has already passed.
-                # ==========================================
                 departure_date__gte=today,
             )
-            .order_by("departure_date", "-created_at")
+            .order_by(
+                "departure_date",
+                "-created_at",
+            )
         )
 
         # ==========================================================
@@ -132,10 +127,8 @@ class CreateTripListView(
         # ==========================================================
 
         if from_country:
-
             queryset = queryset.filter(
-                from_country__iexact=
-                from_country.strip()
+                from_country__iexact=from_country.strip()
             )
 
         # ==========================================================
@@ -143,10 +136,8 @@ class CreateTripListView(
         # ==========================================================
 
         if from_city:
-
             queryset = queryset.filter(
-                from_city__icontains=
-                from_city.strip()
+                from_city__icontains=from_city.strip()
             )
 
         # ==========================================================
@@ -154,10 +145,8 @@ class CreateTripListView(
         # ==========================================================
 
         if to_country:
-
             queryset = queryset.filter(
-                to_country__iexact=
-                to_country.strip()
+                to_country__iexact=to_country.strip()
             )
 
         # ==========================================================
@@ -165,27 +154,23 @@ class CreateTripListView(
         # ==========================================================
 
         if to_city:
-
             queryset = queryset.filter(
-                to_city__icontains=
-                to_city.strip()
+                to_city__icontains=to_city.strip()
             )
 
         # ==========================================================
-        # DEPARTURE DATE SEARCH
+        # DEPARTURE DATE
         # ==========================================================
 
         if departure_date:
 
             try:
-
                 parsed_date = datetime.strptime(
                     departure_date.strip(),
                     "%Y-%m-%d",
                 ).date()
 
             except ValueError:
-
                 raise ValidationError(
                     {
                         "departure_date": [
@@ -194,12 +179,7 @@ class CreateTripListView(
                     }
                 )
 
-            # ------------------------------------------------------
-            # Prevent searching for a past trip
-            # ------------------------------------------------------
-
             if parsed_date < today:
-
                 raise ValidationError(
                     {
                         "departure_date": [
@@ -225,11 +205,102 @@ class CreateTripListView(
         *args,
         **kwargs,
     ):
+        user = request.user
+
+        # ----------------------------------------------------------
+        # 1. CHECK ACCOUNT STATUS
+        # ----------------------------------------------------------
+
+        if not user.is_active:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Your account has been banned or deactivated. You cannot create a trip.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        # ----------------------------------------------------------
+        # 2. CHECK USER ROLE
+        # ----------------------------------------------------------
+
+        if user.role != UserRole.TRAVELER:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Only travelers can create trips.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ======================================================
+        # KYC VERIFICATION CHECK
+        # ======================================================
+
+        try:
+            kyc = request.user.kyc
+
+        except KYC.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "KYC verification is required "
+                        "before you can create a trip."
+                    ),
+                    "kyc_status": KYCStatus.PENDING,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ======================================================
+        # ONLY APPROVED USERS CAN CREATE TRIPS
+        # ======================================================
+
+        if kyc.status != KYCStatus.APPROVED:
+
+            status_messages = {
+                KYCStatus.PENDING: (
+                    "Your KYC verification is pending. "
+                    "You cannot create a trip until your KYC is approved."
+                ),
+
+                KYCStatus.UNDER_REVIEW: (
+                    "Your KYC is currently under review. "
+                    "You cannot create a trip until your KYC is approved."
+                ),
+
+                KYCStatus.REJECTED: (
+                    "Your KYC verification was rejected. "
+                    "Please submit valid KYC documents before creating a trip."
+                ),
+            }
+
+            message = status_messages.get(
+                kyc.status,
+                "Your KYC must be approved before creating a trip.",
+            )
+
+            return Response(
+                {
+                    "success": False,
+                    "message": message,
+                    "kyc_status": kyc.status,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ======================================================
+        # CREATE TRIP
+        # ======================================================
 
         serializer = self.get_serializer(
             data=request.data,
             context={
-                "request": request
+                "request": request,
             },
         )
 
@@ -239,15 +310,23 @@ class CreateTripListView(
                 raise_exception=True
             )
 
-            trip = serializer.save()
+            # serializer should assign traveler=request.user
+            trip = serializer.save(
+                traveler=request.user
+            )
 
-            # Run matching after trip creation
-            run_trip_matching(trip)
+            # ==================================================
+            # RUN MATCHING
+            # ==================================================
+
+            matches = run_trip_matching(trip)
 
             logger.info(
-                f"Trip created successfully. "
-                f"Trip={trip.id} "
-                f"Traveler={request.user.id}"
+                "Trip created successfully | "
+                "Trip=%s | Traveler=%s | Matches=%s",
+                trip.id,
+                request.user.id,
+                len(matches),
             )
 
             return Response(
@@ -256,10 +335,11 @@ class CreateTripListView(
                     "message": (
                         "Trip created successfully."
                     ),
+                    "matches_created": len(matches),
                     "data": TripSerializer(
                         trip,
                         context={
-                            "request": request
+                            "request": request,
                         },
                     ).data,
                 },
@@ -269,8 +349,8 @@ class CreateTripListView(
         except ValidationError as e:
 
             logger.warning(
-                f"Trip validation failed. "
-                f"Traveler={request.user.id}"
+                "Trip validation failed | Traveler=%s",
+                request.user.id,
             )
 
             return Response(
@@ -285,8 +365,8 @@ class CreateTripListView(
         except Exception:
 
             logger.exception(
-                f"Trip creation failed. "
-                f"Traveler={request.user.id}"
+                "Trip creation failed | Traveler=%s",
+                request.user.id,
             )
 
             return Response(
@@ -321,7 +401,7 @@ class CreateTripListView(
                 queryset,
                 many=True,
                 context={
-                    "request": request
+                    "request": request,
                 },
             )
 
@@ -373,6 +453,7 @@ class CreateTripListView(
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         
+
 class MyTripListView(generics.ListAPIView):
 
     serializer_class = TripSerializer
