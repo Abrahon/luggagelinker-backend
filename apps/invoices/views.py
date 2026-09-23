@@ -31,6 +31,22 @@ from rest_framework.permissions import IsAuthenticated
 
 from apps.invoices.models import Invoice
 from apps.invoices.serializers import InvoiceSerializer
+from django.http import FileResponse
+from django.utils import timezone
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.invoices.models import Invoice
+
+from rest_framework import generics, status
+from rest_framework.permissions import IsAdminUser
+from rest_framework.response import Response
+
+from apps.payment.models import BookingPayment
+from apps.invoices.serializers import InvoiceSerializer
 
 
 class InvoiceListView(generics.ListAPIView):
@@ -102,26 +118,6 @@ class InvoiceDetailView(generics.RetrieveAPIView):
     
 
     
-
-# ReportLab Engine Elements
-
-from django.http import FileResponse
-from django.utils import timezone
-
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-
-from apps.invoices.models import Invoice
-
-from rest_framework import generics, status
-from rest_framework.permissions import IsAdminUser
-from rest_framework.response import Response
-
-from apps.payment.models import BookingPayment
-from apps.invoices.serializers import InvoiceSerializer
-
 
 class AdminPaymentInvoiceDetailView(generics.RetrieveAPIView):
 
