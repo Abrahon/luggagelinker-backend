@@ -95,22 +95,23 @@ AUTH_USER_MODEL = "accounts.User"
 
 
 CORS_ALLOWED_ORIGINS = [
+    # Local development
     "http://localhost:3600",
     "http://127.0.0.1:5173",
+
+    # Production
+    "https://luggage-linker.abrahon.site",
 ]
+
 CSRF_TRUSTED_ORIGINS = [
+    "https://luggage-linker.abrahon.site",
     "https://lug-api.abrahon.site",
 ]
+
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = True
 
 
 
-# Stripe Top-Up Redirect URLs
-import os
-
-# Stripe Top-Up Redirect URLs
-import os
 
 # Stripe Top-Up Redirect URLs
 STRIPE_TOPUP_SUCCESS_URL = os.getenv(

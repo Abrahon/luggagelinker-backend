@@ -1,51 +1,32 @@
 import io
-from django.db import models  # <-- Added missing models import for Q queries
+
+from django.db import models
 from django.http import FileResponse
 from django.utils import timezone
 from django.core.files.base import ContentFile
-from rest_framework import generics, status  # <-- Added missing generics import
+
+from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated  # <-- Added missing permission import
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 
-# ReportLab Engine Elements
+# ReportLab
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
+# Models
 from apps.invoices.models import Invoice, InvoiceStatus
-from apps.invoices.serializers import InvoiceSerializer
-
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-
-from apps.invoices.models import Invoice
-
-from django.db import models
-from rest_framework import generics, status
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-
-from apps.invoices.models import Invoice
-from apps.invoices.serializers import InvoiceSerializer
-from django.http import FileResponse
-from django.utils import timezone
-
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-
-from apps.invoices.models import Invoice
-
-from rest_framework import generics, status
-from rest_framework.permissions import IsAdminUser
-from rest_framework.response import Response
-
 from apps.payment.models import BookingPayment
+
+# Serializers
 from apps.invoices.serializers import InvoiceSerializer
 
 
